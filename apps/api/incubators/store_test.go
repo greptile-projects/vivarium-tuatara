@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 func fixture() Incubator {
@@ -127,6 +128,48 @@ func TestDeliveryPlanRejectsNonAdmittedWorkOwner(t *testing.T) {
 	_, e := s.CreateDeliveryPlan(x.ID, "human-a", 1, DeliveryPlan{BootstrapPlanID: "bootstrap-a", Journey: "Running slice", Participants: []DeliveryParticipant{{PrincipalType: "human", PrincipalID: "human-a", Role: "lead"}, {PrincipalType: "agent", PrincipalID: "agent-b", Role: "builder"}}, WorkItems: items})
 	if e != ErrInvalid {
 		t.Fatalf("non-admitted owner persisted: %v", e)
+	}
+}
+
+func TestLaunchReadinessBlocksRiskAndNarrowsOnlyWithBoundedOwnerExceptions(t *testing.T) {
+	s, _ := New(t.TempDir())
+	now := s.now().UTC()
+	x, _ := s.Create(fixture(), "human-a", nil)
+	x.BootstrapPlans = []BootstrapPlan{{ID: "bootstrap", Status: "active"}}
+	x.DeliveryPlans = []DeliveryPlan{{ID: "delivery", Status: "active"}}
+	if e := s.write(&x); e != nil {
+		t.Fatal(e)
+	}
+	evidence := []ReadinessEvidence{}
+	for _, d := range readinessDimensions {
+		status := "current"
+		if d == "prototype_debt" {
+			status = "unsupported"
+		}
+		evidence = append(evidence, ReadinessEvidence{Dimension: d, OwnerID: "human-a", Summary: "Evidence for " + d, Reference: "work:123", Status: status})
+	}
+	x, e := s.CreateLaunchReadiness(x.ID, "human-a", 1, LaunchReadiness{BootstrapPlanID: "bootstrap", DeliveryPlanID: "delivery", DeclaredAudience: "public", Evidence: evidence})
+	if e != nil || x.LaunchReadiness[0].Ready || len(x.LaunchReadiness[0].Blockers) != 13 {
+		t.Fatalf("initial readiness = %#v, %v", x.LaunchReadiness, e)
+	}
+	r := x.LaunchReadiness[0]
+	for _, v := range evidence {
+		if v.Status == "current" {
+			x, e = s.DecideLaunchReadiness(x.ID, r.ID, "human-a", x.Version, r.Version, ReadinessDecision{Dimension: v.Dimension, Kind: "accepted", Rationale: "Current evidence supports this expectation"})
+			if e != nil {
+				t.Fatal(e)
+			}
+			r = x.LaunchReadiness[0]
+		}
+	}
+	expires := now.Add(7 * 24 * time.Hour)
+	x, e = s.DecideLaunchReadiness(x.ID, r.ID, "human-a", x.Version, r.Version, ReadinessDecision{Dimension: "prototype_debt", Kind: "exception", Rationale: "Debt does not affect the limited cohort", FollowUpWork: "proposal:remove-prototype-default", ExpiresAt: &expires})
+	if e != nil || !x.LaunchReadiness[0].Ready || x.LaunchReadiness[0].EffectiveAudience != "limited" {
+		t.Fatalf("narrowed readiness = %#v, %v", x.LaunchReadiness[0], e)
+	}
+	tooLate := now.Add(31 * 24 * time.Hour)
+	if _, e = s.DecideLaunchReadiness(x.ID, r.ID, "human-a", x.Version, x.LaunchReadiness[0].Version, ReadinessDecision{Dimension: "prototype_debt", Kind: "exception", Rationale: "Too broad", FollowUpWork: "proposal:x", ExpiresAt: &tooLate}); e != ErrInvalid {
+		t.Fatalf("unbounded exception = %v", e)
 	}
 }
 

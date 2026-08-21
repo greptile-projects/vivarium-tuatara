@@ -394,6 +394,18 @@ export function IncubatorsWorkspace() {
       setPending(false);
     }
   }
+  async function createReadiness(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault(); if (!token || !current) return; setPending(true); setError("");
+    const f=new FormData(e.currentTarget);
+    const evidence=lines(f.get("readiness_evidence")).map((row)=>{const [dimension,owner_id,status,summary,reference]=row.split("|").map(x=>x.trim()); return {dimension,owner_id,status,summary,reference};});
+    try { replaceCurrent(await api<Incubator>(`/incubators/${current.id}/launch-readiness`,{method:"POST",body:JSON.stringify({expected_version:current.version,readiness:{bootstrap_plan_id:f.get("readiness_bootstrap"),delivery_plan_id:f.get("readiness_delivery"),declared_audience:f.get("declared_audience"),evidence}})},token)); e.currentTarget.reset(); }
+    catch(reason){setError(reason instanceof Error?reason.message:"Unable to create launch readiness.");} finally {setPending(false)}
+  }
+  async function decideReadiness(e: FormEvent<HTMLFormElement>, readinessId:string, readinessVersion:number) {
+    e.preventDefault(); if(!token||!current)return; setPending(true); const f=new FormData(e.currentTarget); const kind=String(f.get("decision_kind"));
+    try {replaceCurrent(await api<Incubator>(`/incubators/${current.id}/launch-readiness/${readinessId}/decisions`,{method:"POST",body:JSON.stringify({expected_version:current.version,readiness_version:readinessVersion,decision:{dimension:f.get("dimension"),kind,rationale:f.get("rationale"),follow_up_work:kind==="exception"?f.get("follow_up_work"):undefined,expires_at:kind==="exception"?new Date(String(f.get("expires_at"))).toISOString():undefined}})},token));}
+    catch(reason){setError(reason instanceof Error?reason.message:"Unable to record readiness decision.");} finally {setPending(false)}
+  }
   async function consent(invitation: string, decision: string) {
     if (!token || !current) return;
     try {
@@ -1006,6 +1018,17 @@ export function IncubatorsWorkspace() {
                 ))}
                 {(current.delivery_plans ?? []).length === 0 && <p className="rounded-lg border border-dashed p-4 text-sm text-[var(--muted)]">No running slice has been connected yet.</p>}
               </div>
+              <h3 className="mt-8 font-semibold">Initial public-life readiness</h3>
+              <p className="mt-1 text-sm text-[var(--muted)]">A successful build is not a launch decision. Every expectation needs a named human owner and current evidence, or a narrow expiring exception connected to follow-up work.</p>
+              <div className="mt-3 space-y-3">
+                {(current.launch_readiness ?? []).map((r)=><article key={r.id} className="rounded-lg border p-4">
+                  <div className="flex flex-wrap gap-2"><Badge tone={r.ready?"success":"warning"}>{r.ready?"ready":"blocked"}</Badge><Badge>{r.declared_audience} → {r.effective_audience}</Badge><Badge>{r.blockers.length} blockers</Badge></div>
+                  {r.blockers.length>0&&<ul className="mt-3 list-disc pl-5 text-sm text-[var(--danger)]">{r.blockers.map(x=><li key={x}>{x.replaceAll("_"," ")}</li>)}</ul>}
+                  <div className="mt-3 grid gap-2 sm:grid-cols-2">{r.evidence.map(v=><div key={v.dimension} className="rounded bg-[var(--surface-2)] p-3 text-xs"><strong>{v.dimension.replaceAll("_"," ")}</strong> · <Badge>{v.status}</Badge><p className="mt-1">{v.summary}</p><p className="text-[var(--muted)]">Owner {v.owner_id} · {v.reference}</p></div>)}</div>
+                  <form onSubmit={(e)=>void decideReadiness(e,r.id,r.version)} className="mt-4 grid gap-3 sm:grid-cols-2"><Select name="dimension" label="Expectation" values={r.evidence.filter(v=>v.owner_id===user?.id).map(v=>v.dimension)}/><Select name="decision_kind" label="Decision" values={["accepted","exception"]}/><Area name="rationale" label="Rationale"/><Field name="follow_up_work" label="Follow-up work ID" optional/><Field name="expires_at" label="Exception expiry (ISO date)" optional/><Button disabled={pending}>Record owner decision</Button></form>
+                </article>)}
+              </div>
+              {(current.launch_readiness ?? []).length===0 && current.bootstrap_plans.some(p=>p.status==="active") && current.delivery_plans.length>0 && <form onSubmit={createReadiness} className="mt-4 grid gap-3 sm:grid-cols-2"><label className="text-sm font-semibold">Active boundary<select name="readiness_bootstrap" className="mt-2 min-h-10 w-full rounded-lg border bg-white px-3 font-normal">{current.bootstrap_plans.filter(p=>p.status==="active").map(p=><option key={p.id} value={p.id}>{p.id}</option>)}</select></label><label className="text-sm font-semibold">Running slice<select name="readiness_delivery" className="mt-2 min-h-10 w-full rounded-lg border bg-white px-3 font-normal">{current.delivery_plans.map(p=><option key={p.id} value={p.id}>{p.journey}</option>)}</select></label><Select name="declared_audience" label="Declared launch audience" values={["experimental","limited","public"]}/><Area name="readiness_evidence" label="All 13 expectations" hint="dimension | owner ID | current/missing/unsafe/unsupported/failed/stale | summary | evidence or work reference"/><Button disabled={pending} className="sm:col-span-2">Create complete readiness view</Button></form>}
             </Card>
           ) : (
             <Card className="p-8 text-sm text-[var(--muted)]">

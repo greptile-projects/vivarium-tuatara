@@ -171,6 +171,18 @@ export type Incubator = {
     work_items: { id: string; kind: "code" | "tests" | "documentation" | "infrastructure" | "interface"; title: string; repository_id: string; base_revision: string; owner_type: "human" | "agent"; owner_id: string; dependency_ids: string[]; acceptance_criteria: string[]; integration_order: number }[];
     reports: { id: string; work_item_id?: string; kind: string; repository_id?: string; resource_id?: string; revision?: string; summary: string; cost_cents?: number; actor_type: string; actor_id: string; created_at: string }[];
   }[];
+  launch_readiness: {
+    id: string;
+    version: number;
+    bootstrap_plan_id: string;
+    delivery_plan_id: string;
+    declared_audience: "experimental" | "limited" | "public";
+    effective_audience: "experimental" | "limited" | "public";
+    ready: boolean;
+    blockers: string[];
+    evidence: { dimension: string; owner_id: string; summary: string; reference: string; status: "current" | "missing" | "unsafe" | "unsupported" | "failed" | "stale"; risk?: string }[];
+    decisions: { dimension: string; owner_id: string; kind: "accepted" | "exception"; rationale: string; follow_up_work?: string; expires_at?: string; created_at: string }[];
+  }[];
   durability_uncertain: boolean;
   created_by: string;
   created_at: string;

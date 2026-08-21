@@ -79,6 +79,15 @@ type incubatorDeliveryReportInput struct {
 	PlanVersion     int                       `json:"plan_version"`
 	Report          incubators.DeliveryReport `json:"report"`
 }
+type incubatorReadinessInput struct {
+	ExpectedVersion int                        `json:"expected_version"`
+	Readiness       incubators.LaunchReadiness `json:"readiness"`
+}
+type incubatorReadinessDecisionInput struct {
+	ExpectedVersion  int                          `json:"expected_version"`
+	ReadinessVersion int                          `json:"readiness_version"`
+	Decision         incubators.ReadinessDecision `json:"decision"`
+}
 
 func registerIncubatorRoutes(mux *http.ServeMux, git *storage.Store, credentials *auth.Store, identities *users.Store, catalog *repositories.Store, orgs *organizations.Store, store *incubators.Store, feedback *productfeedback.Store, support *supportthreads.Store, proposals *governance.Store, workspaceStore *workspaces.Store, pullStore *pullrequests.Store, previewStore *previews.Store, checkStore *checkruns.Store) {
 	authn := func(w http.ResponseWriter, r *http.Request) (auth.Credential, bool) {
@@ -644,6 +653,50 @@ func registerIncubatorRoutes(mux *http.ServeMux, git *storage.Store, credentials
 		}
 		typ, id := actorIdentity(actor)
 		out, e := store.AddDeliveryReport(r.PathValue("incubator_id"), r.PathValue("delivery_plan_id"), typ, id, in.ExpectedVersion, in.PlanVersion, in.Report)
+		writeIncubator(w, projectResearch(out, actor), e, 201)
+	})
+	mux.HandleFunc("POST /incubators/{incubator_id}/launch-readiness", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authn(w, r)
+		if !ok {
+			return
+		}
+		if actor.AgentID != "" {
+			writeAPIError(w, 403, "human_owner_required", "a human participant must declare launch readiness")
+			return
+		}
+		var in incubatorReadinessInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "a complete launch readiness view is required")
+			return
+		}
+		out, e := store.CreateLaunchReadiness(r.PathValue("incubator_id"), actor.UserID, in.ExpectedVersion, in.Readiness)
+		writeIncubator(w, projectResearch(out, actor), e, 201)
+	})
+	mux.HandleFunc("POST /incubators/{incubator_id}/launch-readiness/{readiness_id}/decisions", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authn(w, r)
+		if !ok {
+			return
+		}
+		if actor.AgentID != "" {
+			writeAPIError(w, 403, "human_owner_required", "only the named human owner may accept evidence or grant an exception")
+			return
+		}
+		var in incubatorReadinessDecisionInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "an exact readiness decision is required")
+			return
+		}
+		if in.Decision.Kind == "exception" {
+			if proposals == nil {
+				writeAPIError(w, 503, "follow_up_unavailable", "governed follow-up work cannot be resolved")
+				return
+			}
+			if _, e := proposals.Get(in.Decision.FollowUpWork); e != nil {
+				writeAPIError(w, 422, "follow_up_missing", "an exception must connect to existing governed follow-up work")
+				return
+			}
+		}
+		out, e := store.DecideLaunchReadiness(r.PathValue("incubator_id"), r.PathValue("readiness_id"), actor.UserID, in.ExpectedVersion, in.ReadinessVersion, in.Decision)
 		writeIncubator(w, projectResearch(out, actor), e, 201)
 	})
 }

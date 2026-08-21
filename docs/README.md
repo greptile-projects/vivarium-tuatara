@@ -29,6 +29,23 @@ Publication first directory-syncs a conservative durability marker and clears it
 synced canonical copy; post-rename sync failures therefore return committed, explicitly uncertain
 state instead of inviting a duplicate retry.
 
+### Initial public-life readiness
+
+After an active bootstrap and running delivery slice exist, human participants publish a complete
+`/{incubator_id}/launch-readiness` view for a declared experimental, limited, or public audience.
+The immutable view covers ownership, support/governance, licensing/provenance, security/privacy,
+accessibility, documentation, package/API adoption, service objectives, continuity, contributor
+setup, operating budget, prototype debt, and target-user validation. Each expectation binds a
+current/missing/unsafe/unsupported/failed/stale evidence statement and reference to an accepted
+human participant owner.
+
+Only that exact owner can accept current evidence or grant an exception. Exceptions require a
+connected follow-up work reference, expire within 30 days, cannot override failed user validation,
+and narrow a declared public audience to limited. Missing decisions, expired exceptions, missing
+maintainers, unsafe defaults, unsupported promises, and failed validation remain explicit blockers.
+The ledger recomputes effective audience and blockers on reads; it grants no release, package,
+deployment, governance, budget, repository, or linked-work authority.
+
 ### Evidence-backed project shape exploration
 
 Accepted participants use `/{incubator_id}/alternatives`, `/experiments`, experiment `/results`, and

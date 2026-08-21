@@ -216,6 +216,38 @@ type DeliveryPlan struct {
 	CreatedAt       time.Time             `json:"created_at"`
 	UpdatedAt       time.Time             `json:"updated_at"`
 }
+type ReadinessEvidence struct {
+	Dimension string `json:"dimension"`
+	OwnerID   string `json:"owner_id"`
+	Summary   string `json:"summary"`
+	Reference string `json:"reference"`
+	Status    string `json:"status"`
+	Risk      string `json:"risk,omitempty"`
+}
+type ReadinessDecision struct {
+	Dimension    string     `json:"dimension"`
+	OwnerID      string     `json:"owner_id"`
+	Kind         string     `json:"kind"`
+	Rationale    string     `json:"rationale"`
+	FollowUpWork string     `json:"follow_up_work,omitempty"`
+	ExpiresAt    *time.Time `json:"expires_at,omitempty"`
+	CreatedAt    time.Time  `json:"created_at"`
+}
+type LaunchReadiness struct {
+	ID                string              `json:"id"`
+	Version           int                 `json:"version"`
+	BootstrapPlanID   string              `json:"bootstrap_plan_id"`
+	DeliveryPlanID    string              `json:"delivery_plan_id"`
+	DeclaredAudience  string              `json:"declared_audience"`
+	EffectiveAudience string              `json:"effective_audience"`
+	Evidence          []ReadinessEvidence `json:"evidence"`
+	Decisions         []ReadinessDecision `json:"decisions"`
+	Ready             bool                `json:"ready"`
+	Blockers          []string            `json:"blockers"`
+	CreatedBy         string              `json:"created_by"`
+	CreatedAt         time.Time           `json:"created_at"`
+	UpdatedAt         time.Time           `json:"updated_at"`
+}
 type Incubator struct {
 	ID                  string                 `json:"id"`
 	Version             int                    `json:"version"`
@@ -241,7 +273,160 @@ type Incubator struct {
 	ResearchNotes       []ResearchNote         `json:"research_notes"`
 	BootstrapPlans      []BootstrapPlan        `json:"bootstrap_plans"`
 	DeliveryPlans       []DeliveryPlan         `json:"delivery_plans"`
+	LaunchReadiness     []LaunchReadiness      `json:"launch_readiness"`
 	DurabilityUncertain bool                   `json:"durability_uncertain"`
+}
+
+var readinessDimensions = []string{"ownership", "support_governance", "licensing_provenance", "security_privacy", "accessibility", "documentation", "package_api_adoption", "service_objectives", "continuity", "contributor_setup", "operating_budget", "prototype_debt", "user_validation"}
+var readinessDimensionSet = func() map[string]bool {
+	out := map[string]bool{}
+	for _, v := range readinessDimensions {
+		out[v] = true
+	}
+	return out
+}()
+
+func evaluateReadiness(x *LaunchReadiness, now time.Time) {
+	accepted, excepted := map[string]bool{}, map[string]bool{}
+	for _, d := range x.Decisions {
+		if d.Kind == "accepted" {
+			accepted[d.Dimension] = true
+		}
+		if d.Kind == "exception" && d.ExpiresAt != nil && d.ExpiresAt.After(now) && strings.TrimSpace(d.FollowUpWork) != "" {
+			excepted[d.Dimension] = true
+		}
+	}
+	blockers := []string{}
+	narrow := false
+	for _, e := range x.Evidence {
+		if accepted[e.Dimension] && e.Status == "current" {
+			continue
+		}
+		if excepted[e.Dimension] && e.Status != "failed" {
+			narrow = true
+			continue
+		}
+		blockers = append(blockers, e.Dimension+": "+e.Status)
+	}
+	x.Blockers, x.Ready = blockers, len(blockers) == 0
+	x.EffectiveAudience = x.DeclaredAudience
+	if narrow && x.EffectiveAudience == "public" {
+		x.EffectiveAudience = "limited"
+	}
+}
+
+func (s *Store) CreateLaunchReadiness(id, actor string, expected int, in LaunchReadiness) (Incubator, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, e := s.lock()
+	if e != nil {
+		return Incubator{}, e
+	}
+	defer f.Close()
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	x, e := s.read(id)
+	if e != nil || !participant(x, "human", actor) {
+		return Incubator{}, ErrNotFound
+	}
+	if x.Version != expected {
+		return Incubator{}, ErrConflict
+	}
+	active, delivered := false, false
+	for _, p := range x.BootstrapPlans {
+		if p.ID == in.BootstrapPlanID && p.Status == "active" {
+			active = true
+		}
+	}
+	for _, p := range x.DeliveryPlans {
+		if p.ID == in.DeliveryPlanID && p.Status == "active" {
+			delivered = true
+		}
+	}
+	if !active || !delivered || !map[string]bool{"experimental": true, "limited": true, "public": true}[in.DeclaredAudience] || len(in.Evidence) != len(readinessDimensions) {
+		return Incubator{}, ErrInvalid
+	}
+	seen := map[string]bool{}
+	for _, v := range in.Evidence {
+		if !readinessDimensionSet[v.Dimension] || seen[v.Dimension] || !participant(x, "human", v.OwnerID) || !text(v.Summary, 10000) || !text(v.Reference, 1000) || !map[string]bool{"current": true, "missing": true, "unsafe": true, "unsupported": true, "failed": true, "stale": true}[v.Status] {
+			return Incubator{}, ErrInvalid
+		}
+		seen[v.Dimension] = true
+	}
+	now := s.now().UTC().Truncate(time.Microsecond)
+	in.ID = uid()
+	in.Version = 1
+	in.Decisions = []ReadinessDecision{}
+	in.CreatedBy = actor
+	in.CreatedAt = now
+	in.UpdatedAt = now
+	evaluateReadiness(&in, now)
+	x.LaunchReadiness = append(x.LaunchReadiness, in)
+	x.Version++
+	x.UpdatedAt = now
+	e = s.write(&x)
+	return x, e
+}
+
+func (s *Store) DecideLaunchReadiness(id, readinessID, actor string, expected, readinessVersion int, in ReadinessDecision) (Incubator, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, e := s.lock()
+	if e != nil {
+		return Incubator{}, e
+	}
+	defer f.Close()
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	x, e := s.read(id)
+	if e != nil || !participant(x, "human", actor) {
+		return Incubator{}, ErrNotFound
+	}
+	if x.Version != expected {
+		return Incubator{}, ErrConflict
+	}
+	now := s.now().UTC().Truncate(time.Microsecond)
+	found := false
+	for i := range x.LaunchReadiness {
+		r := &x.LaunchReadiness[i]
+		if r.ID != readinessID {
+			continue
+		}
+		found = true
+		if r.Version != readinessVersion || !readinessDimensionSet[in.Dimension] || !map[string]bool{"accepted": true, "exception": true}[in.Kind] || !text(in.Rationale, 10000) {
+			return Incubator{}, ErrInvalid
+		}
+		owner := false
+		status := ""
+		for _, v := range r.Evidence {
+			if v.Dimension == in.Dimension {
+				owner = v.OwnerID == actor
+				status = v.Status
+			}
+		}
+		if !owner || (in.Kind == "accepted" && status != "current") {
+			return Incubator{}, ErrInvalid
+		}
+		if in.Kind == "exception" {
+			if !text(in.FollowUpWork, 1000) || in.ExpiresAt == nil || !in.ExpiresAt.After(now) || in.ExpiresAt.After(now.Add(30*24*time.Hour)) || status == "failed" {
+				return Incubator{}, ErrInvalid
+			}
+		} else {
+			in.ExpiresAt = nil
+			in.FollowUpWork = ""
+		}
+		in.OwnerID = actor
+		in.CreatedAt = now
+		r.Decisions = append(r.Decisions, in)
+		r.Version++
+		r.UpdatedAt = now
+		evaluateReadiness(r, now)
+	}
+	if !found {
+		return Incubator{}, ErrNotFound
+	}
+	x.Version++
+	x.UpdatedAt = now
+	e = s.write(&x)
+	return x, e
 }
 
 var deliveryKinds = map[string]bool{"code": true, "tests": true, "documentation": true, "infrastructure": true, "interface": true}
@@ -520,6 +705,15 @@ func (s *Store) read(id string) (Incubator, error) {
 	if x.BootstrapPlans == nil {
 		x.BootstrapPlans = []BootstrapPlan{}
 	}
+	if x.DeliveryPlans == nil {
+		x.DeliveryPlans = []DeliveryPlan{}
+	}
+	if x.LaunchReadiness == nil {
+		x.LaunchReadiness = []LaunchReadiness{}
+	}
+	for i := range x.LaunchReadiness {
+		evaluateReadiness(&x.LaunchReadiness[i], s.now().UTC())
+	}
 	return x, e
 }
 func (s *Store) all() ([]Incubator, error) {
@@ -536,6 +730,12 @@ func (s *Store) all() ([]Incubator, error) {
 		var x Incubator
 		if e = json.Unmarshal(b, &x); e != nil {
 			return nil, e
+		}
+		if x.LaunchReadiness == nil {
+			x.LaunchReadiness = []LaunchReadiness{}
+		}
+		for i := range x.LaunchReadiness {
+			evaluateReadiness(&x.LaunchReadiness[i], s.now().UTC())
 		}
 		out = append(out, x)
 	}
@@ -650,6 +850,8 @@ func (s *Store) Create(x Incubator, actor string, invitations []Invitation) (Inc
 	x.Experiments = []ExperimentDefinition{}
 	x.ResearchNotes = []ResearchNote{}
 	x.BootstrapPlans = []BootstrapPlan{}
+	x.DeliveryPlans = []DeliveryPlan{}
+	x.LaunchReadiness = []LaunchReadiness{}
 	x.Events = []Event{{ID: uid(), Kind: "opened", Body: "Incubator opened", Visibility: "participants", ActorType: "human", ActorID: actor, CreatedAt: now}}
 	all, e := s.all()
 	if e != nil {
