@@ -332,6 +332,12 @@ whenever dependencies change or the web job fails before it starts.
   rechecks every accepted or exception-backed readiness obligation; copied identifiers are not proof.
   A resolution proposal also requires an accepted uncontested tally and an exact affected-resource
   match on artifact kind, identity, and revision; closed, rejected, or repository-only matches fail.
+  The connected `incubator-journey.spec.ts` browser/API/stock-Git journey carries a shared need from
+  consented human and approved-agent research through alternative rejection, governed bootstrap,
+  revision-exact delivery and invited-user validation, complete readiness, first launch, adoption-led
+  work, and continuing stewardship. Playwright isolates `$INCUBATOR_STORAGE_ROOT`; duplicate ideas,
+  unavailable owners, a budget-rejected bootstrap, failed delivery evidence, and an incomplete launch
+  remain contained without granting research, Git, bootstrap, review, publication, or roadmap authority.
 
 - **Capability inventory** — `/repositories/{id}/capabilities` and the repository
   `/capabilities` workspace retain immutable, exact-release capability revisions beneath

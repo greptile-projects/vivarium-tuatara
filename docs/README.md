@@ -74,6 +74,15 @@ Artifact-resolution proposals must have an accepted, uncontested final tally and
 reference exactly matching the artifact kind, resource ID, and revision; a rejected or merely
 repository-related proposal cannot close stewardship.
 
+`incubator-journey.spec.ts` proves the complete connected workflow through the browser, public API,
+and stock Git. A creator and consenting domain expert admit an already-approved research agent,
+compare and reject foundations using bounded evidence, activate a previewed project boundary, deliver
+an ordinary reviewed exact-revision slice, retain invited-user validation, accept all thirteen launch
+expectations, and publish repository-resolved release, documentation, API, contributor, and environment
+artifacts. Adoption feedback becomes governed continuing work before an explicit stewardship
+transition. Duplicate intent, an unavailable owner, budget rejection and rollback, unresolved preview
+evidence, and an incomplete launch are retained or rejected at their own authority boundaries.
+
 ### Evidence-backed project shape exploration
 
 Accepted participants use `/{incubator_id}/alternatives`, `/experiments`, experiment `/results`, and
