@@ -403,7 +403,9 @@ export function IncubatorsWorkspace() {
   }
   async function decideReadiness(e: FormEvent<HTMLFormElement>, readinessId:string, readinessVersion:number) {
     e.preventDefault(); if(!token||!current)return; setPending(true); const f=new FormData(e.currentTarget); const kind=String(f.get("decision_kind"));
-    try {replaceCurrent(await api<Incubator>(`/incubators/${current.id}/launch-readiness/${readinessId}/decisions`,{method:"POST",body:JSON.stringify({expected_version:current.version,readiness_version:readinessVersion,decision:{dimension:f.get("dimension"),kind,rationale:f.get("rationale"),follow_up_work:kind==="exception"?f.get("follow_up_work"):undefined,expires_at:kind==="exception"?new Date(String(f.get("expires_at"))).toISOString():undefined}})},token));}
+    const expiry=String(f.get("expires_at")??"").trim();
+    if(kind==="exception"&&!expiry){setError("Exception expiry is required and must be within 30 days.");setPending(false);return;}
+    try {replaceCurrent(await api<Incubator>(`/incubators/${current.id}/launch-readiness/${readinessId}/decisions`,{method:"POST",body:JSON.stringify({expected_version:current.version,readiness_version:readinessVersion,decision:{dimension:f.get("dimension"),kind,rationale:f.get("rationale"),follow_up_work:kind==="exception"?f.get("follow_up_work"):undefined,expires_at:kind==="exception"?new Date(expiry).toISOString():undefined}})},token));}
     catch(reason){setError(reason instanceof Error?reason.message:"Unable to record readiness decision.");} finally {setPending(false)}
   }
   async function consent(invitation: string, decision: string) {

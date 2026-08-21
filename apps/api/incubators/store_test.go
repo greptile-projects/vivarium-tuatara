@@ -135,8 +135,8 @@ func TestLaunchReadinessBlocksRiskAndNarrowsOnlyWithBoundedOwnerExceptions(t *te
 	s, _ := New(t.TempDir())
 	now := s.now().UTC()
 	x, _ := s.Create(fixture(), "human-a", nil)
-	x.BootstrapPlans = []BootstrapPlan{{ID: "bootstrap", Status: "active"}}
-	x.DeliveryPlans = []DeliveryPlan{{ID: "delivery", Status: "active"}}
+	x.BootstrapPlans = []BootstrapPlan{{ID: "bootstrap", Status: "active"}, {ID: "other-bootstrap", Status: "active"}}
+	x.DeliveryPlans = []DeliveryPlan{{ID: "delivery", BootstrapPlanID: "bootstrap", Status: "active"}, {ID: "other-delivery", BootstrapPlanID: "other-bootstrap", Status: "active"}}
 	if e := s.write(&x); e != nil {
 		t.Fatal(e)
 	}
@@ -147,6 +147,9 @@ func TestLaunchReadinessBlocksRiskAndNarrowsOnlyWithBoundedOwnerExceptions(t *te
 			status = "unsupported"
 		}
 		evidence = append(evidence, ReadinessEvidence{Dimension: d, OwnerID: "human-a", Summary: "Evidence for " + d, Reference: "work:123", Status: status})
+	}
+	if _, e := s.CreateLaunchReadiness(x.ID, "human-a", 1, LaunchReadiness{BootstrapPlanID: "bootstrap", DeliveryPlanID: "other-delivery", DeclaredAudience: "public", Evidence: evidence}); e != ErrInvalid {
+		t.Fatalf("mismatched bootstrap and delivery boundary = %v", e)
 	}
 	x, e := s.CreateLaunchReadiness(x.ID, "human-a", 1, LaunchReadiness{BootstrapPlanID: "bootstrap", DeliveryPlanID: "delivery", DeclaredAudience: "public", Evidence: evidence})
 	if e != nil || x.LaunchReadiness[0].Ready || len(x.LaunchReadiness[0].Blockers) != 13 {

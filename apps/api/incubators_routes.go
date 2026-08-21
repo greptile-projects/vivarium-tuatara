@@ -691,8 +691,40 @@ func registerIncubatorRoutes(mux *http.ServeMux, git *storage.Store, credentials
 				writeAPIError(w, 503, "follow_up_unavailable", "governed follow-up work cannot be resolved")
 				return
 			}
-			if _, e := proposals.Get(in.Decision.FollowUpWork); e != nil {
+			followUp, e := proposals.Get(in.Decision.FollowUpWork)
+			if e != nil {
 				writeAPIError(w, 422, "follow_up_missing", "an exception must connect to existing governed follow-up work")
+				return
+			}
+			incubator, e := store.Get(r.PathValue("incubator_id"), actor.UserID)
+			if e != nil {
+				writeIncubator(w, incubators.Incubator{}, e, 200)
+				return
+			}
+			admittedRepositories := map[string]bool{}
+			for _, readiness := range incubator.LaunchReadiness {
+				if readiness.ID != r.PathValue("readiness_id") {
+					continue
+				}
+				for _, delivery := range incubator.DeliveryPlans {
+					if delivery.ID == readiness.DeliveryPlanID && delivery.BootstrapPlanID == readiness.BootstrapPlanID {
+						for _, item := range delivery.WorkItems {
+							admittedRepositories[item.RepositoryID] = true
+						}
+					}
+				}
+			}
+			inScope := followUp.ScopeType == "repository" && admittedRepositories[followUp.ScopeID]
+			if followUp.ScopeType == "organization" {
+				for repositoryID := range admittedRepositories {
+					repository, repositoryErr := catalog.GetByID(repositoryID)
+					if repositoryErr == nil && repository.OrganizationID == followUp.ScopeID {
+						inScope = true
+					}
+				}
+			}
+			if !inScope {
+				writeAPIError(w, 422, "follow_up_scope_mismatch", "exception follow-up work must govern a repository admitted by this readiness delivery boundary")
 				return
 			}
 		}

@@ -338,7 +338,7 @@ func (s *Store) CreateLaunchReadiness(id, actor string, expected int, in LaunchR
 		}
 	}
 	for _, p := range x.DeliveryPlans {
-		if p.ID == in.DeliveryPlanID && p.Status == "active" {
+		if p.ID == in.DeliveryPlanID && p.Status == "active" && p.BootstrapPlanID == in.BootstrapPlanID {
 			delivered = true
 		}
 	}
