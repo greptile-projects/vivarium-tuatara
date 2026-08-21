@@ -1,5 +1,23 @@
 # HTTP API contract
 
+## Adoption workspaces
+
+`POST /adoption-workspaces` opens a human-owned software-fit evaluation. It records a starting
+`source`, requirements, budget, owners, weighted `evaluation_criteria`, exact-version `candidates`,
+evidence, and invitations. Sources may be roadmap outcomes, support gaps, incubators, decisions,
+packages, APIs, or federated repositories. Evidence dimensions are capabilities, provenance,
+support, security, data use, compatibility, and known gaps.
+
+`GET /adoption-workspaces` and `GET /adoption-workspaces/{workspace_id}` return only evaluations
+visible to the authenticated principal. Human invitees respond through
+`POST /adoption-workspaces/{workspace_id}/invitations/{invitation_id}/consent` with a CAS
+`expected_version`. Pending invitees cannot read general workspace context. Approved organization
+agents are observer-only.
+
+Resolution is server-derived. Evidence for another candidate version becomes `stale`; absent and
+inaccessible dimensions remain candidate gaps and leave fit `undetermined`. The record grants no
+authority over referenced repositories, packages, APIs, agents, environments, or provider roadmaps.
+
 ## Assurance programs
 
 - `GET /repositories/{id}/assurance-programs` lists visible versioned programs.
