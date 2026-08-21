@@ -248,6 +248,56 @@ type LaunchReadiness struct {
 	CreatedAt         time.Time           `json:"created_at"`
 	UpdatedAt         time.Time           `json:"updated_at"`
 }
+type LaunchArtifact struct {
+	Kind         string `json:"kind"`
+	RepositoryID string `json:"repository_id,omitempty"`
+	ResourceID   string `json:"resource_id"`
+	Revision     string `json:"revision,omitempty"`
+	Audience     string `json:"audience"`
+}
+type LaunchObservation struct {
+	ID           string    `json:"id"`
+	Kind         string    `json:"kind"`
+	RepositoryID string    `json:"repository_id,omitempty"`
+	ResourceID   string    `json:"resource_id"`
+	Summary      string    `json:"summary"`
+	ActorType    string    `json:"actor_type"`
+	ActorID      string    `json:"actor_id"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+type StewardshipWork struct {
+	ID           string    `json:"id"`
+	Kind         string    `json:"kind"`
+	RepositoryID string    `json:"repository_id"`
+	ResourceID   string    `json:"resource_id"`
+	OwnerType    string    `json:"owner_type"`
+	OwnerID      string    `json:"owner_id"`
+	Rationale    string    `json:"rationale"`
+	CreatedBy    string    `json:"created_by"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+type StewardshipTransition struct {
+	Disposition         string    `json:"disposition"`
+	TargetResourceID    string    `json:"target_resource_id,omitempty"`
+	Rationale           string    `json:"rationale"`
+	ResolvedResources   []string  `json:"resolved_resources"`
+	ResolvedObligations []string  `json:"resolved_obligations"`
+	DecidedBy           string    `json:"decided_by"`
+	DecidedAt           time.Time `json:"decided_at"`
+}
+type ProjectLaunch struct {
+	ID           string                 `json:"id"`
+	Version      int                    `json:"version"`
+	ReadinessID  string                 `json:"readiness_id"`
+	Audience     string                 `json:"audience"`
+	Artifacts    []LaunchArtifact       `json:"artifacts"`
+	Observations []LaunchObservation    `json:"observations"`
+	Work         []StewardshipWork      `json:"work"`
+	Transition   *StewardshipTransition `json:"transition,omitempty"`
+	PublishedBy  string                 `json:"published_by"`
+	PublishedAt  time.Time              `json:"published_at"`
+	UpdatedAt    time.Time              `json:"updated_at"`
+}
 type Incubator struct {
 	ID                  string                 `json:"id"`
 	Version             int                    `json:"version"`
@@ -274,6 +324,7 @@ type Incubator struct {
 	BootstrapPlans      []BootstrapPlan        `json:"bootstrap_plans"`
 	DeliveryPlans       []DeliveryPlan         `json:"delivery_plans"`
 	LaunchReadiness     []LaunchReadiness      `json:"launch_readiness"`
+	ProjectLaunches     []ProjectLaunch        `json:"project_launches"`
 	DurabilityUncertain bool                   `json:"durability_uncertain"`
 }
 
@@ -429,6 +480,235 @@ func (s *Store) DecideLaunchReadiness(id, readinessID, actor string, expected, r
 	return x, e
 }
 
+var launchArtifactKinds = map[string]bool{"release": true, "documentation": true, "package": true, "api_contract": true, "contributor_opportunity": true, "environment": true}
+var launchObservationKinds = map[string]bool{"adoption": true, "support": true, "reliability": true, "cost": true, "success_measure": true, "feedback": true}
+
+func (s *Store) PublishLaunch(id, actor string, expected int, in ProjectLaunch) (Incubator, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, e := s.lock()
+	if e != nil {
+		return Incubator{}, e
+	}
+	defer f.Close()
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	x, e := s.read(id)
+	if e != nil || !participant(x, "human", actor) {
+		return Incubator{}, ErrNotFound
+	}
+	if x.Version != expected {
+		return Incubator{}, ErrConflict
+	}
+	if len(x.ProjectLaunches) != 0 {
+		return Incubator{}, ErrInvalid
+	}
+	ready, repositories := false, map[string]bool{}
+	for _, r := range x.LaunchReadiness {
+		if r.ID == in.ReadinessID && r.Ready && r.EffectiveAudience == in.Audience {
+			ready = true
+			for _, p := range x.DeliveryPlans {
+				if p.ID == r.DeliveryPlanID {
+					for _, w := range p.WorkItems {
+						repositories[w.RepositoryID] = true
+					}
+				}
+			}
+		}
+	}
+	kinds, seen := map[string]bool{}, map[string]bool{}
+	for _, a := range in.Artifacts {
+		key := a.Kind + ":" + a.RepositoryID + ":" + a.ResourceID
+		if !launchArtifactKinds[a.Kind] || seen[key] || !text(a.ResourceID, 1000) || a.Audience != in.Audience || (a.RepositoryID != "" && !repositories[a.RepositoryID]) || (a.Revision != "" && len(a.Revision) != 40) || !s.resolveArtifact(a) {
+			return Incubator{}, ErrInvalid
+		}
+		seen[key], kinds[a.Kind] = true, true
+	}
+	if !ready || !map[string]bool{"experimental": true, "limited": true, "public": true}[in.Audience] || !kinds["release"] || !kinds["documentation"] || !kinds["contributor_opportunity"] || !kinds["environment"] || (!kinds["package"] && !kinds["api_contract"]) {
+		return Incubator{}, ErrInvalid
+	}
+	now := s.now().UTC().Truncate(time.Microsecond)
+	in.ID, in.Version, in.PublishedBy, in.PublishedAt, in.UpdatedAt = uid(), 1, actor, now, now
+	in.Observations, in.Work, in.Transition = []LaunchObservation{}, []StewardshipWork{}, nil
+	x.ProjectLaunches = append(x.ProjectLaunches, in)
+	x.Version++
+	x.UpdatedAt = now
+	e = s.write(&x)
+	return x, e
+}
+
+func (s *Store) AddLaunchObservation(id, launchID, typ, actor string, expected, launchVersion int, in LaunchObservation) (Incubator, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, e := s.lock()
+	if e != nil {
+		return Incubator{}, e
+	}
+	defer f.Close()
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	x, e := s.read(id)
+	if e != nil || !participant(x, typ, actor) {
+		return Incubator{}, ErrNotFound
+	}
+	if x.Version != expected {
+		return Incubator{}, ErrConflict
+	}
+	now, found := s.now().UTC().Truncate(time.Microsecond), false
+	for i := range x.ProjectLaunches {
+		p := &x.ProjectLaunches[i]
+		if p.ID != launchID {
+			continue
+		}
+		found = true
+		inScope := in.RepositoryID == ""
+		for _, artifact := range p.Artifacts {
+			if artifact.RepositoryID == in.RepositoryID {
+				inScope = true
+			}
+		}
+		if p.Version != launchVersion || p.Transition != nil || !inScope || !launchObservationKinds[in.Kind] || !text(in.ResourceID, 1000) || !text(in.Summary, 10000) || !s.resolveObservation(in) {
+			return Incubator{}, ErrInvalid
+		}
+		in.ID, in.ActorType, in.ActorID, in.CreatedAt = uid(), typ, actor, now
+		p.Observations = append(p.Observations, in)
+		p.Version++
+		p.UpdatedAt = now
+	}
+	if !found {
+		return Incubator{}, ErrNotFound
+	}
+	x.Version++
+	x.UpdatedAt = now
+	e = s.write(&x)
+	return x, e
+}
+
+func (s *Store) AddStewardshipWork(id, launchID, typ, actor string, expected, launchVersion int, in StewardshipWork) (Incubator, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, e := s.lock()
+	if e != nil {
+		return Incubator{}, e
+	}
+	defer f.Close()
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	x, e := s.read(id)
+	if e != nil || !participant(x, typ, actor) {
+		return Incubator{}, ErrNotFound
+	}
+	if x.Version != expected {
+		return Incubator{}, ErrConflict
+	}
+	now, found := s.now().UTC().Truncate(time.Microsecond), false
+	for i := range x.ProjectLaunches {
+		p := &x.ProjectLaunches[i]
+		if p.ID != launchID {
+			continue
+		}
+		found = true
+		inScope := false
+		for _, artifact := range p.Artifacts {
+			if artifact.RepositoryID == in.RepositoryID {
+				inScope = true
+			}
+		}
+		if p.Version != launchVersion || p.Transition != nil || !inScope || !participant(x, in.OwnerType, in.OwnerID) || !map[string]bool{"roadmap_revision": true, "proposal_task": true}[in.Kind] || !text(in.RepositoryID, 200) || !text(in.ResourceID, 1000) || !map[string]bool{"human": true, "agent": true}[in.OwnerType] || !text(in.OwnerID, 200) || !text(in.Rationale, 10000) || !s.resolveWork(in) {
+			return Incubator{}, ErrInvalid
+		}
+		in.ID, in.CreatedBy, in.CreatedAt = uid(), actor, now
+		p.Work = append(p.Work, in)
+		p.Version++
+		p.UpdatedAt = now
+	}
+	if !found {
+		return Incubator{}, ErrNotFound
+	}
+	x.Version++
+	x.UpdatedAt = now
+	e = s.write(&x)
+	return x, e
+}
+
+func (s *Store) TransitionStewardship(id, launchID, actor string, expected, launchVersion int, in StewardshipTransition) (Incubator, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, e := s.lock()
+	if e != nil {
+		return Incubator{}, e
+	}
+	defer f.Close()
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	x, e := s.read(id)
+	if e != nil || !participant(x, "human", actor) {
+		return Incubator{}, ErrNotFound
+	}
+	if x.Version != expected {
+		return Incubator{}, ErrConflict
+	}
+	now, found := s.now().UTC().Truncate(time.Microsecond), false
+	for i := range x.ProjectLaunches {
+		p := &x.ProjectLaunches[i]
+		if p.ID != launchID {
+			continue
+		}
+		found = true
+		resolved := true
+		if in.Disposition == "archived" {
+			resources, obligations := map[string]bool{}, map[string]bool{}
+			for _, artifact := range p.Artifacts {
+				resources[artifact.ResourceID] = true
+			}
+			for _, readiness := range x.LaunchReadiness {
+				if readiness.ID == p.ReadinessID {
+					for _, evidence := range readiness.Evidence {
+						obligations[evidence.Reference] = true
+						if !s.resolveArchivedObligation(evidence, readiness.Decisions) {
+							resolved = false
+						}
+					}
+				}
+			}
+			resolved = resolved && len(in.ResolvedResources) == len(resources) && len(in.ResolvedObligations) == len(obligations)
+			seenResources, seenObligations := map[string]bool{}, map[string]bool{}
+			for _, value := range in.ResolvedResources {
+				parts := strings.SplitN(value, "=", 2)
+				if len(parts) != 2 || !resources[parts[0]] || seenResources[parts[0]] {
+					resolved = false
+				} else {
+					for _, artifact := range p.Artifacts {
+						if artifact.ResourceID == parts[0] && !s.resolveArchivedArtifact(artifact, parts[1]) {
+							resolved = false
+						}
+					}
+				}
+				if len(parts) > 0 {
+					seenResources[parts[0]] = true
+				}
+			}
+			for _, value := range in.ResolvedObligations {
+				if !obligations[value] || seenObligations[value] {
+					resolved = false
+				}
+				seenObligations[value] = true
+			}
+		}
+		needsTarget := in.Disposition == "organization_initiative" || in.Disposition == "merged"
+		if p.Version != launchVersion || p.Transition != nil || !map[string]bool{"organization_initiative": true, "experimental": true, "merged": true, "archived": true}[in.Disposition] || !text(in.Rationale, 10000) || (needsTarget && (!text(in.TargetResourceID, 1000) || !s.resolveTransition(in))) || !resolved {
+			return Incubator{}, ErrInvalid
+		}
+		in.DecidedBy, in.DecidedAt = actor, now
+		p.Transition = &in
+		p.Version++
+		p.UpdatedAt = now
+	}
+	if !found {
+		return Incubator{}, ErrNotFound
+	}
+	x.Version++
+	x.UpdatedAt = now
+	e = s.write(&x)
+	return x, e
+}
+
 var deliveryKinds = map[string]bool{"code": true, "tests": true, "documentation": true, "infrastructure": true, "interface": true}
 var reportKinds = map[string]bool{"workspace": true, "pull_request": true, "preview": true, "target_user_feedback": true, "agent_action": true, "handoff": true, "cost": true, "deviation": true, "check": true, "review": true}
 
@@ -568,17 +848,30 @@ func (s *Store) AddDeliveryReport(id, planID, typ, actor string, expected, planV
 }
 
 type Store struct {
-	root    string
-	mu      sync.Mutex
-	now     func() time.Time
-	syncDir func() error
+	root                      string
+	mu                        sync.Mutex
+	now                       func() time.Time
+	syncDir                   func() error
+	resolveArtifact           func(LaunchArtifact) bool
+	resolveObservation        func(LaunchObservation) bool
+	resolveWork               func(StewardshipWork) bool
+	resolveTransition         func(StewardshipTransition) bool
+	resolveArchivedArtifact   func(LaunchArtifact, string) bool
+	resolveArchivedObligation func(ReadinessEvidence, []ReadinessDecision) bool
+}
+
+func (s *Store) ConfigureLaunchResolvers(artifact func(LaunchArtifact) bool, observation func(LaunchObservation) bool, work func(StewardshipWork) bool, transition func(StewardshipTransition) bool, archivedArtifact func(LaunchArtifact, string) bool, archivedObligation func(ReadinessEvidence, []ReadinessDecision) bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.resolveArtifact, s.resolveObservation, s.resolveWork, s.resolveTransition = artifact, observation, work, transition
+	s.resolveArchivedArtifact, s.resolveArchivedObligation = archivedArtifact, archivedObligation
 }
 
 func New(root string) (*Store, error) {
 	if err := os.MkdirAll(root, 0700); err != nil {
 		return nil, err
 	}
-	s := &Store{root: root, now: time.Now}
+	s := &Store{root: root, now: time.Now, resolveArtifact: func(LaunchArtifact) bool { return false }, resolveObservation: func(LaunchObservation) bool { return false }, resolveWork: func(StewardshipWork) bool { return false }, resolveTransition: func(StewardshipTransition) bool { return false }, resolveArchivedArtifact: func(LaunchArtifact, string) bool { return false }, resolveArchivedObligation: func(ReadinessEvidence, []ReadinessDecision) bool { return false }}
 	s.syncDir = func() error {
 		d, e := os.Open(root)
 		if e != nil {
@@ -711,6 +1004,9 @@ func (s *Store) read(id string) (Incubator, error) {
 	if x.LaunchReadiness == nil {
 		x.LaunchReadiness = []LaunchReadiness{}
 	}
+	if x.ProjectLaunches == nil {
+		x.ProjectLaunches = []ProjectLaunch{}
+	}
 	for i := range x.LaunchReadiness {
 		evaluateReadiness(&x.LaunchReadiness[i], s.now().UTC())
 	}
@@ -733,6 +1029,9 @@ func (s *Store) all() ([]Incubator, error) {
 		}
 		if x.LaunchReadiness == nil {
 			x.LaunchReadiness = []LaunchReadiness{}
+		}
+		if x.ProjectLaunches == nil {
+			x.ProjectLaunches = []ProjectLaunch{}
 		}
 		for i := range x.LaunchReadiness {
 			evaluateReadiness(&x.LaunchReadiness[i], s.now().UTC())
@@ -852,6 +1151,7 @@ func (s *Store) Create(x Incubator, actor string, invitations []Invitation) (Inc
 	x.BootstrapPlans = []BootstrapPlan{}
 	x.DeliveryPlans = []DeliveryPlan{}
 	x.LaunchReadiness = []LaunchReadiness{}
+	x.ProjectLaunches = []ProjectLaunch{}
 	x.Events = []Event{{ID: uid(), Kind: "opened", Body: "Incubator opened", Visibility: "participants", ActorType: "human", ActorID: actor, CreatedAt: now}}
 	all, e := s.all()
 	if e != nil {

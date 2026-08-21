@@ -318,6 +318,21 @@ whenever dependencies change or the web job fails before it starts.
   expired exceptions remain explicit blockers. Readiness grants no release, package, deployment,
   governance, budget, repository, or follow-up-work authority.
 
+- **Incubator launch and stewardship** — `/{incubator_id}/launches` binds a ready assessment's
+  effective audience to the first release, documentation, contributor opportunity, governed
+  environment, and package or API contract inside its delivery boundary. Attributable adoption,
+  support, reliability, cost, success-measure, and feedback observations connect existing evidence
+  to roadmap revisions or ordinary human/agent work. A human participant records graduation,
+  continued experiment, merge, or archive as a terminal disposition; archive requires explicit
+  resolution of both resources and obligations. These records grant no publication, repository,
+  roadmap, task, environment, organization, release, package, or deployment authority.
+  All artifact, observation, work, graduation, and merge references resolve through their owning
+  stores before mutation; missing resolvers fail closed. One incubator has one first launch, and
+  archive closure maps every frozen artifact to a closed repository-scoped governance proposal and
+  rechecks every accepted or exception-backed readiness obligation; copied identifiers are not proof.
+  A resolution proposal also requires an accepted uncontested tally and an exact affected-resource
+  match on artifact kind, identity, and revision; closed, rejected, or repository-only matches fail.
+
 - **Capability inventory** — `/repositories/{id}/capabilities` and the repository
   `/capabilities` workspace retain immutable, exact-release capability revisions beneath
   `$CAPABILITY_STORAGE_ROOT` (`capabilities`). A revision selects interfaces, symbols,

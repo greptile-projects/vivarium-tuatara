@@ -9,12 +9,39 @@ import (
 	"testing"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/governance"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/incubators"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
 )
+
+func TestArchiveResolutionRequiresAcceptedExactArtifactDecision(t *testing.T) {
+	artifact := incubators.LaunchArtifact{Kind: "environment", RepositoryID: "repo-a", ResourceID: "production", Revision: ""}
+	proposal := governance.Proposal{Status: "closed", ScopeType: "repository", ScopeID: "repo-a", Tally: &governance.Tally{Status: "not_accepted", Result: "reject"}, AffectedResources: []governance.Reference{{Kind: "environment", ResourceID: "production"}}}
+	if proposalResolvesLaunchArtifact(proposal, artifact) {
+		t.Fatal("rejected proposal resolved artifact")
+	}
+	proposal.Tally.Status = "accepted"
+	proposal.Tally.Contested = true
+	if proposalResolvesLaunchArtifact(proposal, artifact) {
+		t.Fatal("contested proposal resolved artifact")
+	}
+	proposal.Tally.Contested = false
+	proposal.AffectedResources[0].ResourceID = "unrelated"
+	if proposalResolvesLaunchArtifact(proposal, artifact) {
+		t.Fatal("unrelated proposal resolved artifact")
+	}
+	proposal.AffectedResources[0].ResourceID = artifact.ResourceID
+	if !proposalResolvesLaunchArtifact(proposal, artifact) {
+		t.Fatal("accepted exact proposal did not resolve artifact")
+	}
+	proposal.AffectedResources[0].Revision = strings.Repeat("a", 40)
+	if proposalResolvesLaunchArtifact(proposal, artifact) {
+		t.Fatal("mismatched revision resolved artifact")
+	}
+}
 
 func TestIncubatorPublicAPIRequiresInviteeConsentBeforeContribution(t *testing.T) {
 	git, _ := storage.New(t.TempDir())

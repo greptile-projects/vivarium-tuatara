@@ -183,6 +183,14 @@ export type Incubator = {
     evidence: { dimension: string; owner_id: string; summary: string; reference: string; status: "current" | "missing" | "unsafe" | "unsupported" | "failed" | "stale"; risk?: string }[];
     decisions: { dimension: string; owner_id: string; kind: "accepted" | "exception"; rationale: string; follow_up_work?: string; expires_at?: string; created_at: string }[];
   }[];
+  project_launches: {
+    id: string; version: number; readiness_id: string; audience: "experimental" | "limited" | "public";
+    artifacts: { kind: "release" | "documentation" | "package" | "api_contract" | "contributor_opportunity" | "environment"; repository_id?: string; resource_id: string; revision?: string; audience: string }[];
+    observations: { id: string; kind: "adoption" | "support" | "reliability" | "cost" | "success_measure" | "feedback"; repository_id?: string; resource_id: string; summary: string; actor_type: string; actor_id: string; created_at: string }[];
+    work: { id: string; kind: "roadmap_revision" | "proposal_task"; repository_id: string; resource_id: string; owner_type: "human" | "agent"; owner_id: string; rationale: string; created_by: string; created_at: string }[];
+    transition?: { disposition: "organization_initiative" | "experimental" | "merged" | "archived"; target_resource_id?: string; rationale: string; resolved_resources: string[]; resolved_obligations: string[]; decided_by: string; decided_at: string };
+    published_by: string; published_at: string; updated_at: string;
+  }[];
   durability_uncertain: boolean;
   created_by: string;
   created_at: string;

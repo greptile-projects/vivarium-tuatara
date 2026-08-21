@@ -46,6 +46,34 @@ maintainers, unsafe defaults, unsupported promises, and failed validation remain
 The ledger recomputes effective audience and blockers on reads; it grants no release, package,
 deployment, governance, budget, repository, or linked-work authority.
 
+### Launch and continuing stewardship
+
+A ready assessment can publish one immutable launch manifest at `/{incubator_id}/launches` for its
+exact effective audience. The manifest identifies the existing attested release, documentation,
+contributor opportunity, governed environment, and at least one package or API contract. Every
+repository reference stays inside the readiness delivery boundary; the incubator records the
+publication but grants none of those systems' authority.
+Publication resolves every entry through its repository-owned release, documentation, package,
+API-contract, contributor-opportunity, or environment store and permits exactly one first launch
+per incubator. Missing resolvers and missing or mismatched resources fail closed.
+
+Participants append adoption, support, reliability, cost, success-measure, and feedback observations
+with their existing evidence identities. Those signals can connect a roadmap revision or ordinary
+human- or agent-owned proposal task back to the launch. A human participant eventually records one
+terminal disposition: graduation to an organization initiative, continued experiment, merge into an
+existing project, or archive. Graduation and merge name their target; archive requires explicit
+resource and obligation resolution, preventing a closed incubator from silently abandoning either.
+After transition the launch trail is immutable.
+Observations likewise resolve through feedback, support, service-objective, fund, or outcome stores;
+roadmap/proposal work and graduation/merge targets must exist in their owning stores. Archive
+resolution exhaustively maps every frozen launch artifact ID to an existing closed repository-scoped
+governance proposal (`artifact_id=proposal_id`) and names every readiness evidence reference. Current
+accepted obligations remain resolved; exception-backed obligations require their governed follow-up
+proposal to be closed.
+Artifact-resolution proposals must have an accepted, uncontested final tally and an affected-resource
+reference exactly matching the artifact kind, resource ID, and revision; a rejected or merely
+repository-related proposal cannot close stewardship.
+
 ### Evidence-backed project shape exploration
 
 Accepted participants use `/{incubator_id}/alternatives`, `/experiments`, experiment `/results`, and
