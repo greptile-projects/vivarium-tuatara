@@ -685,6 +685,31 @@ func (s *Store) WithCurrentMember(organizationID, user string, fn func() error) 
 	})
 }
 
+// WithCurrentOwners holds organization existence and owner membership stable
+// while a dependent boundary activation commits.
+func (s *Store) WithCurrentOwners(organizationID string, users []string, fn func() error) error {
+	if !validID(organizationID) || len(users) == 0 || fn == nil {
+		return ErrInvalid
+	}
+	for _, user := range users {
+		if !validID(user) {
+			return ErrInvalid
+		}
+	}
+	return s.locked(func() error {
+		organization, err := s.Get(organizationID)
+		if err != nil {
+			return ErrNotFound
+		}
+		for _, user := range users {
+			if !HasRole(organization, user, "owner") {
+				return ErrNotFound
+			}
+		}
+		return fn()
+	})
+}
+
 type DeliveryPrincipalRequirement struct {
 	Kind         string
 	ID           string

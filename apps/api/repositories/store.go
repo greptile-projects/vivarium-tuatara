@@ -351,6 +351,47 @@ func (s *Store) WithCurrentReadAccess(actorID string, repositoryIDs []string, fn
 	return fn()
 }
 
+// WithCurrentOwners holds repository existence and ownership stable while a
+// dependent record that claims owner authority is committed. Repositories have
+// one canonical owner, so every claimed owner must resolve to that identity.
+func (s *Store) WithCurrentOwners(ownerIDs, repositoryIDs []string, fn func() error) error {
+	if len(ownerIDs) == 0 || len(repositoryIDs) == 0 || fn == nil {
+		return ErrNotFound
+	}
+	for _, ownerID := range ownerIDs {
+		if !validID(ownerID) {
+			return ErrNotFound
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lockRoot()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	seen := map[string]bool{}
+	for _, id := range repositoryIDs {
+		if !validID(id) || seen[id] {
+			return ErrNotFound
+		}
+		seen[id] = true
+		repository, readErr := s.read(id)
+		if readErr != nil {
+			return ErrNotFound
+		}
+		for _, ownerID := range ownerIDs {
+			if repository.OwnerID != ownerID {
+				return ErrNotFound
+			}
+		}
+		if _, openErr := s.git.Open(id); openErr != nil {
+			return ErrNotFound
+		}
+	}
+	return fn()
+}
+
 // WithCurrentParticipant runs fn while holding the catalog mutation lock after
 // proving userID is a current owner or contributor. Access removal therefore
 // commits wholly before or after the dependent mutation performed by fn.

@@ -51,6 +51,21 @@ type incubatorResearchNoteInput struct {
 	ExpectedVersion int                     `json:"expected_version"`
 	Note            incubators.ResearchNote `json:"note"`
 }
+type incubatorBootstrapInput struct {
+	ExpectedVersion int                            `json:"expected_version"`
+	AlternativeID   string                         `json:"alternative_id"`
+	Resources       []incubators.BootstrapResource `json:"resources"`
+}
+type incubatorBootstrapDecisionInput struct {
+	ExpectedVersion int    `json:"expected_version"`
+	PlanVersion     int    `json:"plan_version"`
+	Decision        string `json:"decision"`
+}
+type incubatorBootstrapActionInput struct {
+	ExpectedVersion int    `json:"expected_version"`
+	PlanVersion     int    `json:"plan_version"`
+	Action          string `json:"action"`
+}
 
 func registerIncubatorRoutes(mux *http.ServeMux, git *storage.Store, credentials *auth.Store, identities *users.Store, catalog *repositories.Store, orgs *organizations.Store, store *incubators.Store, feedback *productfeedback.Store, support *supportthreads.Store, proposals *governance.Store) {
 	authn := func(w http.ResponseWriter, r *http.Request) (auth.Credential, bool) {
@@ -384,6 +399,153 @@ func registerIncubatorRoutes(mux *http.ServeMux, git *storage.Store, credentials
 		typ, id := actorIdentity(actor)
 		out, e := store.AddResearchNote(r.PathValue("incubator_id"), typ, id, in.ExpectedVersion, in.Note)
 		writeIncubator(w, projectResearch(out, actor), e, 201)
+	})
+	mux.HandleFunc("POST /incubators/{incubator_id}/bootstrap-previews", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authn(w, r)
+		if !ok {
+			return
+		}
+		if actor.AgentID != "" {
+			writeAPIError(w, 403, "human_owner_required", "a human owner must reserve a project boundary")
+			return
+		}
+		var in incubatorBootstrapInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "a complete bootstrap preview is required")
+			return
+		}
+		visible, e := store.Get(r.PathValue("incubator_id"), actor.UserID)
+		if e != nil {
+			writeIncubator(w, incubators.Incubator{}, e, 404)
+			return
+		}
+		eligible := map[string]bool{visible.CreatedBy: true}
+		for _, invitation := range visible.Invitations {
+			if invitation.PrincipalType == "human" && invitation.Status == "accepted" {
+				eligible[invitation.PrincipalID] = true
+			}
+		}
+		for _, resource := range in.Resources {
+			for _, owner := range resource.OwnerIDs {
+				if !eligible[owner] {
+					writeAPIError(w, 422, "invalid_owner", "resource owners must be consenting human incubator participants")
+					return
+				}
+				if _, e := identities.Get(owner); e != nil {
+					writeAPIError(w, 422, "invalid_owner", "resource owners must be current human identities")
+					return
+				}
+			}
+			if resource.Mode != "connect" {
+				continue
+			}
+			switch resource.Kind {
+			case "organization":
+				org, e := orgs.Get(resource.ResourceID)
+				ownersCurrent := e == nil
+				for _, owner := range resource.OwnerIDs {
+					ownersCurrent = ownersCurrent && organizations.HasRole(org, owner, "owner")
+				}
+				if !ownersCurrent {
+					writeAPIError(w, 422, "inaccessible_resource", "connected resources must exist within the owner's current authority")
+					return
+				}
+			case "repository":
+				repo, e := catalog.GetByID(resource.ResourceID)
+				ownersCurrent := e == nil
+				for _, owner := range resource.OwnerIDs {
+					ownersCurrent = ownersCurrent && repo.OwnerID == owner
+				}
+				if !ownersCurrent {
+					writeAPIError(w, 422, "inaccessible_resource", "connected resources must exist within the owner's current authority")
+					return
+				}
+			}
+		}
+		out, e := store.PreviewBootstrap(r.PathValue("incubator_id"), actor.UserID, in.ExpectedVersion, in.AlternativeID, in.Resources)
+		writeIncubator(w, projectResearch(out, actor), e, 201)
+	})
+	mux.HandleFunc("POST /incubators/{incubator_id}/bootstrap-plans/{plan_id}/decisions", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authn(w, r)
+		if !ok {
+			return
+		}
+		if actor.AgentID != "" {
+			writeAPIError(w, 403, "human_owner_required", "only human resource owners approve activation")
+			return
+		}
+		var in incubatorBootstrapDecisionInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "an owner decision and exact versions are required")
+			return
+		}
+		out, e := store.DecideBootstrap(r.PathValue("incubator_id"), r.PathValue("plan_id"), actor.UserID, in.Decision, in.ExpectedVersion, in.PlanVersion)
+		writeIncubator(w, projectResearch(out, actor), e, 200)
+	})
+	mux.HandleFunc("POST /incubators/{incubator_id}/bootstrap-plans/{plan_id}/actions", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authn(w, r)
+		if !ok {
+			return
+		}
+		if actor.AgentID != "" {
+			writeAPIError(w, 403, "human_owner_required", "only a human resource owner may activate or roll back")
+			return
+		}
+		var in incubatorBootstrapActionInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "an activation or rollback action and exact versions are required")
+			return
+		}
+		current, e := store.Get(r.PathValue("incubator_id"), actor.UserID)
+		if e != nil {
+			writeIncubator(w, incubators.Incubator{}, e, 404)
+			return
+		}
+		var organizationID, repositoryID string
+		var organizationOwners, repositoryOwners []string
+		for _, plan := range current.BootstrapPlans {
+			if plan.ID == r.PathValue("plan_id") {
+				for _, resource := range plan.Resources {
+					if resource.Mode == "connect" {
+						if resource.Kind == "organization" {
+							organizationID = resource.ResourceID
+							organizationOwners = append([]string{}, resource.OwnerIDs...)
+						}
+						if resource.Kind == "repository" {
+							repositoryID = resource.ResourceID
+							repositoryOwners = append([]string{}, resource.OwnerIDs...)
+						}
+					}
+				}
+			}
+		}
+		var out incubators.Incubator
+		var finishErr error
+		finish := func() error {
+			out, finishErr = store.FinishBootstrap(r.PathValue("incubator_id"), r.PathValue("plan_id"), actor.UserID, in.Action, in.ExpectedVersion, in.PlanVersion)
+			return finishErr
+		}
+		withRepository := func() error {
+			if in.Action == "activate" && repositoryID != "" {
+				return catalog.WithCurrentOwners(repositoryOwners, []string{repositoryID}, finish)
+			}
+			return finish()
+		}
+		var authorityErr error
+		if in.Action == "activate" && organizationID != "" {
+			authorityErr = orgs.WithCurrentOwners(organizationID, organizationOwners, withRepository)
+		} else {
+			authorityErr = withRepository()
+		}
+		if finishErr != nil {
+			writeIncubator(w, projectResearch(out, actor), finishErr, 200)
+			return
+		}
+		if authorityErr != nil {
+			writeAPIError(w, 409, "bootstrap_authority_changed", "a connected resource is missing or no longer controlled by the activating owner")
+			return
+		}
+		writeIncubator(w, projectResearch(out, actor), nil, 200)
 	})
 }
 
