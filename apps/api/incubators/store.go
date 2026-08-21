@@ -30,6 +30,7 @@ type Source struct {
 	Detail       string `json:"detail,omitempty"`
 }
 type DecisionRight struct {
+	Kind         string   `json:"kind"`
 	Decision     string   `json:"decision"`
 	PrincipalIDs []string `json:"principal_ids"`
 	Rule         string   `json:"rule"`
@@ -78,18 +79,29 @@ type Incubator struct {
 	Invitations         []Invitation    `json:"invitations"`
 	Events              []Event         `json:"events"`
 	PotentialDuplicates []Duplicate     `json:"potential_duplicates"`
+	DurabilityUncertain bool            `json:"durability_uncertain"`
 }
 type Store struct {
-	root string
-	mu   sync.Mutex
-	now  func() time.Time
+	root    string
+	mu      sync.Mutex
+	now     func() time.Time
+	syncDir func() error
 }
 
 func New(root string) (*Store, error) {
 	if err := os.MkdirAll(root, 0700); err != nil {
 		return nil, err
 	}
-	return &Store{root: root, now: time.Now}, nil
+	s := &Store{root: root, now: time.Now}
+	s.syncDir = func() error {
+		d, e := os.Open(root)
+		if e != nil {
+			return e
+		}
+		defer d.Close()
+		return d.Sync()
+	}
+	return s, nil
 }
 func uid() string               { b := make([]byte, 16); _, _ = rand.Read(b); return hex.EncodeToString(b) }
 func text(v string, n int) bool { l := len(strings.TrimSpace(v)); return l > 0 && l <= n }
@@ -118,10 +130,12 @@ func validInput(x Incubator) bool {
 	} else if !text(x.Source.RepositoryID, 100) || !text(x.Source.ResourceID, 200) {
 		return false
 	}
+	kinds := map[string]bool{}
 	for _, d := range x.DecisionRights {
-		if !text(d.Decision, 500) || !validList(d.PrincipalIDs, 30) || !map[string]bool{"owner": true, "consent": true, "majority": true, "consensus": true}[d.Rule] {
+		if !map[string]bool{"scope_change": true, "visibility_change": true, "project_update": true}[d.Kind] || kinds[d.Kind] || !text(d.Decision, 500) || !validList(d.PrincipalIDs, 30) || !map[string]bool{"owner": true, "consent": true, "majority": true, "consensus": true}[d.Rule] {
 			return false
 		}
+		kinds[d.Kind] = true
 	}
 	return true
 }
@@ -132,14 +146,14 @@ func (s *Store) lock() (*os.File, error) {
 	}
 	return f, e
 }
-func (s *Store) write(x Incubator) error {
+func (s *Store) publish(x Incubator) (bool, error) {
 	b, e := json.Marshal(x)
 	if e != nil {
-		return e
+		return false, e
 	}
 	f, e := os.CreateTemp(s.root, ".incubator-*")
 	if e != nil {
-		return e
+		return false, e
 	}
 	n := f.Name()
 	defer os.Remove(n)
@@ -153,15 +167,30 @@ func (s *Store) write(x Incubator) error {
 	if e == nil {
 		e = os.Rename(n, filepath.Join(s.root, x.ID+".json"))
 	}
+	renamed := e == nil
 	if e == nil {
-		if d, de := os.Open(s.root); de == nil {
-			e = d.Sync()
-			_ = d.Close()
-		} else {
-			e = de
-		}
+		e = s.syncDir()
 	}
-	return e
+	return renamed, e
+}
+func (s *Store) write(x *Incubator) error {
+	// Publish a conservative marker first. Once its directory entry is synced,
+	// every later failure is a committed result, never an ordinary failed write.
+	x.DurabilityUncertain = true
+	renamed, e := s.publish(*x)
+	if e != nil {
+		if renamed {
+			return nil
+		}
+		return e
+	}
+	x.DurabilityUncertain = false
+	if renamed, e = s.publish(*x); e != nil {
+		x.DurabilityUncertain = true
+		_, _ = s.publish(*x)
+		return nil
+	}
+	return nil
 }
 func (s *Store) read(id string) (Incubator, error) {
 	if len(id) != 32 {
@@ -222,6 +251,44 @@ func participant(x Incubator, typ, id string) bool {
 	}
 	return false
 }
+func decisionFor(x Incubator, kind string) (DecisionRight, bool) {
+	for _, right := range x.DecisionRights {
+		if right.Kind == kind {
+			return right, true
+		}
+	}
+	return DecisionRight{}, false
+}
+func principalForDecision(x Incubator, kind, actor string) bool {
+	right, ok := decisionFor(x, kind)
+	if !ok {
+		return false
+	}
+	for _, principal := range right.PrincipalIDs {
+		if principal == actor {
+			return true
+		}
+	}
+	return false
+}
+func decisionSatisfied(x Incubator, right DecisionRight, actor, body string) bool {
+	if !principalForDecision(x, right.Kind, actor) {
+		return false
+	}
+	if right.Rule == "owner" {
+		return right.PrincipalIDs[0] == actor
+	}
+	support := map[string]bool{actor: true}
+	for _, event := range x.Events {
+		if event.Kind == "decision_support" && event.Body == body && principalForDecision(x, right.Kind, event.ActorID) {
+			support[event.ActorID] = true
+		}
+	}
+	if right.Rule == "majority" {
+		return len(support) > len(right.PrincipalIDs)/2
+	}
+	return len(support) == len(right.PrincipalIDs)
+}
 
 func (s *Store) Create(x Incubator, actor string, invitations []Invitation) (Incubator, error) {
 	s.mu.Lock()
@@ -272,7 +339,8 @@ func (s *Store) Create(x Incubator, actor string, invitations []Invitation) (Inc
 			x.PotentialDuplicates = append(x.PotentialDuplicates, Duplicate{IncubatorID: other.ID, Title: other.Title, Reason: "matching title or problem statement"})
 		}
 	}
-	return x, s.write(x)
+	e = s.write(&x)
+	return x, e
 }
 func (s *Store) Get(id, actor string) (Incubator, error) {
 	s.mu.Lock()
@@ -314,19 +382,15 @@ func (s *Store) AddEvent(id, typ, actor string, expected int, in Event) (Incubat
 	if x.Version != expected {
 		return Incubator{}, ErrConflict
 	}
-	if !map[string]bool{"discussion": true, "evidence": true, "assumption": true, "scope_change": true, "visibility_change": true}[in.Kind] || !text(in.Body, 10000) || !map[string]bool{"participants": true, "public": true}[in.Visibility] {
+	if !map[string]bool{"discussion": true, "evidence": true, "assumption": true, "decision_support": true, "scope_change": true, "visibility_change": true}[in.Kind] || !text(in.Body, 10000) || !map[string]bool{"participants": true, "public": true}[in.Visibility] {
+		return Incubator{}, ErrInvalid
+	}
+	if in.Kind == "decision_support" && !principalForDecision(x, "scope_change", actor) {
 		return Incubator{}, ErrInvalid
 	}
 	if in.Kind == "scope_change" {
-		allowed := false
-		for _, right := range x.DecisionRights {
-			for _, principal := range right.PrincipalIDs {
-				if principal == actor {
-					allowed = true
-				}
-			}
-		}
-		if !allowed {
+		right, ok := decisionFor(x, "scope_change")
+		if !ok || !decisionSatisfied(x, right, actor, in.Body) {
 			return Incubator{}, ErrInvalid
 		}
 	}
@@ -344,7 +408,8 @@ func (s *Store) AddEvent(id, typ, actor string, expected int, in Event) (Incubat
 	x.Events = append(x.Events, in)
 	x.Version++
 	x.UpdatedAt = now
-	return x, s.write(x)
+	e = s.write(&x)
+	return x, e
 }
 func (s *Store) Consent(id, invitation, actor, decision string, expected int) (Incubator, error) {
 	s.mu.Lock()
@@ -371,7 +436,8 @@ func (s *Store) Consent(id, invitation, actor, decision string, expected int) (I
 			x.Events = append(x.Events, Event{ID: uid(), Kind: "consent_" + decision, Body: "Invitation " + decision, Visibility: "participants", ActorType: "human", ActorID: actor, CreatedAt: now})
 			x.Version++
 			x.UpdatedAt = now
-			return x, s.write(x)
+			e = s.write(&x)
+			return x, e
 		}
 	}
 	return Incubator{}, ErrInvalid

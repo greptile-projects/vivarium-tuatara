@@ -266,7 +266,11 @@ whenever dependencies change or the web job fails before it starts.
   duplicates rather than silently merged. Human invitees must explicitly accept before shaping
   the work; approved organization agents retain their existing identity and approval boundary.
   Compare-and-swap events keep discussion, evidence, assumptions, scope and visibility changes,
-  and consent attributable. Incubators grant no repository, organization, Git, agent, tool,
+  and consent attributable. Scope changes bind only to the typed `scope_change` decision right;
+  owner, majority, and consensus/consent rules derive from distinct attributable support events.
+  Writes publish a conservative `durability_uncertain` marker before clearing it after a
+  directory-synced canonical copy, so a post-rename sync failure is returned as committed state.
+  Incubators grant no repository, organization, Git, agent, tool,
   deployment, or implementation authority.
 
 - **Capability inventory** — `/repositories/{id}/capabilities` and the repository

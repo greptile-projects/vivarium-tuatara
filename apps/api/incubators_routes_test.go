@@ -25,7 +25,7 @@ func TestIncubatorPublicAPIRequiresInviteeConsentBeforeContribution(t *testing.T
 	defer server.Close()
 	creator := createTestAccount(t, server.URL, "incubator-creator")
 	invitee := createTestAccount(t, server.URL, "incubator-invitee")
-	body := `{"title":"A project before code","audience":"Developer teams","problem":"Repository choices arrive before shared intent","desired_outcome":"Agree on purpose first","constraints":["No repository"],"success_measures":["Participant consent"],"sponsor_ids":["` + creator.User.ID + `"],"decision_rights":[{"decision":"Change scope","principal_ids":["` + creator.User.ID + `"],"rule":"owner"}],"visibility":"participants","source":{"kind":"new_idea","label":"New collaborative idea"},"invitations":[{"principal_type":"human","principal_id":"` + invitee.User.ID + `","role":"co-designer"}]}`
+	body := `{"title":"A project before code","audience":"Developer teams","problem":"Repository choices arrive before shared intent","desired_outcome":"Agree on purpose first","constraints":["No repository"],"success_measures":["Participant consent"],"sponsor_ids":["` + creator.User.ID + `"],"decision_rights":[{"kind":"scope_change","decision":"Change scope","principal_ids":["` + creator.User.ID + `"],"rule":"owner"}],"visibility":"participants","source":{"kind":"new_idea","label":"New collaborative idea"},"invitations":[{"principal_type":"human","principal_id":"` + invitee.User.ID + `","role":"co-designer"}]}`
 	response := authenticatedRequest(t, http.MethodPost, server.URL+"/incubators", body, creator.Credential.Token, http.StatusCreated)
 	var created incubators.Incubator
 	if err := json.NewDecoder(response.Body).Decode(&created); err != nil {

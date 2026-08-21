@@ -17,9 +17,14 @@ Invite visibility does not imply participation: each human invitee must append e
 before contributing. Approved organization agents retain their already-governed identity; the
 incubator grants no new runtime or tool authority. Versioned append-only events attribute
 discussion, evidence, assumptions, scope changes, visibility changes, and consent to a stable human
-or agent identity. Duplicate-looking initiatives remain separate and are reported explicitly to
+or agent identity. Scope mutations select only the typed scope-change right; owner rules select the
+declared owner, while majority and consensus/consent rules count exact-body support events from
+distinct declared principals. Duplicate-looking initiatives remain separate and are reported explicitly to
 readers who can see both. Storage defaults beneath `$INCUBATOR_STORAGE_ROOT` (`incubators`) and
 grants no repository, Git, organization, implementation, review, release, or deployment authority.
+Publication first directory-syncs a conservative durability marker and clears it only with a second
+synced canonical copy; post-rename sync failures therefore return committed, explicitly uncertain
+state instead of inviting a duplicate retry.
 
 ## Versioned agent projects
 
