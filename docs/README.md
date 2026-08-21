@@ -70,6 +70,9 @@ resolution exhaustively maps every frozen launch artifact ID to an existing clos
 governance proposal (`artifact_id=proposal_id`) and names every readiness evidence reference. Current
 accepted obligations remain resolved; exception-backed obligations require their governed follow-up
 proposal to be closed.
+Artifact-resolution proposals must have an accepted, uncontested final tally and an affected-resource
+reference exactly matching the artifact kind, resource ID, and revision; a rejected or merely
+repository-related proposal cannot close stewardship.
 
 ### Evidence-backed project shape exploration
 

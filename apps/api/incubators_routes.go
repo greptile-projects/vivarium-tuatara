@@ -119,6 +119,18 @@ type incubatorStewardshipTransitionInput struct {
 	Transition      incubators.StewardshipTransition `json:"transition"`
 }
 
+func proposalResolvesLaunchArtifact(resolution governance.Proposal, artifact incubators.LaunchArtifact) bool {
+	if resolution.Status != "closed" || resolution.ScopeType != "repository" || resolution.ScopeID != artifact.RepositoryID || resolution.Tally == nil || resolution.Tally.Status != "accepted" || resolution.Tally.Contested || resolution.Tally.Result == "" {
+		return false
+	}
+	for _, affected := range resolution.AffectedResources {
+		if affected.Kind == artifact.Kind && affected.ResourceID == artifact.ResourceID && affected.Revision == artifact.Revision {
+			return true
+		}
+	}
+	return false
+}
+
 func registerIncubatorRoutes(mux *http.ServeMux, git *storage.Store, credentials *auth.Store, identities *users.Store, catalog *repositories.Store, orgs *organizations.Store, store *incubators.Store, feedback *productfeedback.Store, support *supportthreads.Store, proposals *governance.Store, workspaceStore *workspaces.Store, pullStore *pullrequests.Store, previewStore *previews.Store, checkStore *checkruns.Store, releaseStore *releases.Store, documentationStore *docscollections.Store, packageStore *packageversions.Store, apiStore *apicontracts.Store, opportunityStore *contributoropportunities.Store, deploymentStore *deployments.Store, roadmapStore *roadmaps.Store, objectiveStore *serviceobjectives.Store, fundStore *projectfunds.Store, outcomeStore *outcomevalidations.Store) {
 	store.ConfigureLaunchResolvers(func(a incubators.LaunchArtifact) bool {
 		if releaseStore == nil || documentationStore == nil || packageStore == nil || apiStore == nil || opportunityStore == nil || deploymentStore == nil {
@@ -223,7 +235,7 @@ func registerIncubatorRoutes(mux *http.ServeMux, git *storage.Store, credentials
 			return false
 		}
 		resolution, e := proposals.Get(resolutionID)
-		return e == nil && resolution.Status == "closed" && resolution.ScopeType == "repository" && resolution.ScopeID == a.RepositoryID
+		return e == nil && proposalResolvesLaunchArtifact(resolution, a)
 	}, func(e incubators.ReadinessEvidence, decisions []incubators.ReadinessDecision) bool {
 		for i := len(decisions) - 1; i >= 0; i-- {
 			decision := decisions[i]

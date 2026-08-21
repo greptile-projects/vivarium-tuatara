@@ -330,6 +330,8 @@ whenever dependencies change or the web job fails before it starts.
   stores before mutation; missing resolvers fail closed. One incubator has one first launch, and
   archive closure maps every frozen artifact to a closed repository-scoped governance proposal and
   rechecks every accepted or exception-backed readiness obligation; copied identifiers are not proof.
+  A resolution proposal also requires an accepted uncontested tally and an exact affected-resource
+  match on artifact kind, identity, and revision; closed, rejected, or repository-only matches fail.
 
 - **Capability inventory** — `/repositories/{id}/capabilities` and the repository
   `/capabilities` workspace retain immutable, exact-release capability revisions beneath
