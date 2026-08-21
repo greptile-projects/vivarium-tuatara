@@ -3,6 +3,25 @@
 Notes on how this project fits together. Mostly empty for now — things get
 written down here as they're decided, not before.
 
+## Evidence-backed software adoption
+
+Authenticated collaborators use `/adoption-workspaces` or the web adoption workspace to ask whether
+an exact external software version fits a declared outcome. A workspace begins from an admitted
+roadmap outcome, support gap, incubator, decision, package, API, or federated repository and freezes
+required journeys, target environments, constraints, budget, owners, weighted evaluation criteria,
+and one or more candidate versions.
+
+Provider maintainers and affected users remain pending until they explicitly accept their invitation.
+Approved organization agents can participate only as read-only observers. Each candidate retains
+separate capability, provenance, support, security, data-use, compatibility, and known-gap evidence.
+Pending humans can discover only their invitation coordinates, role, inviter, and timestamp until
+they accept. Reads recheck repository access and replace evidence outside the viewer's current
+boundary with an opaque gap; typed human and organization-agent identities cannot collide.
+Unavailable references remain missing or inaccessible, while evidence naming another candidate
+version is derived as stale. Candidate fit stays `undetermined` whenever any dimension lacks current
+evidence. The ledger defaults beneath `$ADOPTION_WORKSPACE_STORAGE_ROOT` (`adoption-workspaces`) and
+grants no package, API, procurement, Git, environment, deployment, or provider-roadmap authority.
+
 ## Project incubators before repositories
 
 Authenticated collaborators use `/incubators` or the web project-incubator workspace to establish
