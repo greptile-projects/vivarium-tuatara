@@ -262,6 +262,9 @@ whenever dependencies change or the web job fails before it starts.
   journeys, environments, constraints, budget, accountable owners, weighted criteria, and exact
   candidate versions. Provider maintainers and affected users explicitly consent before reading;
   already-approved organization agents are observer-only and receive no mutation authority.
+  Pending humans discover only consent coordinates and invitation metadata. Reads match typed
+  principal and organization identity and recheck repository evidence access for every viewer,
+  replacing out-of-bound evidence with an opaque gap.
   Candidate comparisons cover capabilities, provenance, support, security, data use,
   compatibility, and known gaps with inspectable references. Missing, inaccessible, and
   version-stale evidence remains an explicit gap rather than proof of fit. Workspaces grant no

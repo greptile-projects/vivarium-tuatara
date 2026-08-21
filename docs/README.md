@@ -14,6 +14,9 @@ and one or more candidate versions.
 Provider maintainers and affected users remain pending until they explicitly accept their invitation.
 Approved organization agents can participate only as read-only observers. Each candidate retains
 separate capability, provenance, support, security, data-use, compatibility, and known-gap evidence.
+Pending humans can discover only their invitation coordinates, role, inviter, and timestamp until
+they accept. Reads recheck repository access and replace evidence outside the viewer's current
+boundary with an opaque gap; typed human and organization-agent identities cannot collide.
 Unavailable references remain missing or inaccessible, while evidence naming another candidate
 version is derived as stale. Candidate fit stays `undetermined` whenever any dimension lacks current
 evidence. The ledger defaults beneath `$ADOPTION_WORKSPACE_STORAGE_ROOT` (`adoption-workspaces`) and

@@ -97,10 +97,24 @@ type Workspace struct {
 	UpdatedAt        time.Time    `json:"updated_at"`
 }
 
+type Viewer struct {
+	PrincipalType  string
+	PrincipalID    string
+	OrganizationID string
+	RepositoryID   string
+}
+
+type PendingInvitation struct {
+	WorkspaceID string     `json:"workspace_id"`
+	Version     int        `json:"version"`
+	Invitation  Invitation `json:"invitation"`
+}
+
 type Store struct {
-	root string
-	mu   sync.Mutex
-	now  func() time.Time
+	root              string
+	mu                sync.Mutex
+	now               func() time.Time
+	canReadRepository func(Viewer, string) bool
 }
 
 func New(root string) (*Store, error) {
@@ -110,7 +124,13 @@ func New(root string) (*Store, error) {
 	if e := os.MkdirAll(root, 0700); e != nil {
 		return nil, e
 	}
-	return &Store{root: root, now: time.Now}, nil
+	return &Store{root: root, now: time.Now, canReadRepository: func(Viewer, string) bool { return false }}, nil
+}
+
+func (s *Store) ConfigureRepositoryAccess(check func(Viewer, string) bool) {
+	if check != nil {
+		s.canReadRepository = check
+	}
 }
 func id() string                { b := make([]byte, 16); _, _ = rand.Read(b); return hex.EncodeToString(b) }
 func text(v string, n int) bool { l := len(strings.TrimSpace(v)); return l > 0 && l <= n }
@@ -313,22 +333,29 @@ func (s *Store) Create(x Workspace, actor string, invitations []Invitation) (Wor
 	e = s.write(x)
 	return x, e
 }
-func visible(x Workspace, actor string) bool {
-	if x.CreatedBy == actor {
+func visible(x Workspace, viewer Viewer) bool {
+	if viewer.PrincipalType == "human" && x.CreatedBy == viewer.PrincipalID {
 		return true
 	}
 	for _, v := range x.Invitations {
-		if v.PrincipalID == actor && v.Status == "accepted" {
+		if v.PrincipalType == viewer.PrincipalType && v.PrincipalID == viewer.PrincipalID && v.Status == "accepted" && (v.PrincipalType != "agent" || v.OrganizationID == viewer.OrganizationID) {
 			return true
 		}
 	}
 	return false
 }
-func project(x Workspace, actor string) Workspace {
+func (s *Store) project(x Workspace, viewer Viewer) Workspace {
+	if x.Source.RepositoryID != "" && !s.canReadRepository(viewer, x.Source.RepositoryID) {
+		x.Source = Source{Kind: x.Source.Kind, Label: "Restricted source", Resolution: "inaccessible", Detail: "Starting context is outside this viewer's current read boundary"}
+	}
 	for i := range x.Candidates {
 		out := []Evidence{}
 		for _, e := range x.Candidates[i].Evidence {
-			if e.Visibility == "public" || visible(x, actor) {
+			if e.RepositoryID != "" && !s.canReadRepository(viewer, e.RepositoryID) {
+				out = append(out, Evidence{ID: e.ID, Dimension: e.Dimension, Summary: "Restricted evidence", Reference: "Restricted evidence", Visibility: e.Visibility, Resolution: "inaccessible", Detail: "Repository evidence is outside this viewer's current read boundary", RecordedAt: e.RecordedAt})
+				continue
+			}
+			if e.Visibility == "public" || visible(x, viewer) {
 				out = append(out, e)
 			}
 		}
@@ -337,16 +364,16 @@ func project(x Workspace, actor string) Workspace {
 	}
 	return x
 }
-func (s *Store) Get(v, actor string) (Workspace, error) {
+func (s *Store) Get(v string, viewer Viewer) (Workspace, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	x, e := s.read(v)
-	if e != nil || !visible(x, actor) {
+	if e != nil || !visible(x, viewer) {
 		return Workspace{}, ErrNotFound
 	}
-	return project(x, actor), nil
+	return s.project(x, viewer), nil
 }
-func (s *Store) List(actor string) ([]Workspace, error) {
+func (s *Store) List(viewer Viewer) ([]Workspace, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	files, e := filepath.Glob(filepath.Join(s.root, "*.json"))
@@ -363,11 +390,41 @@ func (s *Store) List(actor string) ([]Workspace, error) {
 		if e != nil {
 			return nil, e
 		}
-		if visible(x, actor) {
-			out = append(out, project(x, actor))
+		if visible(x, viewer) {
+			out = append(out, s.project(x, viewer))
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	return out, nil
+}
+
+func (s *Store) Pending(viewer Viewer) ([]PendingInvitation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if viewer.PrincipalType != "human" || viewer.PrincipalID == "" {
+		return []PendingInvitation{}, nil
+	}
+	files, e := filepath.Glob(filepath.Join(s.root, "*.json"))
+	if e != nil {
+		return nil, e
+	}
+	out := []PendingInvitation{}
+	for _, p := range files {
+		b, readErr := os.ReadFile(p)
+		var x Workspace
+		if readErr == nil {
+			readErr = json.Unmarshal(b, &x)
+		}
+		if readErr != nil {
+			return nil, readErr
+		}
+		for _, invitation := range x.Invitations {
+			if invitation.PrincipalType == "human" && invitation.PrincipalID == viewer.PrincipalID && invitation.Status == "pending" {
+				out = append(out, PendingInvitation{WorkspaceID: x.ID, Version: x.Version, Invitation: invitation})
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Invitation.InvitedAt.After(out[j].Invitation.InvitedAt) })
 	return out, nil
 }
 func (s *Store) Consent(workspace, invitation, actor, decision string, expected int) (Workspace, error) {
@@ -398,7 +455,7 @@ func (s *Store) Consent(workspace, invitation, actor, decision string, expected 
 			if decision == "declined" {
 				return Workspace{ID: x.ID, Version: x.Version, Invitations: []Invitation{*v}, UpdatedAt: x.UpdatedAt}, e
 			}
-			return project(x, actor), e
+			return s.project(x, Viewer{PrincipalType: "human", PrincipalID: actor}), e
 		}
 	}
 	return Workspace{}, ErrInvalid

@@ -56,6 +56,29 @@ func registerAdoptionWorkspaceRoutes(mux *http.ServeMux, credentials *auth.Store
 		ok, _ := catalog.HasCollaborator(actor.UserID, id)
 		return ok
 	}
+	viewer := func(actor auth.Credential) adoptionworkspaces.Viewer {
+		if actor.AgentID != "" {
+			return adoptionworkspaces.Viewer{PrincipalType: "agent", PrincipalID: actor.AgentID, OrganizationID: actor.OrganizationID, RepositoryID: actor.RepositoryID}
+		}
+		return adoptionworkspaces.Viewer{PrincipalType: "human", PrincipalID: actor.UserID}
+	}
+	store.ConfigureRepositoryAccess(func(v adoptionworkspaces.Viewer, id string) bool {
+		repo, e := catalog.GetByID(id)
+		if e != nil {
+			return false
+		}
+		if repo.Visibility == repositories.Public {
+			return true
+		}
+		if v.PrincipalType == "agent" {
+			return v.RepositoryID == id
+		}
+		if repo.OwnerID == v.PrincipalID {
+			return true
+		}
+		ok, _ := catalog.HasCollaborator(v.PrincipalID, id)
+		return ok
+	})
 	resolveSource := func(source adoptionworkspaces.Source, actor auth.Credential) adoptionworkspaces.Source {
 		source.Resolution, source.Detail = "inaccessible", "Starting context is outside this collaborator's current read boundary"
 		if source.Kind == "federated_repository" {
@@ -193,27 +216,31 @@ func registerAdoptionWorkspaceRoutes(mux *http.ServeMux, credentials *auth.Store
 		if !ok {
 			return
 		}
-		viewer := actor.UserID
-		if actor.AgentID != "" {
-			viewer = actor.AgentID
-		}
-		out, e := store.List(viewer)
+		out, e := store.List(viewer(actor))
 		if e != nil {
 			writeAdoptionWorkspace(w, adoptionworkspaces.Workspace{}, e, 500)
 			return
 		}
 		writeJSON(w, 200, map[string]any{"adoption_workspaces": out})
 	})
+	mux.HandleFunc("GET /adoption-workspaces/invitations/pending", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authn(w, r)
+		if !ok {
+			return
+		}
+		out, e := store.Pending(viewer(actor))
+		if e != nil {
+			writeAdoptionWorkspace(w, adoptionworkspaces.Workspace{}, e, 500)
+			return
+		}
+		writeJSON(w, 200, map[string]any{"invitations": out})
+	})
 	mux.HandleFunc("GET /adoption-workspaces/{workspace_id}", func(w http.ResponseWriter, r *http.Request) {
 		actor, ok := authn(w, r)
 		if !ok {
 			return
 		}
-		viewer := actor.UserID
-		if actor.AgentID != "" {
-			viewer = actor.AgentID
-		}
-		out, e := store.Get(r.PathValue("workspace_id"), viewer)
+		out, e := store.Get(r.PathValue("workspace_id"), viewer(actor))
 		writeAdoptionWorkspace(w, out, e, 200)
 	})
 	mux.HandleFunc("POST /adoption-workspaces/{workspace_id}/invitations/{invitation_id}/consent", func(w http.ResponseWriter, r *http.Request) {
