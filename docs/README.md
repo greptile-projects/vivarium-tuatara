@@ -3,6 +3,32 @@
 Notes on how this project fits together. Mostly empty for now — things get
 written down here as they're decided, not before.
 
+## Project incubators before repositories
+
+Authenticated collaborators use `/incubators` or the web project-incubator workspace to establish
+purpose and participation before choosing filenames, frameworks, or repository ownership. An
+incubator records a working title, audience, problem, desired outcome, constraints, success
+measures, sponsors, explicit decision rights, visibility, and human or approved-agent invitations.
+Its starting point can be existing feedback, a support gap, a governed proposal, or an original
+idea. The API resolves repository context only inside the creator's current read boundary and
+retains `resolved`, `missing`, or opaque `inaccessible` diagnostics.
+
+An invitation does not imply read participation: pending and declined humans receive no
+participants-only context, and use only the narrow invitation consent endpoint until accepted.
+Each human invitee must append explicit consent before contributing. Approved organization agents retain their already-governed identity; the
+incubator grants no new runtime or tool authority. Versioned append-only events attribute
+discussion, evidence, assumptions, scope changes, visibility changes, and consent to a stable human
+or agent identity. Scope mutations select only the typed scope-change right; owner rules select the
+declared owner, while majority and consensus/consent rules count exact-body support events from
+distinct declared principals. Duplicate-looking initiatives remain separate and are reported explicitly to
+readers who can see both. Storage defaults beneath `$INCUBATOR_STORAGE_ROOT` (`incubators`) and
+grants no repository, Git, organization, implementation, review, release, or deployment authority.
+Visibility mutations use the same rule evaluation through their separate typed right; support
+events name the decision kind, preventing a scope vote from authorizing publication.
+Publication first directory-syncs a conservative durability marker and clears it only with a second
+synced canonical copy; post-rename sync failures therefore return committed, explicitly uncertain
+state instead of inviting a duplicate retry.
+
 ## Versioned agent projects
 
 Repository collaborators define intended agent behavior at `/repositories/{id}/agent-projects` and review
