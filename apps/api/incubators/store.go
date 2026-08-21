@@ -358,6 +358,9 @@ func (s *Store) AddDeliveryReport(id, planID, typ, actor string, expected, planV
 			for _, w := range p.WorkItems {
 				if w.ID == in.WorkItemID {
 					valid = true
+					if in.RepositoryID != "" && in.RepositoryID != w.RepositoryID {
+						return Incubator{}, ErrInvalid
+					}
 				}
 			}
 			if !valid {

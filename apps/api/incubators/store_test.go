@@ -108,6 +108,9 @@ func TestDeliveryPlanConnectsOrderedMixedWorkAndAttributableEvidence(t *testing.
 	if e != nil || x.DeliveryPlans[0].Reports[0].ActorID != "agent-a" || x.DeliveryPlans[0].Version != 2 {
 		t.Fatalf("report = %#v, %v", x.DeliveryPlans[0], e)
 	}
+	if _, e = s.AddDeliveryReport(x.ID, d.ID, "agent", "agent-a", 7, 2, DeliveryReport{WorkItemID: d.WorkItems[0].ID, Kind: "review", RepositoryID: "unrelated-repository", ResourceID: "pull:review", Revision: strings.Repeat("b", 40), Summary: "Review from unrelated scope"}); e != ErrInvalid {
+		t.Fatalf("cross-repository evidence = %v", e)
+	}
 }
 
 func TestDeliveryPlanRejectsNonAdmittedWorkOwner(t *testing.T) {
