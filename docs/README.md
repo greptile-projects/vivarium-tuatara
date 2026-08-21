@@ -53,6 +53,9 @@ exact effective audience. The manifest identifies the existing attested release,
 contributor opportunity, governed environment, and at least one package or API contract. Every
 repository reference stays inside the readiness delivery boundary; the incubator records the
 publication but grants none of those systems' authority.
+Publication resolves every entry through its repository-owned release, documentation, package,
+API-contract, contributor-opportunity, or environment store and permits exactly one first launch
+per incubator. Missing resolvers and missing or mismatched resources fail closed.
 
 Participants append adoption, support, reliability, cost, success-measure, and feedback observations
 with their existing evidence identities. Those signals can connect a roadmap revision or ordinary
@@ -61,6 +64,9 @@ terminal disposition: graduation to an organization initiative, continued experi
 existing project, or archive. Graduation and merge name their target; archive requires explicit
 resource and obligation resolution, preventing a closed incubator from silently abandoning either.
 After transition the launch trail is immutable.
+Observations likewise resolve through feedback, support, service-objective, fund, or outcome stores;
+roadmap/proposal work and graduation/merge targets must exist in their owning stores. Archive
+resolution exhaustively names every frozen launch artifact ID and readiness evidence reference.
 
 ### Evidence-backed project shape exploration
 

@@ -178,6 +178,7 @@ func TestLaunchReadinessBlocksRiskAndNarrowsOnlyWithBoundedOwnerExceptions(t *te
 
 func TestLaunchLearningAndAccountableStewardship(t *testing.T) {
 	s, _ := New(t.TempDir())
+	s.ConfigureLaunchResolvers(func(a LaunchArtifact) bool { return !strings.HasPrefix(a.ResourceID, "missing") }, func(o LaunchObservation) bool { return o.ResourceID == "feedback-1" }, func(w StewardshipWork) bool { return w.ResourceID == "task-1" }, func(t StewardshipTransition) bool { return t.TargetResourceID == "initiative-1" })
 	x, _ := s.Create(fixture(), "human-a", nil)
 	x.Invitations = append(x.Invitations, Invitation{PrincipalType: "agent", PrincipalID: "agent-a", Status: "accepted"})
 	x.DeliveryPlans = []DeliveryPlan{{ID: "delivery", Status: "active", WorkItems: []DeliveryWorkItem{{RepositoryID: "repo-a"}}}}
@@ -202,16 +203,37 @@ func TestLaunchLearningAndAccountableStewardship(t *testing.T) {
 		t.Fatalf("launch = %#v, %v", x.ProjectLaunches, e)
 	}
 	p := x.ProjectLaunches[0]
+	if _, e = s.PublishLaunch(x.ID, "human-a", x.Version, ProjectLaunch{ReadinessID: "ready", Audience: "public", Artifacts: artifacts}); e != ErrInvalid {
+		t.Fatalf("duplicate launch = %v", e)
+	}
+	missing := append([]LaunchArtifact{}, artifacts...)
+	missing[0].ResourceID = "missing-release"
+	second, _ := s.Create(fixture(), "human-a", nil)
+	second.DeliveryPlans = x.DeliveryPlans
+	second.LaunchReadiness = x.LaunchReadiness
+	_ = s.write(&second)
+	if _, e = s.PublishLaunch(second.ID, "human-a", second.Version, ProjectLaunch{ReadinessID: "ready", Audience: "public", Artifacts: missing}); e != ErrInvalid {
+		t.Fatalf("unresolved artifact = %v", e)
+	}
 	x, e = s.AddLaunchObservation(x.ID, p.ID, "human", "human-a", x.Version, p.Version, LaunchObservation{Kind: "adoption", RepositoryID: "repo-a", ResourceID: "feedback-1", Summary: "Three teams adopted the API"})
 	if e != nil {
 		t.Fatal(e)
 	}
 	p = x.ProjectLaunches[0]
+	if _, e = s.AddLaunchObservation(x.ID, p.ID, "human", "human-a", x.Version, p.Version, LaunchObservation{Kind: "support", RepositoryID: "repo-a", ResourceID: "missing-support", Summary: "invented"}); e != ErrInvalid {
+		t.Fatalf("unresolved observation = %v", e)
+	}
 	x, e = s.AddStewardshipWork(x.ID, p.ID, "human", "human-a", x.Version, p.Version, StewardshipWork{Kind: "proposal_task", RepositoryID: "repo-a", ResourceID: "task-1", OwnerType: "agent", OwnerID: "agent-a", Rationale: "Address adoption feedback"})
 	if e != nil {
 		t.Fatal(e)
 	}
 	p = x.ProjectLaunches[0]
+	if _, e = s.AddStewardshipWork(x.ID, p.ID, "human", "human-a", x.Version, p.Version, StewardshipWork{Kind: "proposal_task", RepositoryID: "repo-a", ResourceID: "missing-task", OwnerType: "agent", OwnerID: "agent-a", Rationale: "invented"}); e != ErrInvalid {
+		t.Fatalf("unresolved work = %v", e)
+	}
+	if _, e = s.TransitionStewardship(x.ID, p.ID, "human-a", x.Version, p.Version, StewardshipTransition{Disposition: "organization_initiative", TargetResourceID: "missing-initiative", Rationale: "invented"}); e != ErrInvalid {
+		t.Fatalf("unresolved transition = %v", e)
+	}
 	x, e = s.TransitionStewardship(x.ID, p.ID, "human-a", x.Version, p.Version, StewardshipTransition{Disposition: "organization_initiative", TargetResourceID: "initiative-1", Rationale: "Sustained adoption has accountable owners"})
 	if e != nil || x.ProjectLaunches[0].Transition.Disposition != "organization_initiative" {
 		t.Fatalf("transition = %#v, %v", x.ProjectLaunches[0], e)

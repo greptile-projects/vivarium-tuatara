@@ -326,6 +326,9 @@ whenever dependencies change or the web job fails before it starts.
   continued experiment, merge, or archive as a terminal disposition; archive requires explicit
   resolution of both resources and obligations. These records grant no publication, repository,
   roadmap, task, environment, organization, release, package, or deployment authority.
+  All artifact, observation, work, graduation, and merge references resolve through their owning
+  stores before mutation; missing resolvers fail closed. One incubator has one first launch, and
+  archive closure exhaustively names every frozen artifact and readiness evidence reference.
 
 - **Capability inventory** — `/repositories/{id}/capabilities` and the repository
   `/capabilities` workspace retain immutable, exact-release capability revisions beneath

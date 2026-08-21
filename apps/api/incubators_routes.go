@@ -6,17 +6,28 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"strconv"
 	"strings"
 
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/apicontracts"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/contributoropportunities"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/deployments"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/docscollections"
 	productfeedback "github.com/greptile-projects/vivarium-tuatara/apps/api/feedback"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/governance"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/incubators"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/outcomevalidations"
+	packageversions "github.com/greptile-projects/vivarium-tuatara/apps/api/packages"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/previews"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/projectfunds"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/roadmaps"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/serviceobjectives"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/supportthreads"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
@@ -108,7 +119,102 @@ type incubatorStewardshipTransitionInput struct {
 	Transition      incubators.StewardshipTransition `json:"transition"`
 }
 
-func registerIncubatorRoutes(mux *http.ServeMux, git *storage.Store, credentials *auth.Store, identities *users.Store, catalog *repositories.Store, orgs *organizations.Store, store *incubators.Store, feedback *productfeedback.Store, support *supportthreads.Store, proposals *governance.Store, workspaceStore *workspaces.Store, pullStore *pullrequests.Store, previewStore *previews.Store, checkStore *checkruns.Store) {
+func registerIncubatorRoutes(mux *http.ServeMux, git *storage.Store, credentials *auth.Store, identities *users.Store, catalog *repositories.Store, orgs *organizations.Store, store *incubators.Store, feedback *productfeedback.Store, support *supportthreads.Store, proposals *governance.Store, workspaceStore *workspaces.Store, pullStore *pullrequests.Store, previewStore *previews.Store, checkStore *checkruns.Store, releaseStore *releases.Store, documentationStore *docscollections.Store, packageStore *packageversions.Store, apiStore *apicontracts.Store, opportunityStore *contributoropportunities.Store, deploymentStore *deployments.Store, roadmapStore *roadmaps.Store, objectiveStore *serviceobjectives.Store, fundStore *projectfunds.Store, outcomeStore *outcomevalidations.Store) {
+	store.ConfigureLaunchResolvers(func(a incubators.LaunchArtifact) bool {
+		if releaseStore == nil || documentationStore == nil || packageStore == nil || apiStore == nil || opportunityStore == nil || deploymentStore == nil {
+			return false
+		}
+		switch a.Kind {
+		case "release":
+			x, e := releaseStore.Get(a.RepositoryID, a.ResourceID)
+			return e == nil && (a.Revision == "" || x.CommitID == a.Revision)
+		case "documentation":
+			x, e := documentationStore.Current(a.RepositoryID, a.ResourceID)
+			return e == nil && (a.Revision == "" || x.SourceRevision == a.Revision)
+		case "package":
+			parts := strings.SplitN(a.ResourceID, "@", 2)
+			if len(parts) != 2 {
+				return false
+			}
+			x, e := packageStore.Get(parts[0], parts[1])
+			return e == nil && x.RepositoryID == a.RepositoryID && (a.Revision == "" || x.SourceCommit == a.Revision)
+		case "api_contract":
+			x, e := apiStore.Get(a.ResourceID)
+			return e == nil && x.RepositoryID == a.RepositoryID
+		case "contributor_opportunity":
+			x, e := opportunityStore.Get(a.RepositoryID, a.ResourceID)
+			return e == nil && (a.Revision == "" || x.Revision == a.Revision)
+		case "environment":
+			x, e := deploymentStore.GetEnvironment(a.RepositoryID, a.ResourceID)
+			return e == nil && x.RepositoryID == a.RepositoryID
+		}
+		return false
+	}, func(o incubators.LaunchObservation) bool {
+		if feedback == nil || support == nil || objectiveStore == nil || fundStore == nil || outcomeStore == nil {
+			return false
+		}
+		switch o.Kind {
+		case "adoption", "feedback":
+			x, e := feedback.Get(o.ResourceID)
+			return e == nil && x.RepositoryID == o.RepositoryID
+		case "support":
+			x, e := support.Get(o.RepositoryID, o.ResourceID)
+			return e == nil && x.RepositoryID == o.RepositoryID
+		case "reliability":
+			x, e := objectiveStore.Get(o.ResourceID)
+			return e == nil && x.RepositoryID == o.RepositoryID
+		case "cost":
+			x, e := fundStore.Get(o.ResourceID)
+			return e == nil && x.RepositoryID == o.RepositoryID
+		case "success_measure":
+			x, e := outcomeStore.Get(o.RepositoryID, o.ResourceID)
+			return e == nil && x.RepositoryID == o.RepositoryID
+		}
+		return false
+	}, func(w incubators.StewardshipWork) bool {
+		if roadmapStore == nil || proposals == nil {
+			return false
+		}
+		if w.Kind == "roadmap_revision" {
+			x, e := roadmapStore.Get(w.RepositoryID)
+			if e != nil {
+				return false
+			}
+			for _, revision := range x.Revisions {
+				if strconv.Itoa(revision.Version) == w.ResourceID {
+					return true
+				}
+			}
+			return false
+		}
+		x, e := proposals.Get(w.ResourceID)
+		return e == nil && x.ScopeType == "repository" && x.ScopeID == w.RepositoryID
+	}, func(t incubators.StewardshipTransition) bool {
+		if orgs == nil || catalog == nil {
+			return false
+		}
+		if t.Disposition == "organization_initiative" {
+			parts := strings.SplitN(t.TargetResourceID, ":", 2)
+			if len(parts) != 2 {
+				return false
+			}
+			organization, e := orgs.Get(parts[0])
+			if e != nil {
+				return false
+			}
+			for _, initiative := range organization.Initiatives {
+				if initiative.ID == parts[1] {
+					return true
+				}
+			}
+			return false
+		}
+		if t.Disposition == "merged" {
+			_, e := catalog.GetByID(t.TargetResourceID)
+			return e == nil
+		}
+		return true
+	})
 	authn := func(w http.ResponseWriter, r *http.Request) (auth.Credential, bool) {
 		a, ok := authenticateRequest(w, r, credentials, "repositories:read", false)
 		if !ok {

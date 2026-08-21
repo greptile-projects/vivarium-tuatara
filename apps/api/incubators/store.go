@@ -499,6 +499,9 @@ func (s *Store) PublishLaunch(id, actor string, expected int, in ProjectLaunch) 
 	if x.Version != expected {
 		return Incubator{}, ErrConflict
 	}
+	if len(x.ProjectLaunches) != 0 {
+		return Incubator{}, ErrInvalid
+	}
 	ready, repositories := false, map[string]bool{}
 	for _, r := range x.LaunchReadiness {
 		if r.ID == in.ReadinessID && r.Ready && r.EffectiveAudience == in.Audience {
@@ -515,7 +518,7 @@ func (s *Store) PublishLaunch(id, actor string, expected int, in ProjectLaunch) 
 	kinds, seen := map[string]bool{}, map[string]bool{}
 	for _, a := range in.Artifacts {
 		key := a.Kind + ":" + a.RepositoryID + ":" + a.ResourceID
-		if !launchArtifactKinds[a.Kind] || seen[key] || !text(a.ResourceID, 1000) || a.Audience != in.Audience || (a.RepositoryID != "" && !repositories[a.RepositoryID]) || (a.Revision != "" && len(a.Revision) != 40) {
+		if !launchArtifactKinds[a.Kind] || seen[key] || !text(a.ResourceID, 1000) || a.Audience != in.Audience || (a.RepositoryID != "" && !repositories[a.RepositoryID]) || (a.Revision != "" && len(a.Revision) != 40) || !s.resolveArtifact(a) {
 			return Incubator{}, ErrInvalid
 		}
 		seen[key], kinds[a.Kind] = true, true
@@ -562,7 +565,7 @@ func (s *Store) AddLaunchObservation(id, launchID, typ, actor string, expected, 
 				inScope = true
 			}
 		}
-		if p.Version != launchVersion || p.Transition != nil || !inScope || !launchObservationKinds[in.Kind] || !text(in.ResourceID, 1000) || !text(in.Summary, 10000) {
+		if p.Version != launchVersion || p.Transition != nil || !inScope || !launchObservationKinds[in.Kind] || !text(in.ResourceID, 1000) || !text(in.Summary, 10000) || !s.resolveObservation(in) {
 			return Incubator{}, ErrInvalid
 		}
 		in.ID, in.ActorType, in.ActorID, in.CreatedAt = uid(), typ, actor, now
@@ -608,7 +611,7 @@ func (s *Store) AddStewardshipWork(id, launchID, typ, actor string, expected, la
 				inScope = true
 			}
 		}
-		if p.Version != launchVersion || p.Transition != nil || !inScope || !participant(x, in.OwnerType, in.OwnerID) || !map[string]bool{"roadmap_revision": true, "proposal_task": true}[in.Kind] || !text(in.RepositoryID, 200) || !text(in.ResourceID, 1000) || !map[string]bool{"human": true, "agent": true}[in.OwnerType] || !text(in.OwnerID, 200) || !text(in.Rationale, 10000) {
+		if p.Version != launchVersion || p.Transition != nil || !inScope || !participant(x, in.OwnerType, in.OwnerID) || !map[string]bool{"roadmap_revision": true, "proposal_task": true}[in.Kind] || !text(in.RepositoryID, 200) || !text(in.ResourceID, 1000) || !map[string]bool{"human": true, "agent": true}[in.OwnerType] || !text(in.OwnerID, 200) || !text(in.Rationale, 10000) || !s.resolveWork(in) {
 			return Incubator{}, ErrInvalid
 		}
 		in.ID, in.CreatedBy, in.CreatedAt = uid(), actor, now
@@ -648,7 +651,36 @@ func (s *Store) TransitionStewardship(id, launchID, actor string, expected, laun
 			continue
 		}
 		found = true
-		if p.Version != launchVersion || p.Transition != nil || !map[string]bool{"organization_initiative": true, "experimental": true, "merged": true, "archived": true}[in.Disposition] || !text(in.Rationale, 10000) || ((in.Disposition == "organization_initiative" || in.Disposition == "merged") && !text(in.TargetResourceID, 1000)) || (in.Disposition == "archived" && (len(in.ResolvedResources) == 0 || len(in.ResolvedObligations) == 0)) {
+		resolved := true
+		if in.Disposition == "archived" {
+			resources, obligations := map[string]bool{}, map[string]bool{}
+			for _, artifact := range p.Artifacts {
+				resources[artifact.ResourceID] = true
+			}
+			for _, readiness := range x.LaunchReadiness {
+				if readiness.ID == p.ReadinessID {
+					for _, evidence := range readiness.Evidence {
+						obligations[evidence.Reference] = true
+					}
+				}
+			}
+			resolved = len(in.ResolvedResources) == len(resources) && len(in.ResolvedObligations) == len(obligations)
+			seenResources, seenObligations := map[string]bool{}, map[string]bool{}
+			for _, value := range in.ResolvedResources {
+				if !resources[value] || seenResources[value] {
+					resolved = false
+				}
+				seenResources[value] = true
+			}
+			for _, value := range in.ResolvedObligations {
+				if !obligations[value] || seenObligations[value] {
+					resolved = false
+				}
+				seenObligations[value] = true
+			}
+		}
+		needsTarget := in.Disposition == "organization_initiative" || in.Disposition == "merged"
+		if p.Version != launchVersion || p.Transition != nil || !map[string]bool{"organization_initiative": true, "experimental": true, "merged": true, "archived": true}[in.Disposition] || !text(in.Rationale, 10000) || (needsTarget && (!text(in.TargetResourceID, 1000) || !s.resolveTransition(in))) || !resolved {
 			return Incubator{}, ErrInvalid
 		}
 		in.DecidedBy, in.DecidedAt = actor, now
@@ -804,17 +836,27 @@ func (s *Store) AddDeliveryReport(id, planID, typ, actor string, expected, planV
 }
 
 type Store struct {
-	root    string
-	mu      sync.Mutex
-	now     func() time.Time
-	syncDir func() error
+	root               string
+	mu                 sync.Mutex
+	now                func() time.Time
+	syncDir            func() error
+	resolveArtifact    func(LaunchArtifact) bool
+	resolveObservation func(LaunchObservation) bool
+	resolveWork        func(StewardshipWork) bool
+	resolveTransition  func(StewardshipTransition) bool
+}
+
+func (s *Store) ConfigureLaunchResolvers(artifact func(LaunchArtifact) bool, observation func(LaunchObservation) bool, work func(StewardshipWork) bool, transition func(StewardshipTransition) bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.resolveArtifact, s.resolveObservation, s.resolveWork, s.resolveTransition = artifact, observation, work, transition
 }
 
 func New(root string) (*Store, error) {
 	if err := os.MkdirAll(root, 0700); err != nil {
 		return nil, err
 	}
-	s := &Store{root: root, now: time.Now}
+	s := &Store{root: root, now: time.Now, resolveArtifact: func(LaunchArtifact) bool { return false }, resolveObservation: func(LaunchObservation) bool { return false }, resolveWork: func(StewardshipWork) bool { return false }, resolveTransition: func(StewardshipTransition) bool { return false }}
 	s.syncDir = func() error {
 		d, e := os.Open(root)
 		if e != nil {
