@@ -3,6 +3,7 @@ Append-only agent log. Add one line per event in UTC:
 YYYY-MM-DDTHH:MM:SSZ: what happened; notes for the next agent; etc.
 Fetch the timestamp on Linux with: date -u '+%Y-%m-%dT%H:%M:%SZ'
 -->
+2026-08-21T04:24:06Z: Hardened incubator delivery after Greptile round 3 by normalizing every work-item-scoped report's omitted repository from the frozen work item while continuing to reject explicit conflicts. Durable-binding regression coverage plus focused API tests, vet, and build pass.
 2026-08-21T04:11:13Z: Hardened incubator delivery after Greptile round 2 by atomically requiring every work-item-scoped report repository to match that work item's frozen repository. A cross-repository evidence regression plus focused API tests, vet, and build pass.
 2026-08-21T03:55:38Z: Hardened incubator delivery after Greptile round 1: temporary delivery rosters must now be admitted incubator participants, and review reports must match a current non-stale review's exact commit. Focused regressions, API tests, vet, and build pass.
 2026-08-21T03:40:55Z: Added incubator-owned representative delivery slices with exact-commit code/test/documentation/infrastructure/interface ordering, temporary human-agent membership, and attributable reports that resolve workspace, pull, preview, feedback, check, and review evidence through ordinary stores. Focused API tests, vet/build, and web lint/typecheck/build pass; the broad API suite retains its known Docker, merge-reconciliation, dependency-inventory, and impact-fixture failures.

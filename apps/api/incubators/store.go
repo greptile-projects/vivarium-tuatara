@@ -361,6 +361,7 @@ func (s *Store) AddDeliveryReport(id, planID, typ, actor string, expected, planV
 					if in.RepositoryID != "" && in.RepositoryID != w.RepositoryID {
 						return Incubator{}, ErrInvalid
 					}
+					in.RepositoryID = w.RepositoryID
 				}
 			}
 			if !valid {
