@@ -235,7 +235,7 @@ func visible(x Incubator, actor string) bool {
 		return false
 	}
 	for _, i := range x.Invitations {
-		if i.PrincipalID == actor {
+		if i.PrincipalID == actor && i.Status == "accepted" {
 			return true
 		}
 	}

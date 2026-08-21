@@ -264,7 +264,9 @@ whenever dependencies change or the web job fails before it starts.
   `missing`, or `inaccessible`; inaccessible records do not disclose whether a private source
   exists. Existing visible initiatives with the same title or problem are reported as potential
   duplicates rather than silently merged. Human invitees must explicitly accept before shaping
-  the work; approved organization agents retain their existing identity and approval boundary.
+  the work; pending and declined invitations expose no participants-only incubator context, while
+  the direct consent endpoint remains the narrow invitation-response path. Approved organization
+  agents retain their existing identity and approval boundary.
   Compare-and-swap events keep discussion, evidence, assumptions, scope and visibility changes,
   and consent attributable. Scope changes bind only to the typed `scope_change` decision right;
   Visibility changes likewise bind to the typed `visibility_change` right. Owner, majority, and

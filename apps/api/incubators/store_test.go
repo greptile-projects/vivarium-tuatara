@@ -110,6 +110,30 @@ func TestVisibilityChangeRequiresConfiguredDecision(t *testing.T) {
 	}
 }
 
+func TestPendingAndDeclinedInvitationsDoNotGrantContextVisibility(t *testing.T) {
+	s, _ := New(t.TempDir())
+	x, e := s.Create(fixture(), "human-a", []Invitation{{PrincipalType: "human", PrincipalID: "human-b", Role: "invited designer"}})
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = s.Get(x.ID, "human-b"); e != ErrNotFound {
+		t.Fatalf("pending detail read = %v", e)
+	}
+	if listed, e := s.List("human-b"); e != nil || len(listed) != 0 {
+		t.Fatalf("pending list = %#v, %v", listed, e)
+	}
+	x, e = s.Consent(x.ID, x.Invitations[0].ID, "human-b", "declined", 1)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = s.Get(x.ID, "human-b"); e != ErrNotFound {
+		t.Fatalf("declined detail read = %v", e)
+	}
+	if listed, e := s.List("human-b"); e != nil || len(listed) != 0 {
+		t.Fatalf("declined list = %#v, %v", listed, e)
+	}
+}
+
 func TestPostRenameSyncFailureReturnsCommittedUncertainState(t *testing.T) {
 	s, _ := New(t.TempDir())
 	calls := 0
