@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { api, type Incubator } from "@/lib/api";
 import { AccessGate, useAuth } from "./auth";
 import { Badge, Button, Card } from "./ui";
@@ -17,7 +17,7 @@ export function IncubatorsWorkspace() {
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
-  const load = async () => {
+  const load = useCallback(async () => {
     if (!token) return;
     try {
       const r = await api<{ incubators: Incubator[] }>(
@@ -26,16 +26,14 @@ export function IncubatorsWorkspace() {
         token,
       );
       setItems(r.incubators);
-      if (current) {
-        setCurrent(r.incubators.find((x) => x.id === current.id) ?? null);
-      }
+      setCurrent((selected) => selected ? r.incubators.find((x) => x.id === selected.id) ?? null : null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unable to load incubators.");
     }
-  };
-  useEffect(() => {
-    void load();
   }, [token]);
+  useEffect(() => {
+    void Promise.resolve().then(load);
+  }, [load]);
   async function create(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (!token || !user) return;
@@ -132,6 +130,20 @@ export function IncubatorsWorkspace() {
       setPending(false);
     }
   }
+  const replaceCurrent = (x: Incubator) => {
+    setCurrent(x);
+    setItems((v) => v.map((i) => (i.id === x.id ? x : i)));
+  };
+  async function compare(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault(); if (!token || !current) return; setPending(true); setError(""); const f = new FormData(e.currentTarget);
+    const sourceKind = String(f.get("evidence_kind"));
+    try { const x = await api<Incubator>(`/incubators/${current.id}/alternatives`, { method:"POST", body:JSON.stringify({ expected_version:current.version, sources:[{ kind:sourceKind, label:f.get("evidence_label"), url:sourceKind === "public" ? f.get("evidence_locator") : undefined, organization_id:sourceKind === "organization" ? f.get("evidence_locator") : undefined, repository_id:!["public","organization"].includes(sourceKind) ? f.get("evidence_repository") : undefined, resource_id:!["public"].includes(sourceKind) ? f.get("evidence_locator") : undefined, revision:sourceKind === "code" ? f.get("revision") : undefined, path:sourceKind === "code" ? f.get("path") : undefined }], alternative:{ name:f.get("name"), product_boundary:f.get("product_boundary"), architecture:f.get("architecture"), interfaces:lines(f.get("interfaces")), dependencies:lines(f.get("dependencies")), licenses:lines(f.get("licenses")), operating_costs:lines(f.get("operating_costs")), security_risks:lines(f.get("security_risks")), data_risks:lines(f.get("data_risks")), build_or_adopt:f.get("build_or_adopt"), unknowns:lines(f.get("unknowns")) } }) }, token); replaceCurrent(x); e.currentTarget.reset(); } catch(reason){setError(reason instanceof Error?reason.message:"Unable to retain comparison.")} finally {setPending(false)}
+  }
+  async function defineExperiment(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault(); if(!token||!current)return; setPending(true); const f=new FormData(e.currentTarget);
+    try { const x=await api<Incubator>(`/incubators/${current.id}/experiments`,{method:"POST",body:JSON.stringify({expected_version:current.version,experiment:{alternative_id:f.get("alternative_id"),question:f.get("question"),environment:f.get("environment"),commands:lines(f.get("commands")),inputs:lines(f.get("inputs")),expected_measures:lines(f.get("expected_measures")),safety_limits:lines(f.get("safety_limits")),source_ids:[]}})},token);replaceCurrent(x);e.currentTarget.reset()}catch(reason){setError(reason instanceof Error?reason.message:"Unable to define experiment.")}finally{setPending(false)}
+  }
+  async function researchNote(e: FormEvent<HTMLFormElement>) { e.preventDefault();if(!token||!current)return;setPending(true);const f=new FormData(e.currentTarget);try{const x=await api<Incubator>(`/incubators/${current.id}/research-notes`,{method:"POST",body:JSON.stringify({expected_version:current.version,note:{kind:f.get("note_kind"),body:f.get("note_body"),alternative_id:f.get("note_alternative")||undefined,source_ids:[],supersedes_id:f.get("supersedes_id")||undefined}})},token);replaceCurrent(x);e.currentTarget.reset()}catch(reason){setError(reason instanceof Error?reason.message:"Unable to retain research note.")}finally{setPending(false)} }
   async function consent(invitation: string, decision: string) {
     if (!token || !current) return;
     try {
@@ -368,6 +380,12 @@ export function IncubatorsWorkspace() {
                   Append
                 </Button>
               </form>
+              <h3 className="mt-8 font-semibold">Foundation comparisons</h3>
+              <p className="mt-1 text-sm text-[var(--muted)]">Compare boundaries and foundations without turning a prototype into authoritative code or infrastructure.</p>
+              <div className="mt-3 space-y-3">{(current.alternatives ?? []).map((a)=><div key={a.id} className={`rounded-lg border p-4 ${a.superseded?"opacity-60":""}`}><div className="flex gap-2"><Badge>{a.build_or_adopt}</Badge>{a.superseded&&<Badge tone="warning">superseded</Badge>}</div><h4 className="mt-2 font-semibold">{a.name}</h4><p className="mt-1 text-sm">{a.product_boundary}</p><p className="mt-1 text-xs text-[var(--muted)]">Architecture: {a.architecture}</p><p className="mt-1 text-xs text-[var(--muted)]">Interfaces {a.interfaces.join(" · ")} · Dependencies {a.dependencies.join(" · ")} · Licenses {a.licenses.join(" · ")}</p><p className="mt-1 text-xs text-[var(--muted)]">Cost {a.operating_costs.join(" · ")} · Security {a.security_risks.join(" · ")} · Data {a.data_risks.join(" · ")}</p><p className="mt-1 text-xs text-[var(--warning)]">Unknowns: {a.unknowns.join(" · ")}</p></div>)}</div>
+              <form onSubmit={compare} className="mt-4 grid gap-3 sm:grid-cols-2"><Field name="name" label="Candidate name"/><Select name="build_or_adopt" label="Foundation choice" values={["build","adopt","hybrid"]}/><Area name="product_boundary" label="Product boundary"/><Area name="architecture" label="Architecture"/>{["interfaces","dependencies","licenses","operating_costs","security_risks","data_risks","unknowns"].map((name)=><Area key={name} name={name} label={name.replaceAll("_"," ")} hint="One per line"/>)}<Select name="evidence_kind" label="Evidence type" values={["public","organization","decision","prototype","package","api_contract","code"]}/><Field name="evidence_label" label="Evidence label"/><Field name="evidence_locator" label="URL, organization, or resource ID"/><Field name="evidence_repository" label="Repository ID" optional/><Field name="revision" label="Code revision" optional/><Field name="path" label="Code path" optional/><Button disabled={pending} className="sm:col-span-2">Retain candidate</Button></form>
+              {(current.alternatives ?? []).length>0&&<><h3 className="mt-8 font-semibold">Reproducible experiments</h3><div className="mt-3 space-y-3">{(current.experiments??[]).map((x)=><div key={x.id} className="rounded-lg border p-4"><Badge>{x.results.length?x.results.at(-1)?.outcome:"unrun"}</Badge><p className="mt-2 text-sm font-semibold">{x.question}</p><p className="mt-1 font-mono text-xs break-all">sha256 {x.definition_sha256}</p><p className="mt-1 text-xs text-[var(--muted)]">{x.authority}</p></div>)}</div><form onSubmit={defineExperiment} className="mt-4 grid gap-3 sm:grid-cols-2"><label className="text-sm font-semibold">Candidate<select name="alternative_id" className="mt-2 min-h-10 w-full rounded-lg border bg-white px-3 font-normal">{current.alternatives.filter((x)=>!x.superseded).map((x)=><option key={x.id} value={x.id}>{x.name}</option>)}</select></label><Field name="question" label="Testable question"/><Area name="environment" label="Bounded environment"/><Area name="commands" label="Exact commands" hint="One per line"/><Area name="inputs" label="Reproducible inputs" hint="One per line"/><Area name="expected_measures" label="Expected measurements" hint="One per line"/><Area name="safety_limits" label="Safety limits" hint="One per line"/><Button disabled={pending} className="sm:col-span-2">Define experiment</Button></form></>}
+              <h3 className="mt-8 font-semibold">Unknowns, measurements, and dissent</h3><div className="mt-3 space-y-2">{(current.research_notes??[]).map((n)=><div key={n.id} className={`rounded-lg border p-3 ${n.superseded?"opacity-60":""}`}><Badge>{n.kind}</Badge>{n.superseded&&<Badge tone="warning">superseded</Badge>}<p className="mt-2 text-sm">{n.body}</p><p className="mt-1 text-xs text-[var(--muted)]">{n.actor_type} {n.actor_id}</p></div>)}</div><form onSubmit={researchNote} className="mt-4 grid gap-3 sm:grid-cols-2"><Select name="note_kind" label="Finding type" values={["unknown","measurement","assumption","dissent"]}/><label className="text-sm font-semibold">Candidate (optional)<select name="note_alternative" className="mt-2 min-h-10 w-full rounded-lg border bg-white px-3 font-normal"><option value="">Incubator-wide</option>{(current.alternatives??[]).map((x)=><option key={x.id} value={x.id}>{x.name}</option>)}</select></label><Area name="note_body" label="Finding"/><Field name="supersedes_id" label="Superseded note ID" optional/><Button disabled={pending} className="sm:col-span-2">Retain finding</Button></form>
             </Card>
           ) : (
             <Card className="p-8 text-sm text-[var(--muted)]">

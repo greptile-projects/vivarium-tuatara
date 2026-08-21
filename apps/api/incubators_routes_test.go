@@ -42,3 +42,34 @@ func TestIncubatorPublicAPIRequiresInviteeConsentBeforeContribution(t *testing.T
 	consent.Body.Close()
 	authenticatedRequest(t, http.MethodPost, server.URL+"/incubators/"+created.ID+"/events", `{"expected_version":2,"kind":"evidence","body":"Three teams reported the same gap","visibility":"participants"}`, invitee.Credential.Token, http.StatusOK).Body.Close()
 }
+
+func TestIncubatorResearchAPIResolvesEvidenceAndBoundsExperimentAuthority(t *testing.T) {
+	git, _ := storage.New(t.TempDir())
+	identities, _ := users.New(t.TempDir())
+	credentials, _ := auth.New(t.TempDir())
+	catalog, _ := repositories.New(t.TempDir(), git)
+	orgs, _ := organizations.New(t.TempDir())
+	ledger, _ := incubators.New(t.TempDir())
+	server := httptest.NewServer(newPlatformHandlerWithChecks(git, identities, credentials, catalog, nil, nil, nil, nil, nil, orgs, ledger))
+	defer server.Close()
+	creator := createTestAccount(t, server.URL, "research-creator")
+	createBody := `{"title":"Research before architecture","audience":"Developer teams","problem":"Prototypes become permanent by accident","desired_outcome":"Compare foundations with evidence","constraints":["No authoritative infrastructure"],"success_measures":["A reproducible comparison"],"sponsor_ids":["` + creator.User.ID + `"],"decision_rights":[{"kind":"scope_change","decision":"Change scope","principal_ids":["` + creator.User.ID + `"],"rule":"owner"}],"visibility":"participants","source":{"kind":"new_idea","label":"Research need"},"invitations":[]}`
+	response := authenticatedRequest(t, http.MethodPost, server.URL+"/incubators", createBody, creator.Credential.Token, http.StatusCreated)
+	var x incubators.Incubator
+	_ = json.NewDecoder(response.Body).Decode(&x)
+	response.Body.Close()
+	alternative := `{"expected_version":1,"sources":[{"kind":"public","label":"Benchmark","url":"https://example.test/benchmark"},{"kind":"public","label":"Broken","url":"http://example.test/private"}],"alternative":{"name":"Adopt storage","product_boundary":"Own workflow","architecture":"Stateless service","interfaces":["HTTP"],"dependencies":["vendor"],"licenses":["Apache-2.0"],"operating_costs":["$20/month"],"security_risks":["supply chain"],"data_risks":["residency"],"build_or_adopt":"hybrid","unknowns":["latency"]}}`
+	response = authenticatedRequest(t, http.MethodPost, server.URL+"/incubators/"+x.ID+"/alternatives", alternative, creator.Credential.Token, http.StatusCreated)
+	_ = json.NewDecoder(response.Body).Decode(&x)
+	response.Body.Close()
+	if x.ResearchSources[0].Resolution != "resolved" || x.ResearchSources[1].Resolution != "missing" {
+		t.Fatalf("research projection = %#v", x.ResearchSources)
+	}
+	experiment := `{"expected_version":2,"experiment":{"alternative_id":"` + x.Alternatives[0].ID + `","question":"Is it fast enough?","environment":"ephemeral container","commands":["bench --synthetic"],"inputs":["synthetic v1"],"expected_measures":["p95 ms"],"safety_limits":["no writes"],"source_ids":["` + x.ResearchSources[0].ID + `"]}}`
+	response = authenticatedRequest(t, http.MethodPost, server.URL+"/incubators/"+x.ID+"/experiments", experiment, creator.Credential.Token, http.StatusCreated)
+	_ = json.NewDecoder(response.Body).Decode(&x)
+	response.Body.Close()
+	if x.Experiments[0].Authority != "research_only_no_code_or_infrastructure_authority" || len(x.Experiments[0].DefinitionSHA256) != 64 {
+		t.Fatalf("experiment = %#v", x.Experiments[0])
+	}
+}

@@ -276,6 +276,15 @@ whenever dependencies change or the web job fails before it starts.
   directory-synced canonical copy, so a post-rename sync failure is returned as committed state.
   Incubators grant no repository, organization, Git, agent, tool,
   deployment, or implementation authority.
+  Participants compare immutable product/technical alternatives beneath each incubator, explicitly
+  covering product boundary, architecture, interfaces, dependencies, licenses, operating cost,
+  security/data risk, build/adopt posture, and unknowns. Evidence references resolve at admission as
+  permitted public, organization, decision, prototype, package, API-contract, or exact code context;
+  missing and inaccessible evidence stays explicit. Human and already-approved invited agents can
+  define digest-addressed reproducible experiments and append derived outcomes, measurements, artifact
+  digests, unknowns, assumptions, dissent, and supersession. Experiment authority is always
+  `research_only_no_code_or_infrastructure_authority`; these records do not create repositories,
+  commits, packages, environments, infrastructure, or implementation authority.
 
 - **Capability inventory** — `/repositories/{id}/capabilities` and the repository
   `/capabilities` workspace retain immutable, exact-release capability revisions beneath
