@@ -3,6 +3,7 @@ package incubators
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -61,26 +62,108 @@ type Duplicate struct {
 	Title       string `json:"title"`
 	Reason      string `json:"reason"`
 }
+type ResearchSource struct {
+	ID             string `json:"id"`
+	Kind           string `json:"kind"`
+	Label          string `json:"label"`
+	URL            string `json:"url,omitempty"`
+	OrganizationID string `json:"organization_id,omitempty"`
+	RepositoryID   string `json:"repository_id,omitempty"`
+	ResourceID     string `json:"resource_id,omitempty"`
+	Revision       string `json:"revision,omitempty"`
+	Path           string `json:"path,omitempty"`
+	Resolution     string `json:"resolution"`
+	Detail         string `json:"detail,omitempty"`
+}
+type Alternative struct {
+	ID              string    `json:"id"`
+	Name            string    `json:"name"`
+	ProductBoundary string    `json:"product_boundary"`
+	Architecture    string    `json:"architecture"`
+	Interfaces      []string  `json:"interfaces"`
+	Dependencies    []string  `json:"dependencies"`
+	Licenses        []string  `json:"licenses"`
+	OperatingCosts  []string  `json:"operating_costs"`
+	SecurityRisks   []string  `json:"security_risks"`
+	DataRisks       []string  `json:"data_risks"`
+	BuildOrAdopt    string    `json:"build_or_adopt"`
+	Unknowns        []string  `json:"unknowns"`
+	SourceIDs       []string  `json:"source_ids"`
+	SupersedesID    string    `json:"supersedes_id,omitempty"`
+	Superseded      bool      `json:"superseded"`
+	CreatedBy       string    `json:"created_by"`
+	CreatedByType   string    `json:"created_by_type"`
+	CreatedAt       time.Time `json:"created_at"`
+}
+type ExperimentDefinition struct {
+	ID               string             `json:"id"`
+	AlternativeID    string             `json:"alternative_id"`
+	Question         string             `json:"question"`
+	Environment      string             `json:"environment"`
+	Commands         []string           `json:"commands"`
+	Inputs           []string           `json:"inputs"`
+	ExpectedMeasures []string           `json:"expected_measures"`
+	SafetyLimits     []string           `json:"safety_limits"`
+	SourceIDs        []string           `json:"source_ids"`
+	DefinitionSHA256 string             `json:"definition_sha256"`
+	Authority        string             `json:"authority"`
+	CreatedBy        string             `json:"created_by"`
+	CreatedByType    string             `json:"created_by_type"`
+	CreatedAt        time.Time          `json:"created_at"`
+	Results          []ExperimentResult `json:"results"`
+}
+type Measurement struct {
+	Name  string  `json:"name"`
+	Value float64 `json:"value"`
+	Unit  string  `json:"unit"`
+}
+type ExperimentResult struct {
+	ID             string        `json:"id"`
+	Outcome        string        `json:"outcome"`
+	Measurements   []Measurement `json:"measurements"`
+	ArtifactSHA256 []string      `json:"artifact_sha256"`
+	Notes          string        `json:"notes,omitempty"`
+	Unknowns       []string      `json:"unknowns"`
+	RecordedBy     string        `json:"recorded_by"`
+	RecordedByType string        `json:"recorded_by_type"`
+	RecordedAt     time.Time     `json:"recorded_at"`
+}
+type ResearchNote struct {
+	ID            string    `json:"id"`
+	Kind          string    `json:"kind"`
+	Body          string    `json:"body"`
+	AlternativeID string    `json:"alternative_id,omitempty"`
+	SourceIDs     []string  `json:"source_ids"`
+	SupersedesID  string    `json:"supersedes_id,omitempty"`
+	Superseded    bool      `json:"superseded"`
+	ActorID       string    `json:"actor_id"`
+	ActorType     string    `json:"actor_type"`
+	CreatedAt     time.Time `json:"created_at"`
+}
 type Incubator struct {
-	ID                  string          `json:"id"`
-	Version             int             `json:"version"`
-	Title               string          `json:"title"`
-	Audience            string          `json:"audience"`
-	Problem             string          `json:"problem"`
-	DesiredOutcome      string          `json:"desired_outcome"`
-	Constraints         []string        `json:"constraints"`
-	SuccessMeasures     []string        `json:"success_measures"`
-	SponsorIDs          []string        `json:"sponsor_ids"`
-	DecisionRights      []DecisionRight `json:"decision_rights"`
-	Visibility          string          `json:"visibility"`
-	Source              Source          `json:"source"`
-	CreatedBy           string          `json:"created_by"`
-	CreatedAt           time.Time       `json:"created_at"`
-	UpdatedAt           time.Time       `json:"updated_at"`
-	Invitations         []Invitation    `json:"invitations"`
-	Events              []Event         `json:"events"`
-	PotentialDuplicates []Duplicate     `json:"potential_duplicates"`
-	DurabilityUncertain bool            `json:"durability_uncertain"`
+	ID                  string                 `json:"id"`
+	Version             int                    `json:"version"`
+	Title               string                 `json:"title"`
+	Audience            string                 `json:"audience"`
+	Problem             string                 `json:"problem"`
+	DesiredOutcome      string                 `json:"desired_outcome"`
+	Constraints         []string               `json:"constraints"`
+	SuccessMeasures     []string               `json:"success_measures"`
+	SponsorIDs          []string               `json:"sponsor_ids"`
+	DecisionRights      []DecisionRight        `json:"decision_rights"`
+	Visibility          string                 `json:"visibility"`
+	Source              Source                 `json:"source"`
+	CreatedBy           string                 `json:"created_by"`
+	CreatedAt           time.Time              `json:"created_at"`
+	UpdatedAt           time.Time              `json:"updated_at"`
+	Invitations         []Invitation           `json:"invitations"`
+	Events              []Event                `json:"events"`
+	PotentialDuplicates []Duplicate            `json:"potential_duplicates"`
+	ResearchSources     []ResearchSource       `json:"research_sources"`
+	Alternatives        []Alternative          `json:"alternatives"`
+	Experiments         []ExperimentDefinition `json:"experiments"`
+	ResearchNotes       []ResearchNote         `json:"research_notes"`
+	DurabilityUncertain bool                   `json:"durability_uncertain"`
 }
 type Store struct {
 	root    string
@@ -204,6 +287,18 @@ func (s *Store) read(id string) (Incubator, error) {
 	var x Incubator
 	if e == nil {
 		e = json.Unmarshal(b, &x)
+	}
+	if x.ResearchSources == nil {
+		x.ResearchSources = []ResearchSource{}
+	}
+	if x.Alternatives == nil {
+		x.Alternatives = []Alternative{}
+	}
+	if x.Experiments == nil {
+		x.Experiments = []ExperimentDefinition{}
+	}
+	if x.ResearchNotes == nil {
+		x.ResearchNotes = []ResearchNote{}
 	}
 	return x, e
 }
@@ -330,6 +425,10 @@ func (s *Store) Create(x Incubator, actor string, invitations []Invitation) (Inc
 		x.Invitations = []Invitation{}
 	}
 	x.PotentialDuplicates = []Duplicate{}
+	x.ResearchSources = []ResearchSource{}
+	x.Alternatives = []Alternative{}
+	x.Experiments = []ExperimentDefinition{}
+	x.ResearchNotes = []ResearchNote{}
 	x.Events = []Event{{ID: uid(), Kind: "opened", Body: "Incubator opened", Visibility: "participants", ActorType: "human", ActorID: actor, CreatedAt: now}}
 	all, e := s.all()
 	if e != nil {
@@ -340,6 +439,237 @@ func (s *Store) Create(x Incubator, actor string, invitations []Invitation) (Inc
 			x.PotentialDuplicates = append(x.PotentialDuplicates, Duplicate{IncubatorID: other.ID, Title: other.Title, Reason: "matching title or problem statement"})
 		}
 	}
+	e = s.write(&x)
+	return x, e
+}
+
+func validRefs(ids []string, available map[string]bool) bool {
+	if len(ids) > 50 {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, id := range ids {
+		if !available[id] || seen[id] {
+			return false
+		}
+		seen[id] = true
+	}
+	return true
+}
+func sourceMap(x Incubator) map[string]bool {
+	out := map[string]bool{}
+	for _, v := range x.ResearchSources {
+		out[v.ID] = true
+	}
+	return out
+}
+func alternativeMap(x Incubator) map[string]bool {
+	out := map[string]bool{}
+	for _, v := range x.Alternatives {
+		out[v.ID] = true
+	}
+	return out
+}
+
+// AddAlternative retains a comparison candidate and its already-authorized evidence.
+// Resolution is performed by the HTTP boundary; the ledger never turns research into authority.
+func (s *Store) AddAlternative(id, typ, actor string, expected int, sources []ResearchSource, in Alternative) (Incubator, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, e := s.lock()
+	if e != nil {
+		return Incubator{}, e
+	}
+	defer f.Close()
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	x, e := s.read(id)
+	if e != nil || !participant(x, typ, actor) {
+		return Incubator{}, ErrNotFound
+	}
+	if x.Version != expected {
+		return Incubator{}, ErrConflict
+	}
+	if !text(in.Name, 300) || !text(in.ProductBoundary, 10000) || !text(in.Architecture, 10000) || !map[string]bool{"build": true, "adopt": true, "hybrid": true}[in.BuildOrAdopt] || !validList(in.Interfaces, 50) || !validList(in.Dependencies, 100) || !validList(in.Licenses, 50) || !validList(in.OperatingCosts, 50) || !validList(in.SecurityRisks, 50) || !validList(in.DataRisks, 50) || !validList(in.Unknowns, 50) {
+		return Incubator{}, ErrInvalid
+	}
+	available := sourceMap(x)
+	for i := range sources {
+		v := &sources[i]
+		if !text(v.Label, 500) || !map[string]bool{"public": true, "organization": true, "decision": true, "prototype": true, "package": true, "api_contract": true, "code": true}[v.Kind] || !map[string]bool{"resolved": true, "missing": true, "inaccessible": true}[v.Resolution] {
+			return Incubator{}, ErrInvalid
+		}
+		v.ID = uid()
+		available[v.ID] = true
+		x.ResearchSources = append(x.ResearchSources, *v)
+	}
+	// Inputs refer to source IDs already in the incubator. Newly supplied sources are
+	// automatically selected, avoiding caller authority over server-assigned IDs.
+	for _, v := range sources {
+		in.SourceIDs = append(in.SourceIDs, v.ID)
+	}
+	if !validRefs(in.SourceIDs, available) {
+		return Incubator{}, ErrInvalid
+	}
+	if in.SupersedesID != "" {
+		found := false
+		for i := range x.Alternatives {
+			if x.Alternatives[i].ID == in.SupersedesID && !x.Alternatives[i].Superseded {
+				x.Alternatives[i].Superseded = true
+				found = true
+			}
+		}
+		if !found {
+			return Incubator{}, ErrInvalid
+		}
+	}
+	now := s.now().UTC().Truncate(time.Microsecond)
+	in.ID = uid()
+	in.CreatedBy = actor
+	in.CreatedByType = typ
+	in.CreatedAt = now
+	x.Alternatives = append(x.Alternatives, in)
+	x.Version++
+	x.UpdatedAt = now
+	e = s.write(&x)
+	return x, e
+}
+
+func (s *Store) AddExperiment(id, typ, actor string, expected int, in ExperimentDefinition) (Incubator, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, e := s.lock()
+	if e != nil {
+		return Incubator{}, e
+	}
+	defer f.Close()
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	x, e := s.read(id)
+	if e != nil || !participant(x, typ, actor) {
+		return Incubator{}, ErrNotFound
+	}
+	if x.Version != expected {
+		return Incubator{}, ErrConflict
+	}
+	if !alternativeMap(x)[in.AlternativeID] || !text(in.Question, 5000) || !text(in.Environment, 2000) || !validList(in.Commands, 30) || !validList(in.Inputs, 50) || !validList(in.ExpectedMeasures, 30) || !validList(in.SafetyLimits, 30) || !validRefs(in.SourceIDs, sourceMap(x)) {
+		return Incubator{}, ErrInvalid
+	}
+	canonical, _ := json.Marshal(struct {
+		AlternativeID, Question, Environment                        string
+		Commands, Inputs, ExpectedMeasures, SafetyLimits, SourceIDs []string
+	}{in.AlternativeID, in.Question, in.Environment, in.Commands, in.Inputs, in.ExpectedMeasures, in.SafetyLimits, in.SourceIDs})
+	digest := sha256.Sum256(canonical)
+	now := s.now().UTC().Truncate(time.Microsecond)
+	in.ID = uid()
+	in.DefinitionSHA256 = hex.EncodeToString(digest[:])
+	in.Authority = "research_only_no_code_or_infrastructure_authority"
+	in.CreatedBy = actor
+	in.CreatedByType = typ
+	in.CreatedAt = now
+	in.Results = []ExperimentResult{}
+	x.Experiments = append(x.Experiments, in)
+	x.Version++
+	x.UpdatedAt = now
+	e = s.write(&x)
+	return x, e
+}
+
+func (s *Store) AddExperimentResult(id, experiment, typ, actor string, expected int, in ExperimentResult) (Incubator, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, e := s.lock()
+	if e != nil {
+		return Incubator{}, e
+	}
+	defer f.Close()
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	x, e := s.read(id)
+	if e != nil || !participant(x, typ, actor) {
+		return Incubator{}, ErrNotFound
+	}
+	if x.Version != expected {
+		return Incubator{}, ErrConflict
+	}
+	if !map[string]bool{"passed": true, "failed": true, "inconclusive": true, "unsafe": true}[in.Outcome] || (in.Notes != "" && !text(in.Notes, 10000)) || len(in.Measurements) > 50 || len(in.ArtifactSHA256) > 50 || len(in.Unknowns) > 50 {
+		return Incubator{}, ErrInvalid
+	}
+	for _, m := range in.Measurements {
+		if !text(m.Name, 200) || !text(m.Unit, 100) {
+			return Incubator{}, ErrInvalid
+		}
+	}
+	for _, d := range in.ArtifactSHA256 {
+		if len(d) != 64 {
+			return Incubator{}, ErrInvalid
+		}
+		if _, e := hex.DecodeString(d); e != nil {
+			return Incubator{}, ErrInvalid
+		}
+	}
+	for _, u := range in.Unknowns {
+		if !text(u, 2000) {
+			return Incubator{}, ErrInvalid
+		}
+	}
+	found := false
+	now := s.now().UTC().Truncate(time.Microsecond)
+	in.ID = uid()
+	in.RecordedBy = actor
+	in.RecordedByType = typ
+	in.RecordedAt = now
+	for i := range x.Experiments {
+		if x.Experiments[i].ID == experiment {
+			x.Experiments[i].Results = append(x.Experiments[i].Results, in)
+			found = true
+		}
+	}
+	if !found {
+		return Incubator{}, ErrInvalid
+	}
+	x.Version++
+	x.UpdatedAt = now
+	e = s.write(&x)
+	return x, e
+}
+
+func (s *Store) AddResearchNote(id, typ, actor string, expected int, in ResearchNote) (Incubator, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, e := s.lock()
+	if e != nil {
+		return Incubator{}, e
+	}
+	defer f.Close()
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	x, e := s.read(id)
+	if e != nil || !participant(x, typ, actor) {
+		return Incubator{}, ErrNotFound
+	}
+	if x.Version != expected {
+		return Incubator{}, ErrConflict
+	}
+	if !map[string]bool{"assumption": true, "unknown": true, "measurement": true, "dissent": true}[in.Kind] || !text(in.Body, 10000) || !validRefs(in.SourceIDs, sourceMap(x)) || (in.AlternativeID != "" && !alternativeMap(x)[in.AlternativeID]) {
+		return Incubator{}, ErrInvalid
+	}
+	if in.SupersedesID != "" {
+		found := false
+		for i := range x.ResearchNotes {
+			if x.ResearchNotes[i].ID == in.SupersedesID && !x.ResearchNotes[i].Superseded {
+				x.ResearchNotes[i].Superseded = true
+				found = true
+			}
+		}
+		if !found {
+			return Incubator{}, ErrInvalid
+		}
+	}
+	now := s.now().UTC().Truncate(time.Microsecond)
+	in.ID = uid()
+	in.ActorID = actor
+	in.ActorType = typ
+	in.CreatedAt = now
+	x.ResearchNotes = append(x.ResearchNotes, in)
+	x.Version++
+	x.UpdatedAt = now
 	e = s.write(&x)
 	return x, e
 }

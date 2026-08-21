@@ -2,11 +2,48 @@ package incubators
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
 func fixture() Incubator {
 	return Incubator{Title: "Shared developer onboarding", Audience: "Developers adopting the platform", Problem: "Teams cannot explore a shared project need before choosing a repository", DesiredOutcome: "Collaborators agree on the outcome and authority first", Constraints: []string{"No repository required"}, SuccessMeasures: []string{"Every sponsor consents"}, SponsorIDs: []string{"human-a"}, DecisionRights: []DecisionRight{{Kind: "scope_change", Decision: "Change the desired outcome", PrincipalIDs: []string{"human-a"}, Rule: "owner"}}, Visibility: "participants", Source: Source{Kind: "new_idea", Label: "A new project idea", Resolution: "resolved"}}
+}
+
+func TestResearchComparisonExperimentAndSupersessionRemainReproducible(t *testing.T) {
+	s, _ := New(t.TempDir())
+	x, e := s.Create(fixture(), "human-a", nil)
+	if e != nil {
+		t.Fatal(e)
+	}
+	x, e = s.AddAlternative(x.ID, "human", "human-a", 1, []ResearchSource{{Kind: "public", Label: "Upstream benchmark", URL: "https://example.test/benchmark", Resolution: "resolved"}}, Alternative{Name: "Adopt a service", ProductBoundary: "Own orchestration, adopt storage", Architecture: "Stateless API over managed storage", Interfaces: []string{"HTTP API"}, Dependencies: []string{"managed-store"}, Licenses: []string{"Apache-2.0 client"}, OperatingCosts: []string{"$200/month estimate"}, SecurityRisks: []string{"supplier compromise"}, DataRisks: []string{"regional residency"}, BuildOrAdopt: "hybrid", Unknowns: []string{"peak latency"}})
+	if e != nil || len(x.ResearchSources) != 1 || len(x.Alternatives) != 1 {
+		t.Fatalf("alternative = %#v, %v", x, e)
+	}
+	a := x.Alternatives[0]
+	x, e = s.AddExperiment(x.ID, "human", "human-a", 2, ExperimentDefinition{AlternativeID: a.ID, Question: "Does latency fit the budget?", Environment: "ephemeral local container", Commands: []string{"benchmark --fixture synthetic.json"}, Inputs: []string{"synthetic request shape v1"}, ExpectedMeasures: []string{"p95 latency ms"}, SafetyLimits: []string{"no network writes"}, SourceIDs: a.SourceIDs})
+	if e != nil || len(x.Experiments) != 1 || len(x.Experiments[0].DefinitionSHA256) != 64 || !strings.Contains(x.Experiments[0].Authority, "no_code_or_infrastructure_authority") {
+		t.Fatalf("experiment = %#v, %v", x.Experiments, e)
+	}
+	x, e = s.AddExperimentResult(x.ID, x.Experiments[0].ID, "human", "human-a", 3, ExperimentResult{Outcome: "inconclusive", Measurements: []Measurement{{Name: "p95 latency", Value: 82, Unit: "ms"}}, ArtifactSHA256: []string{strings.Repeat("a", 64)}, Unknowns: []string{"production network variance"}})
+	if e != nil {
+		t.Fatal(e)
+	}
+	x, e = s.AddResearchNote(x.ID, "human", "human-a", 4, ResearchNote{Kind: "assumption", Body: "Traffic remains below 100 rps", AlternativeID: a.ID, SourceIDs: a.SourceIDs})
+	if e != nil {
+		t.Fatal(e)
+	}
+	old := x.ResearchNotes[0]
+	x, e = s.AddResearchNote(x.ID, "human", "human-a", 5, ResearchNote{Kind: "dissent", Body: "The traffic assumption is not supported", AlternativeID: a.ID, SourceIDs: a.SourceIDs, SupersedesID: old.ID})
+	if e != nil || !x.ResearchNotes[0].Superseded || x.ResearchNotes[1].Kind != "dissent" {
+		t.Fatalf("supersession = %#v, %v", x.ResearchNotes, e)
+	}
+	if _, e = s.AddExperiment(x.ID, "human", "human-a", 5, ExperimentDefinition{}); e != ErrConflict {
+		t.Fatalf("stale write = %v", e)
+	}
+	if _, e = s.AddExperimentResult(x.ID, x.Experiments[0].ID, "human", "human-a", 6, ExperimentResult{Outcome: "passed", Notes: strings.Repeat("n", 10001)}); e != ErrInvalid {
+		t.Fatalf("oversized result note = %v", e)
+	}
 }
 
 func TestConsentAttributionVisibilityAndCAS(t *testing.T) {

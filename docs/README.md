@@ -29,6 +29,27 @@ Publication first directory-syncs a conservative durability marker and clears it
 synced canonical copy; post-rename sync failures therefore return committed, explicitly uncertain
 state instead of inviting a duplicate retry.
 
+### Evidence-backed project shape exploration
+
+Accepted participants use `/{incubator_id}/alternatives`, `/experiments`, experiment `/results`, and
+`/research-notes` to compare a project before selecting its permanent foundation. Every alternative
+states its product boundary, architecture, interfaces, dependencies, licenses, operating-cost model,
+security and data risks, build/adopt/hybrid posture, and unknowns. References to public and
+organization research or existing decisions, prototypes, packages, API contracts, and exact code are
+classified as resolved, missing, or inaccessible at admission; inaccessible organization or
+repository context is never promoted to evidence.
+Exact-code evidence additionally resolves the object as a commit reachable from a visible,
+non-`vivarium-security/` branch and proves that the selected path is a blob in that commit tree.
+Nonexistent, non-commit, hidden, and missing-path selectors are retained only as opaque gaps.
+
+An experiment freezes its candidate, question, bounded environment, exact commands, reproducible
+inputs, expected measures, safety limits, and evidence references under a canonical SHA-256 digest.
+Human participants and invited approved agents can append outcomes, measurements, artifact digests,
+and remaining unknowns, while research notes preserve assumptions, dissent, measurements, unknowns,
+and explicit supersession. The ledger labels every definition
+`research_only_no_code_or_infrastructure_authority`: an experiment is evidence, not a repository,
+prototype deployment, package publication, or grant to mutate code or infrastructure.
+
 ## Versioned agent projects
 
 Repository collaborators define intended agent behavior at `/repositories/{id}/agent-projects` and review
