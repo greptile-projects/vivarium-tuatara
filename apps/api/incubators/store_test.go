@@ -41,6 +41,9 @@ func TestResearchComparisonExperimentAndSupersessionRemainReproducible(t *testin
 	if _, e = s.AddExperiment(x.ID, "human", "human-a", 5, ExperimentDefinition{}); e != ErrConflict {
 		t.Fatalf("stale write = %v", e)
 	}
+	if _, e = s.AddExperimentResult(x.ID, x.Experiments[0].ID, "human", "human-a", 6, ExperimentResult{Outcome: "passed", Notes: strings.Repeat("n", 10001)}); e != ErrInvalid {
+		t.Fatalf("oversized result note = %v", e)
+	}
 }
 
 func TestConsentAttributionVisibilityAndCAS(t *testing.T) {

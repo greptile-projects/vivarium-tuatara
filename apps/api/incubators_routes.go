@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"path"
 	"strings"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
@@ -13,6 +14,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/incubators"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/supportthreads"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
 )
@@ -50,7 +52,7 @@ type incubatorResearchNoteInput struct {
 	Note            incubators.ResearchNote `json:"note"`
 }
 
-func registerIncubatorRoutes(mux *http.ServeMux, credentials *auth.Store, identities *users.Store, catalog *repositories.Store, orgs *organizations.Store, store *incubators.Store, feedback *productfeedback.Store, support *supportthreads.Store, proposals *governance.Store) {
+func registerIncubatorRoutes(mux *http.ServeMux, git *storage.Store, credentials *auth.Store, identities *users.Store, catalog *repositories.Store, orgs *organizations.Store, store *incubators.Store, feedback *productfeedback.Store, support *supportthreads.Store, proposals *governance.Store) {
 	authn := func(w http.ResponseWriter, r *http.Request) (auth.Credential, bool) {
 		a, ok := authenticateRequest(w, r, credentials, "repositories:read", false)
 		if !ok {
@@ -118,6 +120,12 @@ func registerIncubatorRoutes(mux *http.ServeMux, credentials *auth.Store, identi
 		return "human", actor.UserID
 	}
 	resolveResearch := func(source incubators.ResearchSource, actor auth.Credential) incubators.ResearchSource {
+		// Admission redacts failed exact-code selectors before persistence. Preserve
+		// that opaque classification on later projections instead of trying to
+		// resolve the deliberately removed repository coordinates again.
+		if source.ID != "" && source.Kind == "code" && source.RepositoryID == "" && map[string]bool{"missing": true, "inaccessible": true}[source.Resolution] {
+			return source
+		}
 		source.Resolution, source.Detail = "inaccessible", "Evidence is outside this researcher's permitted boundary"
 		switch source.Kind {
 		case "public":
@@ -156,7 +164,40 @@ func registerIncubatorRoutes(mux *http.ServeMux, credentials *auth.Store, identi
 			if actor.AgentID != "" {
 				allowed = actor.RepositoryID == repo.ID
 			}
-			if allowed && strings.TrimSpace(source.ResourceID) != "" && (source.Kind != "code" || len(source.Revision) == 40 && strings.TrimSpace(source.Path) != "") {
+			if allowed && source.Kind == "code" {
+				codePath := strings.TrimSpace(source.Path)
+				if git == nil || len(source.Revision) != 40 || path.Clean(codePath) != codePath || strings.HasPrefix(codePath, "/") || strings.HasPrefix(codePath, "../") {
+					source.Resolution, source.Detail = "missing", "Exact code evidence does not resolve"
+					source.RepositoryID, source.ResourceID, source.Revision, source.Path = "", "", "", ""
+					return source
+				}
+				gr, openErr := git.Open(repo.ID)
+				commit, commitErr := storage.Commit{}, openErr
+				if openErr == nil {
+					commit, commitErr = gr.ReadCommit(storage.ObjectID(strings.ToLower(source.Revision)))
+				}
+				if commitErr != nil {
+					source.Resolution, source.Detail = "missing", "Exact code evidence does not resolve"
+					source.RepositoryID, source.ResourceID, source.Revision, source.Path = "", "", "", ""
+					return source
+				}
+				visible, visibleErr := revisionReachableFromVisibleBranch(gr, commit.ID)
+				if visibleErr != nil || !visible {
+					source.Resolution, source.Detail = "inaccessible", "Exact code evidence is not reachable from a visible branch"
+					source.RepositoryID, source.ResourceID, source.Revision, source.Path = "", "", "", ""
+					return source
+				}
+				entry, pathErr := resolvePath(gr, commit.Tree, codePath)
+				if pathErr != nil || entry.Type != storage.BlobObject {
+					source.Resolution, source.Detail = "missing", "Exact code evidence path does not resolve"
+					source.RepositoryID, source.ResourceID, source.Revision, source.Path = "", "", "", ""
+					return source
+				}
+				source.Revision = strings.ToLower(source.Revision)
+				source.Resolution, source.Detail = "resolved", "Exact code file admitted from a visible repository branch"
+				return source
+			}
+			if allowed && strings.TrimSpace(source.ResourceID) != "" {
 				source.Resolution, source.Detail = "resolved", "Repository decision, prototype, package, API, or code reference admitted within current read access"
 			}
 			return source

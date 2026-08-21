@@ -589,7 +589,7 @@ func (s *Store) AddExperimentResult(id, experiment, typ, actor string, expected 
 	if x.Version != expected {
 		return Incubator{}, ErrConflict
 	}
-	if !map[string]bool{"passed": true, "failed": true, "inconclusive": true, "unsafe": true}[in.Outcome] || len(in.Measurements) > 50 || len(in.ArtifactSHA256) > 50 || len(in.Unknowns) > 50 {
+	if !map[string]bool{"passed": true, "failed": true, "inconclusive": true, "unsafe": true}[in.Outcome] || (in.Notes != "" && !text(in.Notes, 10000)) || len(in.Measurements) > 50 || len(in.ArtifactSHA256) > 50 || len(in.Unknowns) > 50 {
 		return Incubator{}, ErrInvalid
 	}
 	for _, m := range in.Measurements {

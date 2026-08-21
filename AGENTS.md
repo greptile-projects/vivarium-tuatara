@@ -280,6 +280,8 @@ whenever dependencies change or the web job fails before it starts.
   covering product boundary, architecture, interfaces, dependencies, licenses, operating cost,
   security/data risk, build/adopt posture, and unknowns. Evidence references resolve at admission as
   permitted public, organization, decision, prototype, package, API-contract, or exact code context;
+  code evidence must be a blob at a commit reachable from a non-`vivarium-security/` branch, and failed
+  selectors are redacted before persistence;
   missing and inaccessible evidence stays explicit. Human and already-approved invited agents can
   define digest-addressed reproducible experiments and append derived outcomes, measurements, artifact
   digests, unknowns, assumptions, dissent, and supersession. Experiment authority is always

@@ -38,6 +38,9 @@ security and data risks, build/adopt/hybrid posture, and unknowns. References to
 organization research or existing decisions, prototypes, packages, API contracts, and exact code are
 classified as resolved, missing, or inaccessible at admission; inaccessible organization or
 repository context is never promoted to evidence.
+Exact-code evidence additionally resolves the object as a commit reachable from a visible,
+non-`vivarium-security/` branch and proves that the selected path is a blob in that commit tree.
+Nonexistent, non-commit, hidden, and missing-path selectors are retained only as opaque gaps.
 
 An experiment freezes its candidate, question, bounded environment, exact commands, reproducible
 inputs, expected measures, safety limits, and evidence references under a canonical SHA-256 digest.
