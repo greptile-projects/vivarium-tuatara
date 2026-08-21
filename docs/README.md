@@ -73,6 +73,21 @@ Activation re-resolves connected organizations and repositories while holding th
 requires every declared owner to retain current ownership, and refreshes server-derived access,
 generated-content, inherited-policy, cost-basis, and template-source fields before committing.
 
+### Incubator delivery proof
+
+After activation, a consenting human participant can freeze one representative journey as an
+ordered five-part delivery plan covering code, tests, documentation, infrastructure, and interface
+work. Every item names an exact repository commit, explicit acceptance criteria, dependencies, and
+a member of the temporary human-agent team. Input dependencies use earlier one-based integration
+positions and are persisted as immutable work-item IDs, preventing later ordering ambiguity.
+
+Team members append attributable workspace, pull request, preview, invited-user feedback, agent
+action, handoff, cost, deviation, check, and review reports to the plan. Reports preserve repository,
+resource, and revision coordinates so the incubator shows how the running slice relates to ordinary
+delivery records; the incubator remains a context ledger and grants no workspace, Git, preview,
+review, merge, environment, or deployment authority. The web workspace renders the ordered slice
+and its evidence beside the accepted direction and active boundary.
+
 ## Versioned agent projects
 
 Repository collaborators define intended agent behavior at `/repositories/{id}/agent-projects` and review

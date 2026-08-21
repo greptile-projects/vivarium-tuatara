@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -172,6 +173,49 @@ type BootstrapPlan struct {
 	ActivatedAt                *time.Time          `json:"activated_at,omitempty"`
 	RolledBackAt               *time.Time          `json:"rolled_back_at,omitempty"`
 }
+type DeliveryWorkItem struct {
+	ID               string   `json:"id"`
+	Kind             string   `json:"kind"`
+	Title            string   `json:"title"`
+	RepositoryID     string   `json:"repository_id"`
+	BaseRevision     string   `json:"base_revision"`
+	OwnerType        string   `json:"owner_type"`
+	OwnerID          string   `json:"owner_id"`
+	DependencyIDs    []string `json:"dependency_ids"`
+	Acceptance       []string `json:"acceptance_criteria"`
+	IntegrationOrder int      `json:"integration_order"`
+}
+type DeliveryParticipant struct {
+	PrincipalType string `json:"principal_type"`
+	PrincipalID   string `json:"principal_id"`
+	Role          string `json:"role"`
+}
+type DeliveryReport struct {
+	ID           string    `json:"id"`
+	WorkItemID   string    `json:"work_item_id,omitempty"`
+	Kind         string    `json:"kind"`
+	RepositoryID string    `json:"repository_id,omitempty"`
+	ResourceID   string    `json:"resource_id,omitempty"`
+	Revision     string    `json:"revision,omitempty"`
+	Summary      string    `json:"summary"`
+	CostCents    int64     `json:"cost_cents,omitempty"`
+	ActorType    string    `json:"actor_type"`
+	ActorID      string    `json:"actor_id"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+type DeliveryPlan struct {
+	ID              string                `json:"id"`
+	Version         int                   `json:"version"`
+	BootstrapPlanID string                `json:"bootstrap_plan_id"`
+	Journey         string                `json:"journey"`
+	Status          string                `json:"status"`
+	Participants    []DeliveryParticipant `json:"participants"`
+	WorkItems       []DeliveryWorkItem    `json:"work_items"`
+	Reports         []DeliveryReport      `json:"reports"`
+	CreatedBy       string                `json:"created_by"`
+	CreatedAt       time.Time             `json:"created_at"`
+	UpdatedAt       time.Time             `json:"updated_at"`
+}
 type Incubator struct {
 	ID                  string                 `json:"id"`
 	Version             int                    `json:"version"`
@@ -196,8 +240,148 @@ type Incubator struct {
 	Experiments         []ExperimentDefinition `json:"experiments"`
 	ResearchNotes       []ResearchNote         `json:"research_notes"`
 	BootstrapPlans      []BootstrapPlan        `json:"bootstrap_plans"`
+	DeliveryPlans       []DeliveryPlan         `json:"delivery_plans"`
 	DurabilityUncertain bool                   `json:"durability_uncertain"`
 }
+
+var deliveryKinds = map[string]bool{"code": true, "tests": true, "documentation": true, "infrastructure": true, "interface": true}
+var reportKinds = map[string]bool{"workspace": true, "pull_request": true, "preview": true, "target_user_feedback": true, "agent_action": true, "handoff": true, "cost": true, "deviation": true, "check": true, "review": true}
+
+func (s *Store) CreateDeliveryPlan(id, actor string, expected int, in DeliveryPlan) (Incubator, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, e := s.lock()
+	if e != nil {
+		return Incubator{}, e
+	}
+	defer f.Close()
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	x, e := s.read(id)
+	if e != nil || !participant(x, "human", actor) {
+		return Incubator{}, ErrNotFound
+	}
+	if x.Version != expected {
+		return Incubator{}, ErrConflict
+	}
+	active := false
+	bootstrappedRepositories := map[string]bool{}
+	for _, p := range x.BootstrapPlans {
+		if p.ID == in.BootstrapPlanID && p.Status == "active" {
+			active = true
+			for _, resource := range p.Resources {
+				if resource.Kind == "repository" {
+					bootstrappedRepositories[resource.ResourceID] = true
+				}
+			}
+		}
+	}
+	if !active || !text(in.Journey, 10000) || len(in.Participants) < 2 || len(in.Participants) > 30 || len(in.WorkItems) != len(deliveryKinds) {
+		return Incubator{}, ErrInvalid
+	}
+	people, kinds := map[string]bool{}, map[string]bool{}
+	for _, p := range in.Participants {
+		if !map[string]bool{"human": true, "agent": true}[p.PrincipalType] || !text(p.PrincipalID, 200) || !text(p.Role, 500) || people[p.PrincipalType+":"+p.PrincipalID] {
+			return Incubator{}, ErrInvalid
+		}
+		if !participant(x, p.PrincipalType, p.PrincipalID) {
+			return Incubator{}, ErrInvalid
+		}
+		people[p.PrincipalType+":"+p.PrincipalID] = true
+	}
+	for i := range in.WorkItems {
+		w := &in.WorkItems[i]
+		if !deliveryKinds[w.Kind] || kinds[w.Kind] || !text(w.Title, 500) || !bootstrappedRepositories[w.RepositoryID] || len(w.BaseRevision) != 40 || !people[w.OwnerType+":"+w.OwnerID] || !validList(w.Acceptance, 30) || w.IntegrationOrder != i+1 {
+			return Incubator{}, ErrInvalid
+		}
+		w.ID = uid()
+		kinds[w.Kind] = true
+	}
+	// Dependencies are expressed as earlier 1-based integration-order selectors on input,
+	// then frozen as generated work-item identities.
+	for i := range in.WorkItems {
+		resolved := []string{}
+		for _, selector := range in.WorkItems[i].DependencyIDs {
+			n := 0
+			if _, e := fmt.Sscanf(selector, "%d", &n); e != nil || n < 1 || n > i {
+				return Incubator{}, ErrInvalid
+			}
+			resolved = append(resolved, in.WorkItems[n-1].ID)
+		}
+		in.WorkItems[i].DependencyIDs = resolved
+	}
+	now := s.now().UTC().Truncate(time.Microsecond)
+	in.ID, in.Version, in.Status, in.CreatedBy, in.CreatedAt, in.UpdatedAt, in.Reports = uid(), 1, "active", actor, now, now, []DeliveryReport{}
+	x.DeliveryPlans = append(x.DeliveryPlans, in)
+	x.Version++
+	x.UpdatedAt = now
+	e = s.write(&x)
+	return x, e
+}
+
+func (s *Store) AddDeliveryReport(id, planID, typ, actor string, expected, planVersion int, in DeliveryReport) (Incubator, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, e := s.lock()
+	if e != nil {
+		return Incubator{}, e
+	}
+	defer f.Close()
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	x, e := s.read(id)
+	if e != nil || !participant(x, typ, actor) {
+		return Incubator{}, ErrNotFound
+	}
+	if x.Version != expected {
+		return Incubator{}, ErrConflict
+	}
+	now, found := s.now().UTC().Truncate(time.Microsecond), false
+	for i := range x.DeliveryPlans {
+		p := &x.DeliveryPlans[i]
+		if p.ID != planID {
+			continue
+		}
+		found = true
+		if p.Version != planVersion || p.Status != "active" || !reportKinds[in.Kind] || !text(in.Summary, 10000) || in.CostCents < 0 {
+			return Incubator{}, ErrInvalid
+		}
+		member := false
+		for _, person := range p.Participants {
+			if person.PrincipalType == typ && person.PrincipalID == actor {
+				member = true
+			}
+		}
+		if !member {
+			return Incubator{}, ErrNotFound
+		}
+		if in.WorkItemID != "" {
+			valid := false
+			for _, w := range p.WorkItems {
+				if w.ID == in.WorkItemID {
+					valid = true
+					if in.RepositoryID != "" && in.RepositoryID != w.RepositoryID {
+						return Incubator{}, ErrInvalid
+					}
+					in.RepositoryID = w.RepositoryID
+				}
+			}
+			if !valid {
+				return Incubator{}, ErrInvalid
+			}
+		}
+		in.ID, in.ActorType, in.ActorID, in.CreatedAt = uid(), typ, actor, now
+		p.Reports = append(p.Reports, in)
+		p.Version++
+		p.UpdatedAt = now
+	}
+	if !found {
+		return Incubator{}, ErrNotFound
+	}
+	x.Version++
+	x.UpdatedAt = now
+	e = s.write(&x)
+	return x, e
+}
+
 type Store struct {
 	root    string
 	mu      sync.Mutex
