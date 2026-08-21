@@ -110,6 +110,23 @@ func TestDeliveryPlanConnectsOrderedMixedWorkAndAttributableEvidence(t *testing.
 	}
 }
 
+func TestDeliveryPlanRejectsNonAdmittedWorkOwner(t *testing.T) {
+	s, _ := New(t.TempDir())
+	x, _ := s.Create(fixture(), "human-a", nil)
+	x.BootstrapPlans = []BootstrapPlan{{ID: "bootstrap-a", Status: "active", Resources: []BootstrapResource{{Kind: "repository", ResourceID: "repo-a"}}}}
+	if e := s.write(&x); e != nil {
+		t.Fatal(e)
+	}
+	items := []DeliveryWorkItem{}
+	for i, kind := range []string{"code", "tests", "documentation", "infrastructure", "interface"} {
+		items = append(items, DeliveryWorkItem{Kind: kind, Title: kind, RepositoryID: "repo-a", BaseRevision: strings.Repeat("a", 40), OwnerType: "agent", OwnerID: "agent-b", Acceptance: []string{"passes"}, IntegrationOrder: i + 1})
+	}
+	_, e := s.CreateDeliveryPlan(x.ID, "human-a", 1, DeliveryPlan{BootstrapPlanID: "bootstrap-a", Journey: "Running slice", Participants: []DeliveryParticipant{{PrincipalType: "human", PrincipalID: "human-a", Role: "lead"}, {PrincipalType: "agent", PrincipalID: "agent-b", Role: "builder"}}, WorkItems: items})
+	if e != ErrInvalid {
+		t.Fatalf("non-admitted owner persisted: %v", e)
+	}
+}
+
 func TestConsentAttributionVisibilityAndCAS(t *testing.T) {
 	s, e := New(t.TempDir())
 	if e != nil {

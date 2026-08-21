@@ -283,6 +283,9 @@ func (s *Store) CreateDeliveryPlan(id, actor string, expected int, in DeliveryPl
 		if !map[string]bool{"human": true, "agent": true}[p.PrincipalType] || !text(p.PrincipalID, 200) || !text(p.Role, 500) || people[p.PrincipalType+":"+p.PrincipalID] {
 			return Incubator{}, ErrInvalid
 		}
+		if !participant(x, p.PrincipalType, p.PrincipalID) {
+			return Incubator{}, ErrInvalid
+		}
 		people[p.PrincipalType+":"+p.PrincipalID] = true
 	}
 	for i := range in.WorkItems {

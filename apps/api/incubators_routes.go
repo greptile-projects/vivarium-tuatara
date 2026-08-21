@@ -625,7 +625,7 @@ func registerIncubatorRoutes(mux *http.ServeMux, git *storage.Store, credentials
 					reviews, e := pullStore.ListReviews(in.Report.RepositoryID, parts[0])
 					if e == nil {
 						for _, review := range reviews {
-							if review.ID == parts[1] {
+							if review.ID == parts[1] && review.ReviewedCommitID == in.Report.Revision && !review.Stale {
 								resolved = true
 							}
 						}
