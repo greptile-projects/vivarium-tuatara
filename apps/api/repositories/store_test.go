@@ -290,6 +290,44 @@ func TestCurrentParticipantBoundarySerializesCollaboratorRevocation(t *testing.T
 	}
 }
 
+func TestCurrentRepositoriesBoundarySerializesDeletion(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	root := t.TempDir()
+	planner, _ := New(root, gitStore)
+	deleter, _ := New(root, gitStore)
+	repository, _ := planner.Create(testOwnerID, "adoption-target")
+	validated, release := make(chan struct{}), make(chan struct{})
+	publication := make(chan error, 1)
+	go func() {
+		publication <- planner.WithCurrentRepositories([]string{repository.ID}, func(values []Repository) error {
+			if len(values) != 1 || values[0].ID != repository.ID {
+				return errors.New("wrong repository snapshot")
+			}
+			close(validated)
+			<-release
+			return nil
+		})
+	}()
+	<-validated
+	deletion := make(chan error, 1)
+	go func() { deletion <- deleter.Delete(testOwnerID, repository.ID) }()
+	select {
+	case err := <-deletion:
+		t.Fatalf("deletion escaped repository publication boundary: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	if err := <-publication; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-deletion; err != nil {
+		t.Fatal(err)
+	}
+	if err := planner.WithCurrentRepositories([]string{repository.ID}, func([]Repository) error { return nil }); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("deleted target remained valid: %v", err)
+	}
+}
+
 func TestCurrentReadAccessSerializesPrivateSourceRevocation(t *testing.T) {
 	gitStore, _ := storage.New(t.TempDir())
 	root := t.TempDir()

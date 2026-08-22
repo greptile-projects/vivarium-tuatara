@@ -12,6 +12,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/decisions"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/deployments"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/federation"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/incubators"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
@@ -44,7 +45,7 @@ type adoptionPlanInput struct {
 	ExpectedVersion int `json:"expected_version"`
 }
 
-func registerAdoptionWorkspaceRoutes(mux *http.ServeMux, credentials *auth.Store, identities *users.Store, catalog *repositories.Store, orgs *organizations.Store, incubatorStore *incubators.Store, federationStore *federation.Store, roadmapStore *roadmaps.Store, supportStore *supportthreads.Store, decisionStore *decisions.Store, packageStore *packageversions.Store, apiStore *apicontracts.Store, releaseStore *releases.Store, buildStore *checkruns.Store, store *adoptionworkspaces.Store) {
+func registerAdoptionWorkspaceRoutes(mux *http.ServeMux, credentials *auth.Store, identities *users.Store, catalog *repositories.Store, orgs *organizations.Store, incubatorStore *incubators.Store, federationStore *federation.Store, roadmapStore *roadmaps.Store, supportStore *supportthreads.Store, decisionStore *decisions.Store, packageStore *packageversions.Store, apiStore *apicontracts.Store, releaseStore *releases.Store, buildStore *checkruns.Store, deploymentStore *deployments.Store, store *adoptionworkspaces.Store) {
 	authn := func(w http.ResponseWriter, r *http.Request) (auth.Credential, bool) {
 		a, ok := authenticateRequest(w, r, credentials, "repositories:read", false)
 		if !ok {
@@ -92,6 +93,56 @@ func registerAdoptionWorkspaceRoutes(mux *http.ServeMux, credentials *auth.Store
 		}
 		ok, _ := catalog.HasCollaborator(v.PrincipalID, id)
 		return ok
+	})
+	store.ConfigurePlanTargetProjection(func(v adoptionworkspaces.Viewer, work adoptionworkspaces.AdoptionWork) adoptionworkspaces.AdoptionWork {
+		repository, err := catalog.GetByID(work.RepositoryID)
+		if err != nil {
+			work.EffectiveAccess, work.OwnerStatus, work.Authority = "stale_target", "stale_target", "no_authority_granted"
+			return work
+		}
+		if v.PrincipalType == "agent" {
+			if v.RepositoryID == repository.ID {
+				work.EffectiveAccess = "collaborator"
+			} else if repository.Visibility == repositories.Public {
+				work.EffectiveAccess = "read_only"
+			} else {
+				work.EffectiveAccess = "inaccessible"
+			}
+		} else if repository.OwnerID == v.PrincipalID {
+			work.EffectiveAccess = "owner"
+		} else if collaborator, _ := catalog.HasCollaborator(v.PrincipalID, repository.ID); collaborator {
+			work.EffectiveAccess = "collaborator"
+		} else if repository.Visibility == repositories.Public {
+			work.EffectiveAccess = "read_only"
+		} else {
+			work.EffectiveAccess = "inaccessible"
+		}
+		work.OwnerStatus = "stale"
+		if work.OwnerType == "human" && repository.HasParticipant(work.OwnerID) {
+			work.OwnerStatus = "current"
+		}
+		if work.OwnerType == "agent" {
+			if organization, organizationErr := orgs.Get(repository.OrganizationID); organizationErr == nil {
+				for _, agent := range organization.Agents {
+					if agent.ID == work.OwnerID {
+						work.OwnerStatus = "current"
+					}
+				}
+			}
+		}
+		if work.EffectiveAccess == "inaccessible" {
+			work.RepositoryID, work.EnvironmentID, work.OwnerID = "restricted", "", "restricted"
+			work.Paths = nil
+		}
+		work.Authority = "no_authority_granted"
+		return work
+	})
+	store.ConfigureEnvironmentResolver(func(repositoryID, environmentID string) bool {
+		if deploymentStore == nil {
+			return false
+		}
+		_, err := deploymentStore.GetEnvironment(repositoryID, environmentID)
+		return err == nil
 	})
 	resolveSource := func(source adoptionworkspaces.Source, actor auth.Credential) adoptionworkspaces.Source {
 		source.Resolution, source.Detail = "inaccessible", "Starting context is outside this collaborator's current read boundary"
@@ -338,54 +389,67 @@ func registerAdoptionWorkspaceRoutes(mux *http.ServeMux, credentials *auth.Store
 			writeAPIError(w, 400, "invalid_request", "a complete adoption agreement and expected version are required")
 			return
 		}
+		targetIDs := make([]string, len(in.Work))
 		for i := range in.Work {
-			work := &in.Work[i]
-			repository, repositoryErr := catalog.GetByID(work.RepositoryID)
-			if repositoryErr != nil || !canReadRepository(actor, work.RepositoryID) {
-				writeAPIError(w, 422, "invalid_adoption_target", "every work target must name an existing repository")
-				return
-			}
-			if work.Kind == "upstream_fork" && repository.UpstreamRepositoryID == "" {
-				writeAPIError(w, 422, "invalid_upstream_fork", "upstream work must target an existing permitted fork")
-				return
-			}
-			if work.OwnerType == "human" {
-				if _, ownerErr := identities.Get(work.OwnerID); ownerErr != nil {
-					writeAPIError(w, 422, "invalid_work_owner", "human work owners must be current platform users")
-					return
+			targetIDs[i] = in.Work[i].RepositoryID
+		}
+		var created adoptionworkspaces.Workspace
+		e := catalog.WithCurrentRepositories(targetIDs, func(targets []repositories.Repository) error {
+			for i := range in.Work {
+				work, repository := &in.Work[i], targets[i]
+				if work.Kind == "upstream_fork" && repository.UpstreamRepositoryID == "" {
+					return adoptionworkspaces.ErrInvalid
 				}
-				ownerCollaborator, _ := catalog.HasCollaborator(work.OwnerID, repository.ID)
-				if repository.OwnerID != work.OwnerID && !ownerCollaborator {
-					writeAPIError(w, 422, "invalid_work_owner", "human work owners must be current target-repository participants")
-					return
-				}
-			} else {
-				organization, organizationErr := orgs.Get(repository.OrganizationID)
-				approved := false
-				if organizationErr == nil {
-					for _, agent := range organization.Agents {
-						approved = approved || agent.ID == work.OwnerID
+				if work.Kind == "environment" {
+					if deploymentStore == nil {
+						return adoptionworkspaces.ErrInvalid
+					}
+					if _, environmentErr := deploymentStore.GetEnvironment(repository.ID, work.EnvironmentID); environmentErr != nil {
+						return adoptionworkspaces.ErrInvalid
 					}
 				}
-				if !approved {
-					writeAPIError(w, 422, "invalid_work_owner", "agent work owners must be approved by the target repository organization")
-					return
+				if work.OwnerType == "human" {
+					if _, ownerErr := identities.Get(work.OwnerID); ownerErr != nil {
+						return adoptionworkspaces.ErrInvalid
+					}
+					if !repository.HasParticipant(work.OwnerID) {
+						return adoptionworkspaces.ErrInvalid
+					}
+				} else {
+					organization, organizationErr := orgs.Get(repository.OrganizationID)
+					approved := false
+					if organizationErr == nil {
+						for _, agent := range organization.Agents {
+							approved = approved || agent.ID == work.OwnerID
+						}
+					}
+					if !approved {
+						return adoptionworkspaces.ErrInvalid
+					}
 				}
+				switch {
+				case repository.OwnerID == actor.UserID:
+					work.EffectiveAccess = "owner"
+				case repository.HasParticipant(actor.UserID):
+					work.EffectiveAccess = "collaborator"
+				case repository.Visibility == repositories.Public:
+					work.EffectiveAccess = "read_only"
+				default:
+					work.EffectiveAccess = "inaccessible"
+				}
+				work.OwnerStatus = "current"
 			}
-			collaborator, _ := catalog.HasCollaborator(actor.UserID, repository.ID)
-			switch {
-			case repository.OwnerID == actor.UserID:
-				work.EffectiveAccess = "owner"
-			case collaborator:
-				work.EffectiveAccess = "collaborator"
-			case repository.Visibility == repositories.Public:
-				work.EffectiveAccess = "read_only"
-			default:
-				work.EffectiveAccess = "inaccessible"
-			}
+			var createErr error
+			created, createErr = store.CreatePlan(r.PathValue("workspace_id"), in.AdoptionPlan, viewer(actor), in.ExpectedVersion)
+			return createErr
+		})
+		if errors.Is(e, repositories.ErrNotFound) || errors.Is(e, repositories.ErrInvalidCollaborator) {
+			e = adoptionworkspaces.ErrInvalid
 		}
-		out, e := store.CreatePlan(r.PathValue("workspace_id"), in.AdoptionPlan, viewer(actor), in.ExpectedVersion)
-		writeAdoptionWorkspace(w, out, e, 201)
+		if e == nil {
+			created, e = store.Get(created.ID, viewer(actor))
+		}
+		writeAdoptionWorkspace(w, created, e, 201)
 	})
 }
 

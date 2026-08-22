@@ -117,6 +117,7 @@ type TrialAttempt struct {
 	UserFeedback    []string  `json:"user_feedback"`
 	ArtifactDigests []string  `json:"artifact_digests"`
 	RecordedBy      string    `json:"recorded_by"`
+	RecordedByType  string    `json:"recorded_by_type"`
 	RecordedAt      time.Time `json:"recorded_at"`
 }
 type DecisionOwner struct {
@@ -134,6 +135,7 @@ type AdoptionWork struct {
 	Paths              []string `json:"paths"`
 	OwnerType          string   `json:"owner_type"`
 	OwnerID            string   `json:"owner_id"`
+	OwnerStatus        string   `json:"owner_status"`
 	DependencyIDs      []string `json:"dependency_ids"`
 	AcceptanceCriteria []string `json:"acceptance_criteria"`
 	EffectiveAccess    string   `json:"effective_access"`
@@ -196,10 +198,12 @@ type PendingInvitation struct {
 }
 
 type Store struct {
-	root              string
-	mu                sync.Mutex
-	now               func() time.Time
-	canReadRepository func(Viewer, string) bool
+	root               string
+	mu                 sync.Mutex
+	now                func() time.Time
+	canReadRepository  func(Viewer, string) bool
+	projectPlanTarget  func(Viewer, AdoptionWork) AdoptionWork
+	resolveEnvironment func(string, string) bool
 }
 
 func New(root string) (*Store, error) {
@@ -209,7 +213,17 @@ func New(root string) (*Store, error) {
 	if e := os.MkdirAll(root, 0700); e != nil {
 		return nil, e
 	}
-	return &Store{root: root, now: time.Now, canReadRepository: func(Viewer, string) bool { return false }}, nil
+	return &Store{root: root, now: time.Now, canReadRepository: func(Viewer, string) bool { return false }, projectPlanTarget: func(_ Viewer, work AdoptionWork) AdoptionWork { return work }, resolveEnvironment: func(string, string) bool { return false }}, nil
+}
+func (s *Store) ConfigurePlanTargetProjection(project func(Viewer, AdoptionWork) AdoptionWork) {
+	if project != nil {
+		s.projectPlanTarget = project
+	}
+}
+func (s *Store) ConfigureEnvironmentResolver(resolve func(string, string) bool) {
+	if resolve != nil {
+		s.resolveEnvironment = resolve
+	}
 }
 
 func (s *Store) ConfigureRepositoryAccess(check func(Viewer, string) bool) {
@@ -460,6 +474,11 @@ func (s *Store) project(x Workspace, viewer Viewer) Workspace {
 			x.Trials[i].Source = TrialSource{Kind: x.Trials[i].Source.Kind, Resolution: "inaccessible"}
 		}
 	}
+	for i := range x.Plans {
+		for j := range x.Plans[i].Work {
+			x.Plans[i].Work[j] = s.projectPlanTarget(viewer, x.Plans[i].Work[j])
+		}
+	}
 	return x
 }
 func (s *Store) Get(v string, viewer Viewer) (Workspace, error) {
@@ -604,12 +623,18 @@ func (s *Store) CreatePlan(workspace string, in AdoptionPlan, viewer Viewer, exp
 		}
 	}
 	trialPassed := false
+	independentHumans := map[string]bool{x.CreatedBy: true}
+	for _, invitation := range x.Invitations {
+		if invitation.PrincipalType == "human" && invitation.Status == "accepted" {
+			independentHumans[invitation.PrincipalID] = true
+		}
+	}
 	for _, trial := range x.Trials {
 		if trial.ID != in.TrialID || trial.CandidateID != in.CandidateID {
 			continue
 		}
 		for _, attempt := range trial.Attempts {
-			trialPassed = trialPassed || (attempt.Status == "passed" && attempt.Reproducible)
+			trialPassed = trialPassed || (attempt.Status == "passed" && attempt.Reproducible && attempt.RecordedByType == "human" && attempt.RecordedBy != viewer.PrincipalID && independentHumans[attempt.RecordedBy])
 		}
 	}
 	if candidate == nil || in.SelectedVersion != candidate.Version || !trialPassed || !safeText(in.IntegrationArchitecture, 10000) || !safeText(in.UpdatePolicy, 5000) || !safeText(in.SupportPolicy, 5000) || !safeText(in.ExitStrategy, 5000) || !text(in.Currency, 10) || in.RecurringCostCents < 0 || len(in.ConfigurationOwnership) == 0 || len(in.ConfigurationOwnership) > 50 || len(in.Work) == 0 || len(in.Work) > 50 {
@@ -643,7 +668,7 @@ func (s *Store) CreatePlan(workspace string, in AdoptionPlan, viewer Viewer, exp
 	}
 	for i := range in.Work {
 		work := &in.Work[i]
-		if work.Position != i+1 || !map[string]bool{"consumer_repository": true, "environment": true, "documentation": true, "upstream_fork": true}[work.Kind] || !safeText(work.Title, 1000) || !text(work.RepositoryID, 100) || !map[string]bool{"human": true, "agent": true}[work.OwnerType] || !text(work.OwnerID, 100) || !map[string]bool{"owner": true, "collaborator": true, "read_only": true, "inaccessible": true}[work.EffectiveAccess] || !list(work.Paths, 50) || !list(work.AcceptanceCriteria, 50) || (work.Kind == "environment" && !text(work.EnvironmentID, 100)) {
+		if work.Position != i+1 || !map[string]bool{"consumer_repository": true, "environment": true, "documentation": true, "upstream_fork": true}[work.Kind] || !safeText(work.Title, 1000) || !text(work.RepositoryID, 100) || !map[string]bool{"human": true, "agent": true}[work.OwnerType] || !text(work.OwnerID, 100) || work.OwnerStatus != "current" || !map[string]bool{"owner": true, "collaborator": true, "read_only": true, "inaccessible": true}[work.EffectiveAccess] || !list(work.Paths, 50) || !list(work.AcceptanceCriteria, 50) || (work.Kind == "environment" && (!text(work.EnvironmentID, 100) || !s.resolveEnvironment(work.RepositoryID, work.EnvironmentID))) {
 			return Workspace{}, ErrInvalid
 		}
 		for _, value := range append(append([]string{}, work.Paths...), work.AcceptanceCriteria...) {
@@ -666,7 +691,7 @@ func (s *Store) CreatePlan(workspace string, in AdoptionPlan, viewer Viewer, exp
 	x.Version++
 	x.UpdatedAt = now
 	e = s.write(x)
-	return s.project(x, viewer), e
+	return x, e
 }
 
 // CreateTrial appends a reproducible definition. It confers no package, API,
@@ -773,6 +798,7 @@ func (s *Store) RecordTrialAttempt(workspace, trial string, in TrialAttempt, vie
 			now := s.now().UTC().Truncate(time.Microsecond)
 			in.ID = id()
 			in.RecordedBy = viewer.PrincipalID
+			in.RecordedByType = viewer.PrincipalType
 			in.RecordedAt = now
 			if in.Status == "non_reproducible" {
 				in.Reproducible = false

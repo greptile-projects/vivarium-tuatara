@@ -32,14 +32,17 @@ attempts remain side by side for cross-version comparison. Credential-shaped pro
 repository sources are authorized before resolution; the trial grants no execution, package, API,
 repository, environment, production-data, or deployment authority.
 
-After an independently reproduced passing attempt, a human adopter or consented provider maintainer
+After a passing attempt independently reproduced by a different consented human, a human adopter or consented provider maintainer
 can publish a CAS-versioned adoption agreement. The agreement binds the exact candidate and trial to
 the integration architecture, adopter/provider/shared configuration decisions, update and support
 policy, service and data boundaries, explicit exceptions and remaining fit gaps, compatibility
 promises, recurring cost, and an exit strategy. It also retains a strictly ordered set of human- or
 agent-owned consumer-repository, environment, documentation, and permitted-upstream-fork work.
-Repository targets are resolved before publication and each item previews the publisher's current
-owner, collaborator, read-only, or inaccessible state. The preview and assignment are coordination
+Repository targets and repository-scoped environments are resolved before publication while the
+catalog holds their existence, ownership, visibility, and collaborator facts stable through the
+agreement write. Each item previews the reader's current owner, collaborator, read-only,
+inaccessible, or stale-target state; reads re-resolve targets, redact inaccessible details, and mark
+removed owners or repositories stale. The preview and assignment are coordination
 facts only: every item remains `no_authority_granted`, and execution must pass through the target
 repository or environment's ordinary access, secret, review, deployment, and roadmap controls.
 
