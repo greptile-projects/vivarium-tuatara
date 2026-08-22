@@ -39,6 +39,10 @@ type adoptionTrialAttemptInput struct {
 	adoptionworkspaces.TrialAttempt
 	ExpectedVersion int `json:"expected_version"`
 }
+type adoptionPlanInput struct {
+	adoptionworkspaces.AdoptionPlan
+	ExpectedVersion int `json:"expected_version"`
+}
 
 func registerAdoptionWorkspaceRoutes(mux *http.ServeMux, credentials *auth.Store, identities *users.Store, catalog *repositories.Store, orgs *organizations.Store, incubatorStore *incubators.Store, federationStore *federation.Store, roadmapStore *roadmaps.Store, supportStore *supportthreads.Store, decisionStore *decisions.Store, packageStore *packageversions.Store, apiStore *apicontracts.Store, releaseStore *releases.Store, buildStore *checkruns.Store, store *adoptionworkspaces.Store) {
 	authn := func(w http.ResponseWriter, r *http.Request) (auth.Credential, bool) {
@@ -320,6 +324,69 @@ func registerAdoptionWorkspaceRoutes(mux *http.ServeMux, credentials *auth.Store
 		out, e := store.RecordTrialAttempt(r.PathValue("workspace_id"), r.PathValue("trial_id"), in.TrialAttempt, viewer(actor), in.ExpectedVersion)
 		writeAdoptionWorkspace(w, out, e, 201)
 	})
+	mux.HandleFunc("POST /adoption-workspaces/{workspace_id}/plans", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authn(w, r)
+		if !ok {
+			return
+		}
+		if actor.AgentID != "" {
+			writeAPIError(w, 403, "human_adoption_agreement_required", "a consented human adopter or provider participant must record the agreement")
+			return
+		}
+		var in adoptionPlanInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "a complete adoption agreement and expected version are required")
+			return
+		}
+		for i := range in.Work {
+			work := &in.Work[i]
+			repository, repositoryErr := catalog.GetByID(work.RepositoryID)
+			if repositoryErr != nil || !canReadRepository(actor, work.RepositoryID) {
+				writeAPIError(w, 422, "invalid_adoption_target", "every work target must name an existing repository")
+				return
+			}
+			if work.Kind == "upstream_fork" && repository.UpstreamRepositoryID == "" {
+				writeAPIError(w, 422, "invalid_upstream_fork", "upstream work must target an existing permitted fork")
+				return
+			}
+			if work.OwnerType == "human" {
+				if _, ownerErr := identities.Get(work.OwnerID); ownerErr != nil {
+					writeAPIError(w, 422, "invalid_work_owner", "human work owners must be current platform users")
+					return
+				}
+				ownerCollaborator, _ := catalog.HasCollaborator(work.OwnerID, repository.ID)
+				if repository.OwnerID != work.OwnerID && !ownerCollaborator {
+					writeAPIError(w, 422, "invalid_work_owner", "human work owners must be current target-repository participants")
+					return
+				}
+			} else {
+				organization, organizationErr := orgs.Get(repository.OrganizationID)
+				approved := false
+				if organizationErr == nil {
+					for _, agent := range organization.Agents {
+						approved = approved || agent.ID == work.OwnerID
+					}
+				}
+				if !approved {
+					writeAPIError(w, 422, "invalid_work_owner", "agent work owners must be approved by the target repository organization")
+					return
+				}
+			}
+			collaborator, _ := catalog.HasCollaborator(actor.UserID, repository.ID)
+			switch {
+			case repository.OwnerID == actor.UserID:
+				work.EffectiveAccess = "owner"
+			case collaborator:
+				work.EffectiveAccess = "collaborator"
+			case repository.Visibility == repositories.Public:
+				work.EffectiveAccess = "read_only"
+			default:
+				work.EffectiveAccess = "inaccessible"
+			}
+		}
+		out, e := store.CreatePlan(r.PathValue("workspace_id"), in.AdoptionPlan, viewer(actor), in.ExpectedVersion)
+		writeAdoptionWorkspace(w, out, e, 201)
+	})
 }
 
 func writeAdoptionWorkspace(w http.ResponseWriter, x adoptionworkspaces.Workspace, e error, status int) {
@@ -332,6 +399,8 @@ func writeAdoptionWorkspace(w http.ResponseWriter, x adoptionworkspaces.Workspac
 		writeAPIError(w, 409, "adoption_workspace_changed", "adoption workspace changed; refresh before responding")
 	case errors.Is(e, adoptionworkspaces.ErrInvalid):
 		writeAPIError(w, 422, "invalid_adoption_workspace", "adoption requirements, evidence, permissions, or versions are invalid")
+	case errors.Is(e, adoptionworkspaces.ErrForbidden):
+		writeAPIError(w, 403, "adoption_plan_forbidden", "only consented human adopters and provider participants may record an adoption agreement")
 	default:
 		log.Printf("adoption workspace storage: %v", e)
 		writeAPIError(w, 500, "adoption_workspace_unavailable", "adoption workspace could not be persisted")

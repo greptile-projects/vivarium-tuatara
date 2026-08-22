@@ -32,6 +32,16 @@ user feedback, and digest-addressed artifacts. Owners, consented humans, and inv
 may contribute within the workspace boundary. Credential-shaped content and over-budget attempts are
 rejected; neither route grants execution or authority over referenced systems.
 
+`POST /adoption-workspaces/{workspace_id}/plans` turns an independently reproduced passing trial
+into a CAS-versioned adoption agreement. Only the human creator or a consented human provider
+maintainer/affected user may publish one. The request selects the trial and its exact candidate
+version; records architecture, configuration decision owners, update/support policy, service/data
+boundaries, required exceptions, exit strategy, unresolved gaps, compatibility promises, recurring
+cost, and ordered human/agent work. Work kinds cover consumer repositories, environments,
+documentation, and existing upstream forks. The server resolves every repository and derives the
+publisher's effective access; ordering is server-generated. Each item explicitly grants no authority
+and must use its target system's ordinary authorization before execution.
+
 ## Assurance programs
 
 - `GET /repositories/{id}/assurance-programs` lists visible versioned programs.

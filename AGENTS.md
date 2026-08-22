@@ -278,6 +278,15 @@ whenever dependencies change or the web job fails before it starts.
   non-reproducible attempts remain visible, while credential-shaped content is rejected and trial
   records grant no execution, production-data, repository, package, API, environment, or deployment
   authority.
+  An independently reproduced passing attempt can seed a versioned adoption agreement authored by
+  the human adopter or a consented human provider/user participant. It freezes the selected version,
+  architecture, configuration decision owners, update/support policy, service/data boundaries,
+  exceptions, exit strategy, unresolved gaps, compatibility promises, and recurring cost. Strictly
+  ordered human/agent work spans consumer repositories, environments, documentation, and existing
+  permitted upstream forks; target repositories resolve before publication and preview the author's
+  current effective access. Every work item remains `no_authority_granted`, so the agreement creates
+  coordination and accountability without bypassing target repository, secret, review, environment,
+  deployment, or provider-roadmap controls.
 
 - **Project incubators** — `/incubators` and the web `/incubators` workspace provide a
   collaborative home before repository creation beneath `$INCUBATOR_STORAGE_ROOT`
