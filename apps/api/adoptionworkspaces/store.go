@@ -117,7 +117,50 @@ type TrialAttempt struct {
 	UserFeedback    []string  `json:"user_feedback"`
 	ArtifactDigests []string  `json:"artifact_digests"`
 	RecordedBy      string    `json:"recorded_by"`
+	RecordedByType  string    `json:"recorded_by_type"`
 	RecordedAt      time.Time `json:"recorded_at"`
+}
+type DecisionOwner struct {
+	Decision string `json:"decision"`
+	OwnerID  string `json:"owner_id"`
+	Party    string `json:"party"`
+}
+type AdoptionWork struct {
+	ID                 string   `json:"id"`
+	Position           int      `json:"position"`
+	Kind               string   `json:"kind"`
+	Title              string   `json:"title"`
+	RepositoryID       string   `json:"repository_id"`
+	EnvironmentID      string   `json:"environment_id,omitempty"`
+	Paths              []string `json:"paths"`
+	OwnerType          string   `json:"owner_type"`
+	OwnerID            string   `json:"owner_id"`
+	OwnerStatus        string   `json:"owner_status"`
+	DependencyIDs      []string `json:"dependency_ids"`
+	AcceptanceCriteria []string `json:"acceptance_criteria"`
+	EffectiveAccess    string   `json:"effective_access"`
+	Authority          string   `json:"authority"`
+}
+type AdoptionPlan struct {
+	ID                      string          `json:"id"`
+	CandidateID             string          `json:"candidate_id"`
+	TrialID                 string          `json:"trial_id"`
+	SelectedVersion         string          `json:"selected_version"`
+	IntegrationArchitecture string          `json:"integration_architecture"`
+	ConfigurationOwnership  []DecisionOwner `json:"configuration_ownership"`
+	UpdatePolicy            string          `json:"update_policy"`
+	SupportPolicy           string          `json:"support_policy"`
+	ServiceBoundaries       []string        `json:"service_boundaries"`
+	DataBoundaries          []string        `json:"data_boundaries"`
+	RequiredExceptions      []string        `json:"required_exceptions"`
+	ExitStrategy            string          `json:"exit_strategy"`
+	UnresolvedFitGaps       []string        `json:"unresolved_fit_gaps"`
+	CompatibilityPromises   []string        `json:"compatibility_promises"`
+	RecurringCostCents      int64           `json:"recurring_cost_cents"`
+	Currency                string          `json:"currency"`
+	Work                    []AdoptionWork  `json:"work"`
+	CreatedBy               string          `json:"created_by"`
+	CreatedAt               time.Time       `json:"created_at"`
 }
 type Workspace struct {
 	ID               string            `json:"id"`
@@ -135,6 +178,7 @@ type Workspace struct {
 	Candidates       []Candidate       `json:"candidates"`
 	Invitations      []Invitation      `json:"invitations"`
 	Trials           []TrialDefinition `json:"trials"`
+	Plans            []AdoptionPlan    `json:"plans"`
 	CreatedBy        string            `json:"created_by"`
 	CreatedAt        time.Time         `json:"created_at"`
 	UpdatedAt        time.Time         `json:"updated_at"`
@@ -154,10 +198,12 @@ type PendingInvitation struct {
 }
 
 type Store struct {
-	root              string
-	mu                sync.Mutex
-	now               func() time.Time
-	canReadRepository func(Viewer, string) bool
+	root               string
+	mu                 sync.Mutex
+	now                func() time.Time
+	canReadRepository  func(Viewer, string) bool
+	projectPlanTarget  func(Viewer, AdoptionWork) AdoptionWork
+	resolveEnvironment func(string, string) bool
 }
 
 func New(root string) (*Store, error) {
@@ -167,7 +213,17 @@ func New(root string) (*Store, error) {
 	if e := os.MkdirAll(root, 0700); e != nil {
 		return nil, e
 	}
-	return &Store{root: root, now: time.Now, canReadRepository: func(Viewer, string) bool { return false }}, nil
+	return &Store{root: root, now: time.Now, canReadRepository: func(Viewer, string) bool { return false }, projectPlanTarget: func(_ Viewer, work AdoptionWork) AdoptionWork { return work }, resolveEnvironment: func(string, string) bool { return false }}, nil
+}
+func (s *Store) ConfigurePlanTargetProjection(project func(Viewer, AdoptionWork) AdoptionWork) {
+	if project != nil {
+		s.projectPlanTarget = project
+	}
+}
+func (s *Store) ConfigureEnvironmentResolver(resolve func(string, string) bool) {
+	if resolve != nil {
+		s.resolveEnvironment = resolve
+	}
 }
 
 func (s *Store) ConfigureRepositoryAccess(check func(Viewer, string) bool) {
@@ -418,6 +474,11 @@ func (s *Store) project(x Workspace, viewer Viewer) Workspace {
 			x.Trials[i].Source = TrialSource{Kind: x.Trials[i].Source.Kind, Resolution: "inaccessible"}
 		}
 	}
+	for i := range x.Plans {
+		for j := range x.Plans[i].Work {
+			x.Plans[i].Work[j] = s.projectPlanTarget(viewer, x.Plans[i].Work[j])
+		}
+	}
 	return x
 }
 func (s *Store) Get(v string, viewer Viewer) (Workspace, error) {
@@ -518,6 +579,120 @@ func (s *Store) Consent(workspace, invitation, actor, decision string, expected 
 }
 
 func participant(x Workspace, viewer Viewer) bool { return visible(x, viewer) }
+
+func planningParticipant(x Workspace, viewer Viewer) bool {
+	if viewer.PrincipalType != "human" {
+		return false
+	}
+	if x.CreatedBy == viewer.PrincipalID {
+		return true
+	}
+	for _, invitation := range x.Invitations {
+		if invitation.PrincipalType == "human" && invitation.PrincipalID == viewer.PrincipalID && invitation.Status == "accepted" && (invitation.Role == "provider_maintainer" || invitation.Role == "affected_user") {
+			return true
+		}
+	}
+	return false
+}
+
+// CreatePlan turns demonstrated fit into an explicit, ordered adoption agreement.
+// Work remains subject to each target's ordinary authority; this ledger grants none.
+func (s *Store) CreatePlan(workspace string, in AdoptionPlan, viewer Viewer, expected int) (Workspace, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, e := s.lock()
+	if e != nil {
+		return Workspace{}, e
+	}
+	defer f.Close()
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	x, e := s.read(workspace)
+	if e != nil {
+		return Workspace{}, ErrNotFound
+	}
+	if !planningParticipant(x, viewer) {
+		return Workspace{}, ErrForbidden
+	}
+	if x.Version != expected {
+		return Workspace{}, ErrConflict
+	}
+	var candidate *Candidate
+	for i := range x.Candidates {
+		if x.Candidates[i].ID == in.CandidateID {
+			candidate = &x.Candidates[i]
+		}
+	}
+	trialPassed := false
+	independentHumans := map[string]bool{x.CreatedBy: true}
+	for _, invitation := range x.Invitations {
+		if invitation.PrincipalType == "human" && invitation.Status == "accepted" {
+			independentHumans[invitation.PrincipalID] = true
+		}
+	}
+	for _, trial := range x.Trials {
+		if trial.ID != in.TrialID || trial.CandidateID != in.CandidateID {
+			continue
+		}
+		for _, attempt := range trial.Attempts {
+			trialPassed = trialPassed || (attempt.Status == "passed" && attempt.Reproducible && attempt.RecordedByType == "human" && attempt.RecordedBy != viewer.PrincipalID && independentHumans[attempt.RecordedBy])
+		}
+	}
+	if candidate == nil || in.SelectedVersion != candidate.Version || !trialPassed || !safeText(in.IntegrationArchitecture, 10000) || !safeText(in.UpdatePolicy, 5000) || !safeText(in.SupportPolicy, 5000) || !safeText(in.ExitStrategy, 5000) || !text(in.Currency, 10) || in.RecurringCostCents < 0 || len(in.ConfigurationOwnership) == 0 || len(in.ConfigurationOwnership) > 50 || len(in.Work) == 0 || len(in.Work) > 50 {
+		return Workspace{}, ErrInvalid
+	}
+	for _, values := range [][]string{in.ServiceBoundaries, in.DataBoundaries, in.RequiredExceptions, in.UnresolvedFitGaps, in.CompatibilityPromises} {
+		if !list(values, 50) {
+			return Workspace{}, ErrInvalid
+		}
+		for _, value := range values {
+			if !safeText(value, 5000) {
+				return Workspace{}, ErrInvalid
+			}
+		}
+	}
+	seenDecisions := map[string]bool{}
+	accountable := map[string]bool{x.CreatedBy: true}
+	for _, owner := range x.Owners {
+		accountable[owner.PrincipalID] = true
+	}
+	for _, invitation := range x.Invitations {
+		if invitation.PrincipalType == "human" && invitation.Status == "accepted" {
+			accountable[invitation.PrincipalID] = true
+		}
+	}
+	for _, owner := range in.ConfigurationOwnership {
+		if !safeText(owner.Decision, 1000) || !accountable[owner.OwnerID] || !map[string]bool{"adopter": true, "provider": true, "shared": true}[owner.Party] || seenDecisions[owner.Decision] {
+			return Workspace{}, ErrInvalid
+		}
+		seenDecisions[owner.Decision] = true
+	}
+	for i := range in.Work {
+		work := &in.Work[i]
+		if work.Position != i+1 || !map[string]bool{"consumer_repository": true, "environment": true, "documentation": true, "upstream_fork": true}[work.Kind] || !safeText(work.Title, 1000) || !text(work.RepositoryID, 100) || !map[string]bool{"human": true, "agent": true}[work.OwnerType] || !text(work.OwnerID, 100) || work.OwnerStatus != "current" || !map[string]bool{"owner": true, "collaborator": true, "read_only": true, "inaccessible": true}[work.EffectiveAccess] || !list(work.Paths, 50) || !list(work.AcceptanceCriteria, 50) || (work.Kind == "environment" && (!text(work.EnvironmentID, 100) || !s.resolveEnvironment(work.RepositoryID, work.EnvironmentID))) {
+			return Workspace{}, ErrInvalid
+		}
+		for _, value := range append(append([]string{}, work.Paths...), work.AcceptanceCriteria...) {
+			if !safeText(value, 5000) {
+				return Workspace{}, ErrInvalid
+			}
+		}
+		if len(work.DependencyIDs) != 0 {
+			return Workspace{}, ErrInvalid
+		}
+		work.ID = id()
+		if i > 0 {
+			work.DependencyIDs = []string{in.Work[i-1].ID}
+		}
+		work.Authority = "no_authority_granted"
+	}
+	now := s.now().UTC().Truncate(time.Microsecond)
+	in.ID, in.CreatedBy, in.CreatedAt = id(), viewer.PrincipalID, now
+	x.Plans = append(x.Plans, in)
+	x.Version++
+	x.UpdatedAt = now
+	e = s.write(x)
+	return x, e
+}
 
 // CreateTrial appends a reproducible definition. It confers no package, API,
 // repository, runtime, credential, or deployment authority.
@@ -623,6 +798,7 @@ func (s *Store) RecordTrialAttempt(workspace, trial string, in TrialAttempt, vie
 			now := s.now().UTC().Truncate(time.Microsecond)
 			in.ID = id()
 			in.RecordedBy = viewer.PrincipalID
+			in.RecordedByType = viewer.PrincipalType
 			in.RecordedAt = now
 			if in.Status == "non_reproducible" {
 				in.Reproducible = false

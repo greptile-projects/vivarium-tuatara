@@ -53,6 +53,13 @@ type Repository struct {
 	integrationPolicies   string
 }
 
+func (r Repository) HasParticipant(userID string) bool {
+	return r.OwnerID == userID || slices.Contains(collaboratorIDs(r), userID)
+}
+func (r Repository) CanRead(userID string) bool {
+	return r.Visibility == Public || r.HasParticipant(userID)
+}
+
 // CreateFederatedFork publishes an independently owned repository from an
 // already verified transfer repository and retains only remote lineage.
 func (s *Store) CreateFederatedFork(ownerID, reference, branch, name string, source *storage.Repository, revision string) (Repository, error) {
@@ -349,6 +356,41 @@ func (s *Store) WithCurrentReadAccess(actorID string, repositoryIDs []string, fn
 		s.afterReadAuthorization()
 	}
 	return fn()
+}
+
+// WithCurrentRepositories resolves repository snapshots and holds their
+// existence, visibility, ownership, and collaborator state stable while fn
+// commits a dependent cross-store record. It deliberately grants no access.
+func (s *Store) WithCurrentRepositories(repositoryIDs []string, fn func([]Repository) error) error {
+	if len(repositoryIDs) == 0 || fn == nil {
+		return ErrNotFound
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lockRoot()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	values, resolved := make([]Repository, 0, len(repositoryIDs)), map[string]Repository{}
+	for _, id := range repositoryIDs {
+		if !validID(id) {
+			return ErrNotFound
+		}
+		if repository, ok := resolved[id]; ok {
+			values = append(values, repository)
+			continue
+		}
+		repository, readErr := s.read(id)
+		if readErr != nil {
+			return ErrNotFound
+		}
+		if _, openErr := s.git.Open(id); openErr != nil {
+			return ErrNotFound
+		}
+		resolved[id], values = repository, append(values, repository)
+	}
+	return fn(values)
 }
 
 // WithCurrentOwners holds repository existence and ownership stable while a

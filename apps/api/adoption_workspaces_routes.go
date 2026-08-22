@@ -12,6 +12,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/decisions"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/deployments"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/federation"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/incubators"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
@@ -39,8 +40,12 @@ type adoptionTrialAttemptInput struct {
 	adoptionworkspaces.TrialAttempt
 	ExpectedVersion int `json:"expected_version"`
 }
+type adoptionPlanInput struct {
+	adoptionworkspaces.AdoptionPlan
+	ExpectedVersion int `json:"expected_version"`
+}
 
-func registerAdoptionWorkspaceRoutes(mux *http.ServeMux, credentials *auth.Store, identities *users.Store, catalog *repositories.Store, orgs *organizations.Store, incubatorStore *incubators.Store, federationStore *federation.Store, roadmapStore *roadmaps.Store, supportStore *supportthreads.Store, decisionStore *decisions.Store, packageStore *packageversions.Store, apiStore *apicontracts.Store, releaseStore *releases.Store, buildStore *checkruns.Store, store *adoptionworkspaces.Store) {
+func registerAdoptionWorkspaceRoutes(mux *http.ServeMux, credentials *auth.Store, identities *users.Store, catalog *repositories.Store, orgs *organizations.Store, incubatorStore *incubators.Store, federationStore *federation.Store, roadmapStore *roadmaps.Store, supportStore *supportthreads.Store, decisionStore *decisions.Store, packageStore *packageversions.Store, apiStore *apicontracts.Store, releaseStore *releases.Store, buildStore *checkruns.Store, deploymentStore *deployments.Store, store *adoptionworkspaces.Store) {
 	authn := func(w http.ResponseWriter, r *http.Request) (auth.Credential, bool) {
 		a, ok := authenticateRequest(w, r, credentials, "repositories:read", false)
 		if !ok {
@@ -88,6 +93,56 @@ func registerAdoptionWorkspaceRoutes(mux *http.ServeMux, credentials *auth.Store
 		}
 		ok, _ := catalog.HasCollaborator(v.PrincipalID, id)
 		return ok
+	})
+	store.ConfigurePlanTargetProjection(func(v adoptionworkspaces.Viewer, work adoptionworkspaces.AdoptionWork) adoptionworkspaces.AdoptionWork {
+		repository, err := catalog.GetByID(work.RepositoryID)
+		if err != nil {
+			work.EffectiveAccess, work.OwnerStatus, work.Authority = "stale_target", "stale_target", "no_authority_granted"
+			return work
+		}
+		if v.PrincipalType == "agent" {
+			if v.RepositoryID == repository.ID {
+				work.EffectiveAccess = "collaborator"
+			} else if repository.Visibility == repositories.Public {
+				work.EffectiveAccess = "read_only"
+			} else {
+				work.EffectiveAccess = "inaccessible"
+			}
+		} else if repository.OwnerID == v.PrincipalID {
+			work.EffectiveAccess = "owner"
+		} else if collaborator, _ := catalog.HasCollaborator(v.PrincipalID, repository.ID); collaborator {
+			work.EffectiveAccess = "collaborator"
+		} else if repository.Visibility == repositories.Public {
+			work.EffectiveAccess = "read_only"
+		} else {
+			work.EffectiveAccess = "inaccessible"
+		}
+		work.OwnerStatus = "stale"
+		if work.OwnerType == "human" && repository.HasParticipant(work.OwnerID) {
+			work.OwnerStatus = "current"
+		}
+		if work.OwnerType == "agent" {
+			if organization, organizationErr := orgs.Get(repository.OrganizationID); organizationErr == nil {
+				for _, agent := range organization.Agents {
+					if agent.ID == work.OwnerID {
+						work.OwnerStatus = "current"
+					}
+				}
+			}
+		}
+		if work.EffectiveAccess == "inaccessible" {
+			work.RepositoryID, work.EnvironmentID, work.OwnerID = "restricted", "", "restricted"
+			work.Paths = nil
+		}
+		work.Authority = "no_authority_granted"
+		return work
+	})
+	store.ConfigureEnvironmentResolver(func(repositoryID, environmentID string) bool {
+		if deploymentStore == nil {
+			return false
+		}
+		_, err := deploymentStore.GetEnvironment(repositoryID, environmentID)
+		return err == nil
 	})
 	resolveSource := func(source adoptionworkspaces.Source, actor auth.Credential) adoptionworkspaces.Source {
 		source.Resolution, source.Detail = "inaccessible", "Starting context is outside this collaborator's current read boundary"
@@ -320,6 +375,82 @@ func registerAdoptionWorkspaceRoutes(mux *http.ServeMux, credentials *auth.Store
 		out, e := store.RecordTrialAttempt(r.PathValue("workspace_id"), r.PathValue("trial_id"), in.TrialAttempt, viewer(actor), in.ExpectedVersion)
 		writeAdoptionWorkspace(w, out, e, 201)
 	})
+	mux.HandleFunc("POST /adoption-workspaces/{workspace_id}/plans", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authn(w, r)
+		if !ok {
+			return
+		}
+		if actor.AgentID != "" {
+			writeAPIError(w, 403, "human_adoption_agreement_required", "a consented human adopter or provider participant must record the agreement")
+			return
+		}
+		var in adoptionPlanInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "a complete adoption agreement and expected version are required")
+			return
+		}
+		targetIDs := make([]string, len(in.Work))
+		for i := range in.Work {
+			targetIDs[i] = in.Work[i].RepositoryID
+		}
+		var created adoptionworkspaces.Workspace
+		e := catalog.WithCurrentRepositories(targetIDs, func(targets []repositories.Repository) error {
+			for i := range in.Work {
+				work, repository := &in.Work[i], targets[i]
+				if work.Kind == "upstream_fork" && repository.UpstreamRepositoryID == "" {
+					return adoptionworkspaces.ErrInvalid
+				}
+				if work.Kind == "environment" {
+					if deploymentStore == nil {
+						return adoptionworkspaces.ErrInvalid
+					}
+					if _, environmentErr := deploymentStore.GetEnvironment(repository.ID, work.EnvironmentID); environmentErr != nil {
+						return adoptionworkspaces.ErrInvalid
+					}
+				}
+				if work.OwnerType == "human" {
+					if _, ownerErr := identities.Get(work.OwnerID); ownerErr != nil {
+						return adoptionworkspaces.ErrInvalid
+					}
+					if !repository.HasParticipant(work.OwnerID) {
+						return adoptionworkspaces.ErrInvalid
+					}
+				} else {
+					organization, organizationErr := orgs.Get(repository.OrganizationID)
+					approved := false
+					if organizationErr == nil {
+						for _, agent := range organization.Agents {
+							approved = approved || agent.ID == work.OwnerID
+						}
+					}
+					if !approved {
+						return adoptionworkspaces.ErrInvalid
+					}
+				}
+				switch {
+				case repository.OwnerID == actor.UserID:
+					work.EffectiveAccess = "owner"
+				case repository.HasParticipant(actor.UserID):
+					work.EffectiveAccess = "collaborator"
+				case repository.Visibility == repositories.Public:
+					work.EffectiveAccess = "read_only"
+				default:
+					work.EffectiveAccess = "inaccessible"
+				}
+				work.OwnerStatus = "current"
+			}
+			var createErr error
+			created, createErr = store.CreatePlan(r.PathValue("workspace_id"), in.AdoptionPlan, viewer(actor), in.ExpectedVersion)
+			return createErr
+		})
+		if errors.Is(e, repositories.ErrNotFound) || errors.Is(e, repositories.ErrInvalidCollaborator) {
+			e = adoptionworkspaces.ErrInvalid
+		}
+		if e == nil {
+			created, e = store.Get(created.ID, viewer(actor))
+		}
+		writeAdoptionWorkspace(w, created, e, 201)
+	})
 }
 
 func writeAdoptionWorkspace(w http.ResponseWriter, x adoptionworkspaces.Workspace, e error, status int) {
@@ -332,6 +463,8 @@ func writeAdoptionWorkspace(w http.ResponseWriter, x adoptionworkspaces.Workspac
 		writeAPIError(w, 409, "adoption_workspace_changed", "adoption workspace changed; refresh before responding")
 	case errors.Is(e, adoptionworkspaces.ErrInvalid):
 		writeAPIError(w, 422, "invalid_adoption_workspace", "adoption requirements, evidence, permissions, or versions are invalid")
+	case errors.Is(e, adoptionworkspaces.ErrForbidden):
+		writeAPIError(w, 403, "adoption_plan_forbidden", "only consented human adopters and provider participants may record an adoption agreement")
 	default:
 		log.Printf("adoption workspace storage: %v", e)
 		writeAPIError(w, 500, "adoption_workspace_unavailable", "adoption workspace could not be persisted")
