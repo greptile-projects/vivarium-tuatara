@@ -290,6 +290,13 @@ whenever dependencies change or the web job fails before it starts.
   `no_authority_granted`, so the agreement creates
   coordination and accountability without bypassing target repository, secret, review, environment,
   deployment, or provider-roadmap controls.
+  Delivery snapshots bind a plan to an already-merged consumer pull, current exact-commit approvals
+  and checks, its including release, and a finished staged deployment. Provider, pull, merge, release,
+  environment, rollout, health, cost, support, and user-acceptance provenance remains revision-exact.
+  Unmet attestations and failed/paused rollout remain a safe pause; successful recovery links to the
+  paused delivery. Reads recheck both repositories and redact inaccessible provenance. Delivery
+  snapshots grant no review, merge, release, deployment, pause, restoration, agent, or provider
+  authority.
 
 - **Project incubators** — `/incubators` and the web `/incubators` workspace provide a
   collaborative home before repository creation beneath `$INCUBATOR_STORAGE_ROOT`

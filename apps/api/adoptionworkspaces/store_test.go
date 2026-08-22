@@ -208,6 +208,48 @@ func TestAdoptionAgreementRequiresIndependentlyReproducedPass(t *testing.T) {
 	}
 }
 
+func TestDeliveryRequiresCompleteAttestationsAndSafeRestore(t *testing.T) {
+	s, _ := New(t.TempDir())
+	x, _ := s.Create(fixture(), "owner", []Invitation{{PrincipalType: "human", PrincipalID: "maintainer", Role: "provider_maintainer"}})
+	x, _ = s.Consent(x.ID, x.Invitations[0].ID, "maintainer", "accepted", x.Version)
+	v := Viewer{PrincipalType: "human", PrincipalID: "owner"}
+	trial := TrialDefinition{CandidateID: x.Candidates[0].ID, Source: TrialSource{Kind: "exact_revision", ResourceID: "0123456789012345678901234567890123456789", Revision: "0123456789012345678901234567890123456789", Resolution: "resolved"}, DataKind: "synthetic", DataDescription: "fixture", Journeys: []string{"publish and replay"}, Policies: []string{"retention"}, Setup: []string{"setup"}, Configuration: []string{"config"}, Commands: []string{"check"}, IntegrationChanges: []string{"adapter"}}
+	x, _ = s.CreateTrial(x.ID, trial, v, x.Version)
+	x, _ = s.RecordTrialAttempt(x.ID, x.Trials[0].ID, TrialAttempt{Status: "passed", Reproducible: true, Checks: []string{"passed"}}, Viewer{PrincipalType: "human", PrincipalID: "maintainer"}, x.Version)
+	x, _ = s.CreatePlan(x.ID, validAdoptionPlan(x), v, x.Version)
+	base := AdoptionDelivery{PlanID: x.Plans[0].ID, ConsumerRepositoryID: "consumer", PullRequestID: "pull", PullRevision: "1111111111111111111111111111111111111111", MergeRevision: "2222222222222222222222222222222222222222", ReleaseID: "release", ReleaseRevision: "3333333333333333333333333333333333333333", DeploymentID: "deployment", EnvironmentID: "environment", ProviderRepositoryID: "provider", ProviderRevision: "0123456789012345678901234567890123456789", CheckRunIDs: []string{"check"}, ApprovalIDs: []string{"approval"}, Rollout: []string{"staged rollout completed"}, Health: []string{"journey healthy"}, Currency: "USD", SupportReadiness: "on-call ready", UserAcceptance: "target users accepted", State: "operating"}
+	for _, kind := range []string{"policy", "rehearsal", "support", "user_acceptance", "cost"} {
+		base.Attestations = append(base.Attestations, DeliveryAttestation{Kind: kind, Statement: kind + " satisfied", Satisfied: true, AttestedBy: "owner"})
+	}
+	bad := base
+	bad.Attestations = append([]DeliveryAttestation(nil), base.Attestations...)
+	bad.Attestations[0].Satisfied = false
+	if _, err := s.CreateDelivery(x.ID, bad, v, x.Version); !errorsIs(err, ErrInvalid) {
+		t.Fatalf("unmet operating criteria accepted: %v", err)
+	}
+	paused := base
+	paused.State, paused.PauseReasons = "paused", []string{"failed rollout"}
+	paused.Attestations = bad.Attestations
+	x, err := s.CreateDelivery(x.ID, paused, v, x.Version)
+	if err != nil || x.Deliveries[0].Authority != "no_authority_granted" {
+		t.Fatalf("safe pause not retained: %+v, %v", x.Deliveries, err)
+	}
+	restored := base
+	restored.State, restored.RestoresDeliveryID = "restored", x.Deliveries[0].ID
+	x, err = s.CreateDelivery(x.ID, restored, v, x.Version)
+	if err != nil || x.Deliveries[1].RestoresDeliveryID != x.Deliveries[0].ID {
+		t.Fatalf("governed restoration not linked: %+v, %v", x.Deliveries, err)
+	}
+	s.ConfigureDeliveryProjection(func(_ Viewer, delivery AdoptionDelivery) AdoptionDelivery {
+		delivery.State, delivery.ConsumerRepositoryID = "access_revoked", "restricted"
+		return delivery
+	})
+	projected, _ := s.Get(x.ID, v)
+	if projected.Deliveries[1].State != "access_revoked" || projected.Deliveries[1].ConsumerRepositoryID != "restricted" {
+		t.Fatalf("access loss not projected: %+v", projected.Deliveries[1])
+	}
+}
+
 func validAdoptionPlan(x Workspace) AdoptionPlan {
 	return AdoptionPlan{CandidateID: x.Candidates[0].ID, TrialID: x.Trials[0].ID, SelectedVersion: "2.0.0", IntegrationArchitecture: "Consumer adapter calls the provider API", ConfigurationOwnership: []DecisionOwner{{Decision: "Consumer retry policy", OwnerID: "owner", Party: "adopter"}}, UpdatePolicy: "Monthly review; security updates within seven days", SupportPolicy: "Provider triages protocol defects; adopter owns local operations", ServiceBoundaries: []string{"Provider ends at the public API"}, DataBoundaries: []string{"No payload retention"}, RequiredExceptions: []string{"Temporary retry-policy exception tracked by consumer"}, ExitStrategy: "Remove the adapter and replay queued events", UnresolvedFitGaps: []string{"Windows remains unverified"}, CompatibilityPromises: []string{"Provider supports events/v2 through 2027"}, RecurringCostCents: 2500, Currency: "USD", Work: []AdoptionWork{{Position: 1, Kind: "consumer_repository", Title: "Implement adapter", RepositoryID: "consumer", Paths: []string{"src/adapter"}, OwnerType: "human", OwnerID: "owner", OwnerStatus: "current", AcceptanceCriteria: []string{"Journey passes"}, EffectiveAccess: "owner"}, {Position: 2, Kind: "documentation", Title: "Document support boundary", RepositoryID: "consumer", Paths: []string{"docs/relay.md"}, OwnerType: "human", OwnerID: "owner", OwnerStatus: "current", AcceptanceCriteria: []string{"Owners approve"}, EffectiveAccess: "owner"}}}
 }

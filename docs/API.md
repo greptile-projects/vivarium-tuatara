@@ -46,6 +46,16 @@ re-resolve targets and owner standing, redact inaccessible target details, and m
 or removed owners stale. Each item explicitly grants no authority
 and must use its target system's ordinary authorization before execution.
 
+`POST /adoption-workspaces/{workspace_id}/deliveries` lets a current human consumer-repository
+participant retain the result of ordinary delivery. The request selects an agreement, merged pull,
+release, and staged deployment and supplies bounded policy, rehearsal, support, user-acceptance, and cost
+attestations. The server derives exact provider/pull/merge/release/environment, rollout, and health
+revisions, current human review approvals, exact-commit passing checks, release inclusion, and
+deployment state from repository-owned stores. Succeeded deployments become operating (or linked
+restorations); failed or paused deployments and unmet criteria remain paused. Reads recheck both
+repository boundaries and redact delivery provenance after access loss. The endpoint records evidence
+only and grants no review, merge, release, deployment, environment, pause, or restoration authority.
+
 ## Assurance programs
 
 - `GET /repositories/{id}/assurance-programs` lists visible versioned programs.
