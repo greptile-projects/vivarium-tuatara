@@ -16,9 +16,10 @@ import (
 )
 
 var (
-	ErrNotFound = errors.New("adoption workspace not found")
-	ErrInvalid  = errors.New("invalid adoption workspace")
-	ErrConflict = errors.New("adoption workspace changed")
+	ErrNotFound  = errors.New("adoption workspace not found")
+	ErrInvalid   = errors.New("invalid adoption workspace")
+	ErrConflict  = errors.New("adoption workspace changed")
+	ErrForbidden = errors.New("adoption workspace mutation forbidden")
 )
 
 type Source struct {
@@ -77,24 +78,66 @@ type Candidate struct {
 	FitStatus       string     `json:"fit_status"`
 	Gaps            []string   `json:"gaps"`
 }
+type TrialSource struct {
+	Kind         string `json:"kind"`
+	RepositoryID string `json:"repository_id,omitempty"`
+	ResourceID   string `json:"resource_id"`
+	Revision     string `json:"revision"`
+	Attestation  string `json:"attestation,omitempty"`
+	Resolution   string `json:"resolution"`
+}
+type TrialDefinition struct {
+	ID                 string         `json:"id"`
+	CandidateID        string         `json:"candidate_id"`
+	Source             TrialSource    `json:"source"`
+	Packages           []string       `json:"packages"`
+	APIs               []string       `json:"apis"`
+	DataKind           string         `json:"data_kind"`
+	DataDescription    string         `json:"data_description"`
+	Journeys           []string       `json:"journeys"`
+	Policies           []string       `json:"policies"`
+	Setup              []string       `json:"setup"`
+	Configuration      []string       `json:"configuration"`
+	Commands           []string       `json:"commands"`
+	IntegrationChanges []string       `json:"integration_changes"`
+	MaximumCostCents   int64          `json:"maximum_cost_cents"`
+	CreatedBy          string         `json:"created_by"`
+	CreatedAt          time.Time      `json:"created_at"`
+	Attempts           []TrialAttempt `json:"attempts"`
+}
+type TrialAttempt struct {
+	ID              string    `json:"id"`
+	Status          string    `json:"status"`
+	Reproducible    bool      `json:"reproducible"`
+	Checks          []string  `json:"checks"`
+	Previews        []string  `json:"previews"`
+	Measurements    []string  `json:"measurements"`
+	CostCents       int64     `json:"cost_cents"`
+	Findings        []string  `json:"findings"`
+	UserFeedback    []string  `json:"user_feedback"`
+	ArtifactDigests []string  `json:"artifact_digests"`
+	RecordedBy      string    `json:"recorded_by"`
+	RecordedAt      time.Time `json:"recorded_at"`
+}
 type Workspace struct {
-	ID               string       `json:"id"`
-	Version          int          `json:"version"`
-	Title            string       `json:"title"`
-	Outcome          string       `json:"outcome"`
-	Source           Source       `json:"source"`
-	RequiredJourneys []string     `json:"required_journeys"`
-	Environments     []string     `json:"environments"`
-	Constraints      []string     `json:"constraints"`
-	BudgetCents      int64        `json:"budget_cents"`
-	Currency         string       `json:"currency"`
-	Owners           []Owner      `json:"owners"`
-	Criteria         []Criterion  `json:"evaluation_criteria"`
-	Candidates       []Candidate  `json:"candidates"`
-	Invitations      []Invitation `json:"invitations"`
-	CreatedBy        string       `json:"created_by"`
-	CreatedAt        time.Time    `json:"created_at"`
-	UpdatedAt        time.Time    `json:"updated_at"`
+	ID               string            `json:"id"`
+	Version          int               `json:"version"`
+	Title            string            `json:"title"`
+	Outcome          string            `json:"outcome"`
+	Source           Source            `json:"source"`
+	RequiredJourneys []string          `json:"required_journeys"`
+	Environments     []string          `json:"environments"`
+	Constraints      []string          `json:"constraints"`
+	BudgetCents      int64             `json:"budget_cents"`
+	Currency         string            `json:"currency"`
+	Owners           []Owner           `json:"owners"`
+	Criteria         []Criterion       `json:"evaluation_criteria"`
+	Candidates       []Candidate       `json:"candidates"`
+	Invitations      []Invitation      `json:"invitations"`
+	Trials           []TrialDefinition `json:"trials"`
+	CreatedBy        string            `json:"created_by"`
+	CreatedAt        time.Time         `json:"created_at"`
+	UpdatedAt        time.Time         `json:"updated_at"`
 }
 
 type Viewer struct {
@@ -134,6 +177,14 @@ func (s *Store) ConfigureRepositoryAccess(check func(Viewer, string) bool) {
 }
 func id() string                { b := make([]byte, 16); _, _ = rand.Read(b); return hex.EncodeToString(b) }
 func text(v string, n int) bool { l := len(strings.TrimSpace(v)); return l > 0 && l <= n }
+func safeText(v string, n int) bool {
+	if !text(v, n) {
+		return false
+	}
+	l := strings.ToLower(v)
+	return !strings.Contains(l, "authorization: bearer") && !strings.Contains(l, "authorization: basic") && !strings.Contains(l, "-----begin private key") && !strings.Contains(l, "aws_secret_access_key") && !strings.Contains(l, "ghp_") && !strings.Contains(l, "github_pat_")
+}
+func revision(v string) bool { _, e := hex.DecodeString(v); return len(v) == 40 && e == nil }
 func list(v []string, max int) bool {
 	if len(v) == 0 || len(v) > max {
 		return false
@@ -362,6 +413,11 @@ func (s *Store) project(x Workspace, viewer Viewer) Workspace {
 		x.Candidates[i].Evidence = out
 		derive(&x.Candidates[i])
 	}
+	for i := range x.Trials {
+		if x.Trials[i].Source.RepositoryID != "" && !s.canReadRepository(viewer, x.Trials[i].Source.RepositoryID) {
+			x.Trials[i].Source = TrialSource{Kind: x.Trials[i].Source.Kind, Resolution: "inaccessible"}
+		}
+	}
 	return x
 }
 func (s *Store) Get(v string, viewer Viewer) (Workspace, error) {
@@ -459,4 +515,124 @@ func (s *Store) Consent(workspace, invitation, actor, decision string, expected 
 		}
 	}
 	return Workspace{}, ErrInvalid
+}
+
+func participant(x Workspace, viewer Viewer) bool { return visible(x, viewer) }
+
+// CreateTrial appends a reproducible definition. It confers no package, API,
+// repository, runtime, credential, or deployment authority.
+func (s *Store) CreateTrial(workspace string, in TrialDefinition, viewer Viewer, expected int) (Workspace, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, e := s.lock()
+	if e != nil {
+		return Workspace{}, e
+	}
+	defer f.Close()
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	x, e := s.read(workspace)
+	if e != nil {
+		return Workspace{}, ErrNotFound
+	}
+	if !participant(x, viewer) {
+		return Workspace{}, ErrNotFound
+	}
+	if x.Version != expected {
+		return Workspace{}, ErrConflict
+	}
+	candidate := false
+	for _, c := range x.Candidates {
+		candidate = candidate || c.ID == in.CandidateID
+	}
+	if !candidate || !map[string]bool{"attested_release": true, "exact_revision": true}[in.Source.Kind] || !text(in.Source.ResourceID, 500) || !revision(in.Source.Revision) || in.Source.Resolution != "resolved" || len(in.Packages) > 50 || len(in.APIs) > 50 || !map[string]bool{"synthetic": true, "permitted": true}[in.DataKind] || !safeText(in.DataDescription, 2000) || !list(in.Journeys, 30) || !list(in.Policies, 50) || !list(in.Setup, 50) || !list(in.Configuration, 50) || !list(in.Commands, 50) || !list(in.IntegrationChanges, 50) || in.MaximumCostCents < 0 {
+		return Workspace{}, ErrInvalid
+	}
+	for _, values := range [][]string{in.Packages, in.APIs, in.Journeys, in.Policies, in.Setup, in.Configuration, in.Commands, in.IntegrationChanges} {
+		for _, v := range values {
+			if !safeText(v, 2000) {
+				return Workspace{}, ErrInvalid
+			}
+		}
+	}
+	// A trial must exercise only journeys already declared by the adopter.
+	allowed := map[string]bool{}
+	for _, v := range x.RequiredJourneys {
+		allowed[v] = true
+	}
+	for _, v := range in.Journeys {
+		if !allowed[v] {
+			return Workspace{}, ErrInvalid
+		}
+	}
+	now := s.now().UTC().Truncate(time.Microsecond)
+	in.ID = id()
+	in.CreatedBy = viewer.PrincipalID
+	in.CreatedAt = now
+	in.Attempts = []TrialAttempt{}
+	x.Trials = append(x.Trials, in)
+	x.Version++
+	x.UpdatedAt = now
+	e = s.write(x)
+	return s.project(x, viewer), e
+}
+
+func (s *Store) RecordTrialAttempt(workspace, trial string, in TrialAttempt, viewer Viewer, expected int) (Workspace, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, e := s.lock()
+	if e != nil {
+		return Workspace{}, e
+	}
+	defer f.Close()
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	x, e := s.read(workspace)
+	if e != nil {
+		return Workspace{}, ErrNotFound
+	}
+	if !participant(x, viewer) {
+		return Workspace{}, ErrNotFound
+	}
+	if x.Version != expected {
+		return Workspace{}, ErrConflict
+	}
+	if !map[string]bool{"passed": true, "failed": true, "blocked": true, "non_reproducible": true}[in.Status] || in.CostCents < 0 {
+		return Workspace{}, ErrInvalid
+	}
+	for _, values := range [][]string{in.Checks, in.Previews, in.Measurements, in.Findings, in.UserFeedback, in.ArtifactDigests} {
+		if len(values) > 100 {
+			return Workspace{}, ErrInvalid
+		}
+		for _, v := range values {
+			if !safeText(v, 5000) {
+				return Workspace{}, ErrInvalid
+			}
+		}
+	}
+	for i := range x.Trials {
+		if x.Trials[i].ID == trial {
+			spent := int64(0)
+			for _, attempt := range x.Trials[i].Attempts {
+				if attempt.CostCents < 0 || spent > x.Trials[i].MaximumCostCents-attempt.CostCents {
+					return Workspace{}, ErrInvalid
+				}
+				spent += attempt.CostCents
+			}
+			if in.CostCents > x.Trials[i].MaximumCostCents-spent {
+				return Workspace{}, ErrInvalid
+			}
+			now := s.now().UTC().Truncate(time.Microsecond)
+			in.ID = id()
+			in.RecordedBy = viewer.PrincipalID
+			in.RecordedAt = now
+			if in.Status == "non_reproducible" {
+				in.Reproducible = false
+			}
+			x.Trials[i].Attempts = append(x.Trials[i].Attempts, in)
+			x.Version++
+			x.UpdatedAt = now
+			e = s.write(x)
+			return s.project(x, viewer), e
+		}
+	}
+	return Workspace{}, ErrNotFound
 }

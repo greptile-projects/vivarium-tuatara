@@ -81,4 +81,82 @@ func TestAgentCannotReceiveWriteRole(t *testing.T) {
 	}
 }
 
+func TestBoundedTrialRetainsFailedEvidenceAndRejectsCredentials(t *testing.T) {
+	s, _ := New(t.TempDir())
+	x, err := s.Create(fixture(), "owner", []Invitation{{PrincipalType: "agent", PrincipalID: "trial-agent", OrganizationID: "org", Role: "observer"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	viewer := Viewer{PrincipalType: "agent", PrincipalID: "trial-agent", OrganizationID: "org"}
+	trial := TrialDefinition{CandidateID: x.Candidates[0].ID, Source: TrialSource{Kind: "exact_revision", RepositoryID: "repo", ResourceID: "0123456789012345678901234567890123456789", Revision: "0123456789012345678901234567890123456789", Resolution: "resolved"}, Packages: []string{"relay@2.0.0"}, APIs: []string{"events/v2"}, DataKind: "synthetic", DataDescription: "generated ordered events", Journeys: []string{"publish and replay"}, Policies: []string{"no payload retention"}, Setup: []string{"create an empty fixture"}, Configuration: []string{"retention=off"}, Commands: []string{"relay verify fixture.json"}, IntegrationChanges: []string{"wire the test adapter"}, MaximumCostCents: 500}
+	x, err = s.CreateTrial(x.ID, trial, viewer, x.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	x, err = s.RecordTrialAttempt(x.ID, x.Trials[0].ID, TrialAttempt{Status: "failed", Reproducible: true, Checks: []string{"replay check failed"}, Measurements: []string{"p95=31ms"}, CostCents: 120, Findings: []string{"duplicates after reconnect"}}, viewer, x.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(x.Trials[0].Attempts) != 1 || x.Trials[0].Attempts[0].Status != "failed" {
+		t.Fatalf("failed trial disappeared: %+v", x.Trials)
+	}
+	for _, credential := range []string{"Authorization: Bearer secret", "Authorization: Basic dXNlcjpwYXNz", "github_pat_11ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"} {
+		bad := trial
+		bad.Commands = []string{"curl -H '" + credential + "'"}
+		if _, err = s.CreateTrial(x.ID, bad, viewer, x.Version); !errorsIs(err, ErrInvalid) {
+			t.Fatalf("credential-shaped command %q accepted: %v", credential, err)
+		}
+	}
+}
+
+func TestTrialCostCeilingIsCumulative(t *testing.T) {
+	s, _ := New(t.TempDir())
+	x, _ := s.Create(fixture(), "owner", nil)
+	v := Viewer{PrincipalType: "human", PrincipalID: "owner"}
+	trial := TrialDefinition{CandidateID: x.Candidates[0].ID, Source: TrialSource{Kind: "exact_revision", ResourceID: "0123456789012345678901234567890123456789", Revision: "0123456789012345678901234567890123456789", Resolution: "resolved"}, DataKind: "synthetic", DataDescription: "fixture", Journeys: []string{"publish and replay"}, Policies: []string{"retention"}, Setup: []string{"setup"}, Configuration: []string{"config"}, Commands: []string{"check"}, IntegrationChanges: []string{"adapter"}, MaximumCostCents: 100}
+	x, err := s.CreateTrial(x.ID, trial, v, x.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempt := TrialAttempt{Status: "failed", CostCents: 60, Findings: []string{"retryable failure"}}
+	x, err = s.RecordTrialAttempt(x.ID, x.Trials[0].ID, attempt, v, x.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.RecordTrialAttempt(x.ID, x.Trials[0].ID, attempt, v, x.Version); !errorsIs(err, ErrInvalid) {
+		t.Fatalf("cumulative cost overage accepted: %v", err)
+	}
+}
+
+func TestTrialMustUseDeclaredJourneyAndBudget(t *testing.T) {
+	s, _ := New(t.TempDir())
+	x, _ := s.Create(fixture(), "owner", nil)
+	v := Viewer{PrincipalType: "human", PrincipalID: "owner"}
+	trial := TrialDefinition{CandidateID: x.Candidates[0].ID, Source: TrialSource{Kind: "exact_revision", ResourceID: "0123456789012345678901234567890123456789", Revision: "0123456789012345678901234567890123456789", Resolution: "resolved"}, DataKind: "permitted", DataDescription: "approved anonymized fixture", Journeys: []string{"undeclared journey"}, Policies: []string{"retention"}, Setup: []string{"setup"}, Configuration: []string{"config"}, Commands: []string{"check"}, IntegrationChanges: []string{"adapter"}}
+	if _, err := s.CreateTrial(x.ID, trial, v, x.Version); !errorsIs(err, ErrInvalid) {
+		t.Fatalf("undeclared journey accepted: %v", err)
+	}
+}
+
+func TestTrialSourceIsRedactedAfterRepositoryAccessLoss(t *testing.T) {
+	s, _ := New(t.TempDir())
+	allowed := true
+	s.ConfigureRepositoryAccess(func(Viewer, string) bool { return allowed })
+	x, _ := s.Create(fixture(), "owner", nil)
+	v := Viewer{PrincipalType: "human", PrincipalID: "owner"}
+	trial := TrialDefinition{CandidateID: x.Candidates[0].ID, Source: TrialSource{Kind: "exact_revision", RepositoryID: "private", ResourceID: "0123456789012345678901234567890123456789", Revision: "0123456789012345678901234567890123456789", Resolution: "resolved"}, DataKind: "synthetic", DataDescription: "fixture", Journeys: []string{"publish and replay"}, Policies: []string{"retention"}, Setup: []string{"setup"}, Configuration: []string{"config"}, Commands: []string{"check"}, IntegrationChanges: []string{"adapter"}}
+	x, err := s.CreateTrial(x.ID, trial, v, x.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed = false
+	x, err = s.Get(x.ID, v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if x.Trials[0].Source.Resolution != "inaccessible" || x.Trials[0].Source.Revision != "" || x.Trials[0].Source.ResourceID != "" {
+		t.Fatalf("restricted trial source leaked: %+v", x.Trials[0].Source)
+	}
+}
+
 func errorsIs(got, want error) bool { return got == want }

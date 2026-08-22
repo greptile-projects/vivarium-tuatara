@@ -22,6 +22,16 @@ version is derived as stale. Candidate fit stays `undetermined` whenever any dim
 evidence. The ledger defaults beneath `$ADOPTION_WORKSPACE_STORAGE_ROOT` (`adoption-workspaces`) and
 grants no package, API, procurement, Git, environment, deployment, or provider-roadmap authority.
 
+Participants can append CAS-versioned bounded trials to an exact candidate. A definition resolves
+either an existing released repository release or an exact commit, narrows packages and APIs, uses
+synthetic or explicitly permitted data, selects only the workspace's declared journeys, and freezes
+policies, setup, configuration, commands, integration changes, and a cost ceiling. Human participants
+and approved invited agents can retain immutable attempts with checks, previews, measurements,
+artifact digests, costs, findings, and user feedback. Passed, failed, blocked, and non-reproducible
+attempts remain side by side for cross-version comparison. Credential-shaped prose is rejected and
+repository sources are authorized before resolution; the trial grants no execution, package, API,
+repository, environment, production-data, or deployment authority.
+
 ## Project incubators before repositories
 
 Authenticated collaborators use `/incubators` or the web project-incubator workspace to establish

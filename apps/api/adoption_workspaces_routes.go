@@ -10,11 +10,13 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/adoptionworkspaces"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/apicontracts"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/decisions"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/federation"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/incubators"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
 	packageversions "github.com/greptile-projects/vivarium-tuatara/apps/api/packages"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/roadmaps"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/supportthreads"
@@ -29,8 +31,16 @@ type adoptionConsentInput struct {
 	Decision        string `json:"decision"`
 	ExpectedVersion int    `json:"expected_version"`
 }
+type adoptionTrialInput struct {
+	adoptionworkspaces.TrialDefinition
+	ExpectedVersion int `json:"expected_version"`
+}
+type adoptionTrialAttemptInput struct {
+	adoptionworkspaces.TrialAttempt
+	ExpectedVersion int `json:"expected_version"`
+}
 
-func registerAdoptionWorkspaceRoutes(mux *http.ServeMux, credentials *auth.Store, identities *users.Store, catalog *repositories.Store, orgs *organizations.Store, incubatorStore *incubators.Store, federationStore *federation.Store, roadmapStore *roadmaps.Store, supportStore *supportthreads.Store, decisionStore *decisions.Store, packageStore *packageversions.Store, apiStore *apicontracts.Store, store *adoptionworkspaces.Store) {
+func registerAdoptionWorkspaceRoutes(mux *http.ServeMux, credentials *auth.Store, identities *users.Store, catalog *repositories.Store, orgs *organizations.Store, incubatorStore *incubators.Store, federationStore *federation.Store, roadmapStore *roadmaps.Store, supportStore *supportthreads.Store, decisionStore *decisions.Store, packageStore *packageversions.Store, apiStore *apicontracts.Store, releaseStore *releases.Store, buildStore *checkruns.Store, store *adoptionworkspaces.Store) {
 	authn := func(w http.ResponseWriter, r *http.Request) (auth.Credential, bool) {
 		a, ok := authenticateRequest(w, r, credentials, "repositories:read", false)
 		if !ok {
@@ -259,6 +269,56 @@ func registerAdoptionWorkspaceRoutes(mux *http.ServeMux, credentials *auth.Store
 		}
 		out, e := store.Consent(r.PathValue("workspace_id"), r.PathValue("invitation_id"), actor.UserID, in.Decision, in.ExpectedVersion)
 		writeAdoptionWorkspace(w, out, e, 200)
+	})
+	mux.HandleFunc("POST /adoption-workspaces/{workspace_id}/trials", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authn(w, r)
+		if !ok {
+			return
+		}
+		var in adoptionTrialInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "a complete bounded trial and expected version are required")
+			return
+		}
+		in.Source.Resolution = "inaccessible"
+		if canReadRepository(actor, in.Source.RepositoryID) {
+			switch in.Source.Kind {
+			case "attested_release":
+				if releaseStore != nil && buildStore != nil {
+					if rel, e := releaseStore.Get(in.Source.RepositoryID, in.Source.ResourceID); e == nil && rel.CommitID == in.Source.Revision {
+						runs, runErr := buildStore.List(rel.RepositoryID, rel.ID)
+						verified := runErr == nil && len(runs) > 0
+						for _, run := range runs {
+							verified = verified && run.State == "succeeded"
+						}
+						if verified {
+							in.Source.Resolution = "resolved"
+							in.Source.Attestation = "verified repository release " + rel.ID
+						}
+					}
+				}
+			case "exact_revision":
+				// Exact revisions remain repository-scoped and must be immutable SHA-1 identities.
+				if len(in.Source.Revision) == 40 && in.Source.ResourceID == in.Source.Revision && catalog.HasCommit(in.Source.RepositoryID, in.Source.Revision) {
+					in.Source.Resolution = "resolved"
+				}
+			}
+		}
+		out, e := store.CreateTrial(r.PathValue("workspace_id"), in.TrialDefinition, viewer(actor), in.ExpectedVersion)
+		writeAdoptionWorkspace(w, out, e, 201)
+	})
+	mux.HandleFunc("POST /adoption-workspaces/{workspace_id}/trials/{trial_id}/attempts", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authn(w, r)
+		if !ok {
+			return
+		}
+		var in adoptionTrialAttemptInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "trial evidence and expected version are required")
+			return
+		}
+		out, e := store.RecordTrialAttempt(r.PathValue("workspace_id"), r.PathValue("trial_id"), in.TrialAttempt, viewer(actor), in.ExpectedVersion)
+		writeAdoptionWorkspace(w, out, e, 201)
 	})
 }
 
