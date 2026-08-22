@@ -182,7 +182,7 @@ func safeText(v string, n int) bool {
 		return false
 	}
 	l := strings.ToLower(v)
-	return !strings.Contains(l, "authorization: bearer") && !strings.Contains(l, "-----begin private key") && !strings.Contains(l, "aws_secret_access_key") && !strings.Contains(l, "ghp_")
+	return !strings.Contains(l, "authorization: bearer") && !strings.Contains(l, "authorization: basic") && !strings.Contains(l, "-----begin private key") && !strings.Contains(l, "aws_secret_access_key") && !strings.Contains(l, "ghp_") && !strings.Contains(l, "github_pat_")
 }
 func revision(v string) bool { _, e := hex.DecodeString(v); return len(v) == 40 && e == nil }
 func list(v []string, max int) bool {
@@ -610,7 +610,14 @@ func (s *Store) RecordTrialAttempt(workspace, trial string, in TrialAttempt, vie
 	}
 	for i := range x.Trials {
 		if x.Trials[i].ID == trial {
-			if in.CostCents > x.Trials[i].MaximumCostCents {
+			spent := int64(0)
+			for _, attempt := range x.Trials[i].Attempts {
+				if attempt.CostCents < 0 || spent > x.Trials[i].MaximumCostCents-attempt.CostCents {
+					return Workspace{}, ErrInvalid
+				}
+				spent += attempt.CostCents
+			}
+			if in.CostCents > x.Trials[i].MaximumCostCents-spent {
 				return Workspace{}, ErrInvalid
 			}
 			now := s.now().UTC().Truncate(time.Microsecond)
