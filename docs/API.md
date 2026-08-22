@@ -22,6 +22,16 @@ Repository-bound evidence is re-authorized for each List and Get; viewers who lo
 repository access receive only an opaque inaccessible gap. Human and agent invitation identities
 are matched by principal type, and agent invitations additionally match organization identity.
 
+`POST /adoption-workspaces/{workspace_id}/trials` appends a CAS-versioned bounded trial for one
+candidate. The source must resolve as an existing released repository release at its exact commit or
+an existing exact repository commit readable by the caller. Definitions scope packages, APIs,
+synthetic or permitted data, declared workspace journeys, policies, setup, configuration, commands,
+integration changes, and maximum cost. `POST .../trials/{trial_id}/attempts` retains immutable passed,
+failed, blocked, or non-reproducible evidence with checks, previews, measurements, costs, findings,
+user feedback, and digest-addressed artifacts. Owners, consented humans, and invited approved agents
+may contribute within the workspace boundary. Credential-shaped content and over-budget attempts are
+rejected; neither route grants execution or authority over referenced systems.
+
 ## Assurance programs
 
 - `GET /repositories/{id}/assurance-programs` lists visible versioned programs.

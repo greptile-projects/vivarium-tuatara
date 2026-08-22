@@ -270,6 +270,14 @@ whenever dependencies change or the web job fails before it starts.
   version-stale evidence remains an explicit gap rather than proof of fit. Workspaces grant no
   repository, package, API, procurement, agent, Git, environment, deployment, or provider-roadmap
   authority.
+  CAS-versioned bounded trials resolve an existing attested release or exact readable commit, scope
+  packages/APIs and synthetic or permitted data, and select only the adopter's declared journeys.
+  Definitions and immutable attempts retain setup, configuration, commands, integration changes,
+  checks, previews, measurements, digest-addressed artifacts, costs, findings, and user feedback.
+  Human participants and invited approved agents can contribute; failed, blocked, and
+  non-reproducible attempts remain visible, while credential-shaped content is rejected and trial
+  records grant no execution, production-data, repository, package, API, environment, or deployment
+  authority.
 
 - **Project incubators** — `/incubators` and the web `/incubators` workspace provide a
   collaborative home before repository creation beneath `$INCUBATOR_STORAGE_ROOT`

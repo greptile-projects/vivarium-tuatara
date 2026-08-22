@@ -852,6 +852,19 @@ func (s *Store) GetByID(id string) (Repository, error) {
 	return repository, nil
 }
 
+// HasCommit verifies an immutable repository object without exposing its contents.
+func (s *Store) HasCommit(id, revision string) bool {
+	if len(revision) != 40 {
+		return false
+	}
+	repository, err := s.git.Open(id)
+	if err != nil {
+		return false
+	}
+	_, err = repository.ReadCommit(storage.ObjectID(revision))
+	return err == nil
+}
+
 func (s *Store) SetVisibility(ownerID, id, visibility string) (Repository, error) {
 	if visibility != Private && visibility != Public {
 		return Repository{}, ErrVisibility
