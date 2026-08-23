@@ -122,6 +122,10 @@ func TestConflictAnalysisExplainsExactTextualStructuralAndSemanticCollision(t *t
 	if interfaceSymbols["Apply"] != "Apply(string) error" {
 		t.Fatalf("interface symbols = %#v", interfaceSymbols)
 	}
+	splitInterfaceSymbols := declaredSymbols("type Contract interface\n{\n    Apply(string) error\n}\n")
+	if splitInterfaceSymbols["Apply"] != "Apply(string) error" {
+		t.Fatalf("split-line interface symbols = %#v", splitInterfaceSymbols)
+	}
 	callEntry := func(content string) snapshotEntry {
 		id, writeErr := repository.WriteObject(storage.BlobObject, []byte(content))
 		if writeErr != nil {
@@ -132,6 +136,10 @@ func TestConflictAnalysisExplainsExactTextualStructuralAndSemanticCollision(t *t
 	callSymbols := sharedChangedSymbols(repository, callEntry("func run() {\n    Apply(base)\n}\n"), callEntry("func run() {\n    Apply(source)\n}\n"), callEntry("func run() {\n    Apply(target)\n}\n"))
 	if len(callSymbols) != 0 {
 		t.Fatalf("call-site edits reported declarations: %v", callSymbols)
+	}
+	splitSymbols := sharedChangedSymbols(repository, callEntry("type Contract interface\n{\n    Apply(string) error\n}\n"), callEntry("type Contract interface\n{\n    Apply(string, bool) error\n}\n"), callEntry("type Contract interface\n{\n    Apply([]byte) error\n}\n"))
+	if !slices.Equal(splitSymbols, []string{"Apply"}) {
+		t.Fatalf("split-line interface overlap = %v", splitSymbols)
 	}
 	if err := os.WriteFile(store.commentsPath(repository.ID(), pull.ID), []byte("invalid"), 0o600); err != nil {
 		t.Fatal(err)

@@ -342,13 +342,19 @@ func declaredSymbol(line string) string {
 func declaredSymbols(text string) map[string]string {
 	result := map[string]string{}
 	inInterface := false
+	pendingInterface := false
 	for _, line := range strings.Split(text, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if symbol := declaredSymbol(line); symbol != "" {
 			result[symbol] = trimmed
-			if strings.Contains(line, "interface") && strings.Contains(line, "{") {
-				inInterface = true
+			if strings.Contains(line, "interface") {
+				inInterface = strings.Contains(line, "{")
+				pendingInterface = !inInterface
 			}
+			continue
+		}
+		if pendingInterface && strings.Contains(line, "{") {
+			pendingInterface, inInterface = false, true
 			continue
 		}
 		if inInterface {
