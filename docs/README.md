@@ -3,6 +3,24 @@
 Notes on how this project fits together. Mostly empty for now — things get
 written down here as they're decided, not before.
 
+## Shared regression search boundaries
+
+Repository collaborators open regression investigations through `POST
+/repositories/{id}/regression-investigations` or the repository's Regression investigations page.
+The source must resolve to an issue, support thread, failed check (`pull_id/run_id`), release,
+deployment, or demonstrated/reproduced debugging scenario (`workspace_id/scenario_id`). The server
+resolves release and check commits, requires both 40-character boundary commits to exist, and proves
+that known-good is an ancestor of known-bad before retaining the record.
+
+The immutable starting context contains the expected and regressed behavior, good/bad labels and
+revisions, affected environments, severity, owners, acceptance criteria, and evidence metadata.
+Evidence is admitted only with repository or participant visibility; unavailable evidence is an
+explicit diagnostic, and later missing revisions are projected as stale without rewriting history.
+Discussion, hypotheses, environment scope, and open/bounded/paused/closed status append through a
+compare-and-swap event route with actor and time attribution. This ledger agrees on what history to
+search; it grants no Git, private-machine, check execution, environment, deployment, or evidence
+access authority.
+
 ## Meaning-preserving conflict checkpoints
 
 Conflict-reconciliation workspaces can turn a resolved working tree into an unreferenced, immutable

@@ -2,6 +2,16 @@
 
 Guidance for coding agents working in this repository.
 
+Regression investigations at `/repositories/{id}/regression-investigations` and the repository
+`/regressions` workspace turn a suspected regression from an issue, support thread, failed check,
+release, deployment, or demonstrated reproduction into a durable shared search boundary beneath
+`$REGRESSION_INVESTIGATION_STORAGE_ROOT` (`regression-investigations`). Creation freezes expected and
+regressed behavior, exact known-good and known-bad commits or releases, affected environments,
+severity, current owners, acceptance criteria, and permitted evidence. Both commits must exist and
+known-good must be an ancestor of known-bad; missing or stale evidence remains explicit. CAS history
+retains attributed discussion, hypotheses, scope changes, and status without granting Git, testing,
+workspace, environment, deployment, evidence, or debugging authority.
+
 Conflict reconciliation resolution checkpoints in the workspace ledger assemble an immutable unreferenced
 two-parent candidate and retain all affected required checks, reproductions, contract/schema scenarios,
 preview acceptance, and repository conflict tests with exact commands, criteria, coverage, logs, artifacts,
