@@ -162,3 +162,33 @@ func TestGovernedRollbackRequiresExactCurrentCandidate(t *testing.T) {
 		t.Fatalf("approved rollback = %#v, %v", w, err)
 	}
 }
+
+func TestAnyCurrentUnexpiredExceptionRemainsEffective(t *testing.T) {
+	s, _ := New(t.TempDir())
+	now := time.Date(2026, 8, 23, 10, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return now }
+	_, err := s.SetGovernancePolicy("repo", "repo-owner", 0, GovernancePolicy{RequiredReviews: 2, ApprovalTTLSeconds: 3600, ResourceOwnerIDs: []string{"owner-one", "owner-two"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := s.EvaluateCandidate("repo", "", "author", 0, governedPreview(t, s))
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstExpiry := now.Add(2 * time.Hour)
+	c, err = s.DecideCandidate(c.ID, "owner-one", "exception", "", "", "first mitigation", &firstExpiry)
+	if err != nil || !c.Ready {
+		t.Fatalf("first exception = %#v, %v", c, err)
+	}
+	now = now.Add(10 * time.Minute)
+	secondExpiry := now.Add(time.Hour)
+	c, err = s.DecideCandidate(c.ID, "owner-two", "exception", "", "", "later narrow mitigation", &secondExpiry)
+	if err != nil || !c.Ready {
+		t.Fatalf("second exception = %#v, %v", c, err)
+	}
+	now = secondExpiry.Add(time.Second)
+	c, err = s.GetCandidate(c.ID)
+	if err != nil || !c.Ready {
+		t.Fatalf("expired later exception revoked active earlier exception: %#v, %v", c, err)
+	}
+}
