@@ -43,6 +43,10 @@ logs, exit state, artifacts, duration, compute cost, actor, and target/dependenc
 Each caller-stable attempt request reserves its durable investigation identity before any check run is
 created. Completion finalizes that identity independently of later investigation edits; retries reconcile
 the reservation and deterministic run names, preventing completed but unattached duplicate work.
+An overlapping exact retry that observes a queued, running, or cleanup-pending check returns the same
+running reservation and never converts that nonterminal state into failure evidence. Environment
+incompatibility derives only from executor setup failures or canonical Docker stderr under its setup exit;
+arbitrary comparison logs cannot change a completed behavioral failure into a setup classification.
 
 Attempt classifications distinguish `passed`, `failed`, and mixed `flaky` runs from
 `incompatible_setup`, `missing_dependencies`, `unsafe_fixture`, and `untestable_revision`. The latter

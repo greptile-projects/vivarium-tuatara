@@ -25,6 +25,9 @@ provenance, and classify passed, failed, flaky, incompatible setup, missing depe
 untestable revision distinctly; non-executable states are explicit gaps rather than behavioral evidence.
 Caller-stable attempt reservations precede check creation; retries reuse deterministic run identities and
 finalization survives unrelated investigation CAS changes, so completed execution cannot become orphaned.
+Overlapping exact retries expose the retained running reservation while any reused check is nonterminal and
+cannot finalize it as failed. Incompatible setup derives only from executor-originated setup failures or
+canonical Docker setup stderr, never generic phrases emitted by the comparison command.
 
 Conflict reconciliation resolution checkpoints in the workspace ledger assemble an immutable unreferenced
 two-parent candidate and retain all affected required checks, reproductions, contract/schema scenarios,

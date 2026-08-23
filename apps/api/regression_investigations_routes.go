@@ -400,13 +400,21 @@ func registerRegressionInvestigationRoutes(mux *http.ServeMux, git *storage.Stor
 				events, _ := checkStore.Events(current.RepositoryID, "regression-"+current.ID, run.ID, 0)
 				logs := strings.Builder{}
 				output := strings.Builder{}
+				stderr := strings.Builder{}
 				for _, event := range events {
 					if event.Kind == "log" {
 						logs.WriteString(event.Message)
 						if event.Stream == "stdout" {
 							output.WriteString(event.Message)
+						} else if event.Stream == "stderr" {
+							stderr.WriteString(event.Message)
 						}
 					}
+				}
+				if regressionRunActive(run.State) {
+					latest, _ := investigations.Get(current.RepositoryID, current.ID)
+					writeJSON(w, http.StatusAccepted, project(latest))
+					return
 				}
 				artifacts := []regressioninvestigations.AttemptArtifact{}
 				for _, a := range run.Artifacts {
@@ -422,7 +430,7 @@ func registerRegressionInvestigationRoutes(mux *http.ServeMux, git *storage.Stor
 					passed = true
 				} else {
 					failed = true
-					if regressionSetupFailure(run.Failure, logs.String()) {
+					if regressionSetupFailure(run.Failure, stderr.String()) {
 						attempt.Classification, attempt.Diagnostic = "incompatible_setup", strings.TrimSpace(run.Failure+"\n"+logs.String())
 						break
 					}
@@ -457,13 +465,23 @@ func validRegressionDependencyName(v string) bool {
 }
 
 func regressionSetupFailure(failure, logs string) bool {
-	diagnostic := strings.ToLower(failure + "\n" + logs)
-	for _, marker := range []string{"no such image", "unable to find image", "working directory", "executable file not found", "cannot connect to the docker daemon"} {
+	if failure == "working directory does not exist" || failure == "verification input is invalid" || failure == "verification archive is invalid" || failure == "verification archive path is invalid" {
+		return true
+	}
+	if failure != "exit status 125" {
+		return false
+	}
+	diagnostic := strings.ToLower(logs)
+	for _, marker := range []string{"no such image:", "unable to find image '", "cannot connect to the docker daemon", "error response from daemon:"} {
 		if strings.Contains(diagnostic, marker) {
 			return true
 		}
 	}
 	return false
+}
+
+func regressionRunActive(state string) bool {
+	return state == "queued" || state == "running" || state == "cleanup_pending"
 }
 
 func projectRegressionEvidence(evidence regressioninvestigations.Evidence, current bool) regressioninvestigations.Evidence {

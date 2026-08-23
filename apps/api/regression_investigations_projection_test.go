@@ -33,4 +33,23 @@ func TestRegressionSetupFailureUsesRetainedDockerStderr(t *testing.T) {
 	if regressionSetupFailure("exit status 1", "expected behavior differed") {
 		t.Fatal("behavioral failure was treated as setup failure")
 	}
+	if regressionSetupFailure("exit status 1", "working directory fixture was retained; executable file not found in expected output") {
+		t.Fatal("arbitrary behavioral logs were treated as setup failure")
+	}
+	if regressionSetupFailure("exit status 125", "comparison intentionally returned 125") {
+		t.Fatal("unstructured exit 125 was treated as setup failure")
+	}
+}
+
+func TestRegressionActiveRetryDoesNotBecomeFailure(t *testing.T) {
+	for _, state := range []string{"queued", "running", "cleanup_pending"} {
+		if !regressionRunActive(state) {
+			t.Fatalf("%s run was considered terminal", state)
+		}
+	}
+	for _, state := range []string{"succeeded", "failed", "cancelled"} {
+		if regressionRunActive(state) {
+			t.Fatalf("%s run was considered active", state)
+		}
+	}
 }
