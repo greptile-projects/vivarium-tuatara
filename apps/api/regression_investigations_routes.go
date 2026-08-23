@@ -226,12 +226,13 @@ func registerRegressionInvestigationRoutes(mux *http.ServeMux, git *storage.Stor
 			return
 		}
 		var in struct {
-			ExpectedVersion     int               `json:"expected_version"`
-			TargetKind          string            `json:"target_kind"`
-			TargetID            string            `json:"target_id"`
-			Revision            string            `json:"revision"`
-			DependencyRevisions map[string]string `json:"dependency_revisions"`
-			Repeats             int               `json:"repeats"`
+			ExpectedVersion int                                   `json:"expected_version"`
+			RequestID       string                                `json:"request_id"`
+			TargetKind      string                                `json:"target_kind"`
+			TargetID        string                                `json:"target_id"`
+			Revision        string                                `json:"revision"`
+			Dependencies    []regressioninvestigations.Dependency `json:"dependencies"`
+			Repeats         int                                   `json:"repeats"`
 		}
 		if decodeJSON(r, &in) != nil || in.ExpectedVersion < 1 {
 			writeAPIError(w, 400, "invalid_request", "an exact historical target is required")
@@ -253,10 +254,9 @@ func registerRegressionInvestigationRoutes(mux *http.ServeMux, git *storage.Stor
 			writeAPIError(w, 404, "regression_scenario_not_found", "regression scenario not found")
 			return
 		}
-		started := time.Now().UTC()
-		attempt := regressioninvestigations.Attempt{ScenarioID: scenario.ID, TargetKind: in.TargetKind, TargetID: strings.TrimSpace(in.TargetID), Revision: strings.ToLower(strings.TrimSpace(in.Revision)), DependencyRevisions: in.DependencyRevisions, Environment: scenario.Environment, Inputs: scenario.Inputs, CreatedAt: started}
-		if attempt.DependencyRevisions == nil {
-			attempt.DependencyRevisions = map[string]string{}
+		attempt := regressioninvestigations.Attempt{RequestID: in.RequestID, ScenarioID: scenario.ID, TargetKind: in.TargetKind, TargetID: strings.TrimSpace(in.TargetID), Revision: strings.ToLower(strings.TrimSpace(in.Revision)), Dependencies: in.Dependencies, Environment: scenario.Environment, Inputs: scenario.Inputs, Repeats: in.Repeats}
+		if attempt.Dependencies == nil {
+			attempt.Dependencies = []regressioninvestigations.Dependency{}
 		}
 		if in.TargetKind == "release" {
 			release, releaseErr := releaseStore.Get(current.RepositoryID, attempt.TargetID)
@@ -272,6 +272,7 @@ func registerRegressionInvestigationRoutes(mux *http.ServeMux, git *storage.Stor
 		if attempt.Classification == "" && (gitErr != nil || len(attempt.Revision) != 40 || exec.Command("git", "--git-dir="+gr.Path(), "cat-file", "-e", attempt.Revision+"^{commit}").Run() != nil) {
 			attempt.Classification, attempt.Diagnostic = "untestable_revision", "selected revision is unavailable in repository history"
 		}
+		dependencyArchives := map[string]string{}
 		if attempt.Classification == "" {
 			for _, variant := range scenario.EnvironmentVariants {
 				if variant.Revision == attempt.Revision {
@@ -279,11 +280,41 @@ func registerRegressionInvestigationRoutes(mux *http.ServeMux, git *storage.Stor
 					break
 				}
 			}
-			for name, revision := range attempt.DependencyRevisions {
-				if !validRegressionDependencyName(name) || len(revision) != 40 || exec.Command("git", "--git-dir="+gr.Path(), "cat-file", "-e", revision+"^{commit}").Run() != nil {
+			seenDependencies := map[string]bool{}
+			dependencyBytes := 0
+			if len(attempt.Dependencies) > 8 {
+				attempt.Classification, attempt.Diagnostic = "incompatible_setup", "dependency combination exceeds the eight-snapshot bound"
+			}
+			for i := range attempt.Dependencies {
+				if attempt.Classification != "" {
+					break
+				}
+				dependency := &attempt.Dependencies[i]
+				dependency.Name, dependency.RepositoryID, dependency.Revision = strings.TrimSpace(dependency.Name), strings.TrimSpace(dependency.RepositoryID), strings.ToLower(strings.TrimSpace(dependency.Revision))
+				dependency.Path = "dependencies/" + dependency.Name
+				if !validRegressionDependencyName(dependency.Name) || seenDependencies[dependency.Name] || len(dependency.Revision) != 40 {
 					attempt.Classification, attempt.Diagnostic = "missing_dependencies", "dependency combination contains a missing revision"
 					break
 				}
+				seenDependencies[dependency.Name] = true
+				_, _, permitted := authorizeRepositoryRead(w, r, catalog, credentials, dependency.RepositoryID)
+				if !permitted {
+					return
+				}
+				dependencyGit, openErr := git.Open(dependency.RepositoryID)
+				if openErr != nil || exec.Command("git", "--git-dir="+dependencyGit.Path(), "cat-file", "-e", dependency.Revision+"^{commit}").Run() != nil {
+					attempt.Classification, attempt.Diagnostic = "missing_dependencies", "dependency combination contains a missing revision"
+					break
+				}
+				archive, archiveErr := exec.Command("git", "--git-dir="+dependencyGit.Path(), "archive", dependency.Revision).Output()
+				dependencyBytes += len(archive)
+				if archiveErr != nil || len(archive) > 32*1024*1024 || dependencyBytes > 64*1024*1024 {
+					attempt.Classification, attempt.Diagnostic = "incompatible_setup", "dependency snapshot could not be bounded and materialized"
+					break
+				}
+				sum := sha256.Sum256(archive)
+				dependency.ArchiveSHA256 = hex.EncodeToString(sum[:])
+				dependencyArchives[dependency.Name] = base64.StdEncoding.EncodeToString(archive)
 			}
 		}
 		for _, input := range scenario.Inputs {
@@ -292,22 +323,31 @@ func registerRegressionInvestigationRoutes(mux *http.ServeMux, git *storage.Stor
 				break
 			}
 		}
+		if attempt.Repeats == 0 {
+			attempt.Repeats = 1
+		}
+		if attempt.Repeats < 1 || attempt.Repeats > 5 {
+			writeAPIError(w, 422, "regression_repeats_invalid", "repeat count must be between one and five")
+			return
+		}
+		reservedInvestigation, reserved, existed, reserveErr := investigations.ReserveAttempt(current.RepositoryID, current.ID, actor(c), attempt, in.ExpectedVersion)
+		if reserveErr != nil {
+			writeRegressionInvestigation(w, project(reservedInvestigation), reserveErr, 201)
+			return
+		}
+		if existed && reserved.State == "completed" {
+			writeJSON(w, 201, project(reservedInvestigation))
+			return
+		}
+		attempt = reserved
 		if attempt.Classification == "" {
-			repeats := in.Repeats
-			if repeats == 0 {
-				repeats = 1
-			}
-			if repeats < 1 || repeats > 5 {
-				writeAPIError(w, 422, "regression_repeats_invalid", "repeat count must be between one and five")
-				return
-			}
 			command := attempt.Environment.Command
 			if strings.TrimSpace(attempt.Environment.SetupCommand) != "" {
 				command = attempt.Environment.SetupCommand + " && " + command
 			}
 			attempt.Command = command
 			passed, failed := false, false
-			for n := 0; n < repeats; n++ {
+			for n := 0; n < attempt.Repeats; n++ {
 				inputs := []checkruns.InputFile{}
 				for _, input := range scenario.Inputs {
 					raw, decodeErr := base64.StdEncoding.DecodeString(input.Data)
@@ -321,20 +361,37 @@ func registerRegressionInvestigationRoutes(mux *http.ServeMux, git *storage.Stor
 				if attempt.Classification != "" {
 					break
 				}
+				for _, dependency := range attempt.Dependencies {
+					inputs = append(inputs, checkruns.InputFile{Name: dependency.Path, SHA256: dependency.ArchiveSHA256, Data: dependencyArchives[dependency.Name], Archive: true})
+				}
 				environment := map[string]string{}
 				for k, v := range attempt.Environment.Environment {
 					environment[k] = v
 				}
-				for k, v := range attempt.DependencyRevisions {
-					environment["VIVARIUM_DEPENDENCY_"+strings.ToUpper(strings.ReplaceAll(k, "-", "_"))] = v
+				for _, dependency := range attempt.Dependencies {
+					environment["VIVARIUM_DEPENDENCY_"+strings.ToUpper(strings.ReplaceAll(dependency.Name, "-", "_"))+"_REVISION"] = dependency.Revision
+					environment["VIVARIUM_DEPENDENCY_"+strings.ToUpper(strings.ReplaceAll(dependency.Name, "-", "_"))+"_PATH"] = "/workspace/" + dependency.Path
 				}
-				definition := checkruns.Definition{Name: "regression " + scenario.ID + " " + attempt.Revision + " " + time.Now().UTC().Format("150405.000000") + " " + string(rune('a'+n)), Image: attempt.Environment.Image, Command: command, WorkingDirectory: attempt.Environment.WorkingDirectory, Environment: environment, TimeoutSeconds: attempt.Environment.TimeoutSeconds, CPUs: attempt.Environment.CPUs, MemoryMB: attempt.Environment.MemoryMB, StorageMB: attempt.Environment.StorageMB, Inputs: inputs}
-				runs, createErr := checkStore.CreateRequested(current.RepositoryID, "regression-"+current.ID, attempt.Revision, []checkruns.Definition{definition}, actor(c))
+				definition := checkruns.Definition{Name: "regression " + attempt.ID + " " + string(rune('a'+n)), Image: attempt.Environment.Image, Command: command, WorkingDirectory: attempt.Environment.WorkingDirectory, Environment: environment, TimeoutSeconds: attempt.Environment.TimeoutSeconds, CPUs: attempt.Environment.CPUs, MemoryMB: attempt.Environment.MemoryMB, StorageMB: attempt.Environment.StorageMB, Inputs: inputs}
+				existingRuns, _ := checkStore.List(current.RepositoryID, "regression-"+current.ID)
+				var runs []checkruns.Run
+				for _, candidate := range existingRuns {
+					if candidate.CommitID == attempt.Revision && candidate.Definition.Name == definition.Name {
+						runs = []checkruns.Run{candidate}
+						break
+					}
+				}
+				var createErr error
+				if len(runs) == 0 {
+					runs, createErr = checkStore.CreateRequested(current.RepositoryID, "regression-"+current.ID, attempt.Revision, []checkruns.Definition{definition}, actor(c))
+				}
 				if createErr != nil || len(runs) != 1 {
 					attempt.Classification, attempt.Diagnostic = "incompatible_setup", "isolated environment could not be created"
 					break
 				}
-				checkStore.Execute(runs[0], gr.Path())
+				if runs[0].State == "queued" || runs[0].State == "running" || runs[0].State == "cleanup_pending" {
+					checkStore.Execute(runs[0], gr.Path())
+				}
 				run, getErr := checkStore.Get(current.RepositoryID, "regression-"+current.ID, runs[0].ID)
 				if getErr != nil {
 					attempt.Classification, attempt.Diagnostic = "incompatible_setup", "isolated result could not be retained"
@@ -365,8 +422,8 @@ func registerRegressionInvestigationRoutes(mux *http.ServeMux, git *storage.Stor
 					passed = true
 				} else {
 					failed = true
-					if strings.Contains(strings.ToLower(run.Failure), "image") || strings.Contains(strings.ToLower(run.Failure), "working directory") {
-						attempt.Classification, attempt.Diagnostic = "incompatible_setup", run.Failure
+					if regressionSetupFailure(run.Failure, logs.String()) {
+						attempt.Classification, attempt.Diagnostic = "incompatible_setup", strings.TrimSpace(run.Failure+"\n"+logs.String())
 						break
 					}
 				}
@@ -382,7 +439,7 @@ func registerRegressionInvestigationRoutes(mux *http.ServeMux, git *storage.Stor
 			}
 		}
 		attempt.CompletedAt = time.Now().UTC()
-		out, e := investigations.RecordAttempt(current.RepositoryID, current.ID, actor(c), attempt, in.ExpectedVersion)
+		out, e := investigations.FinalizeAttempt(current.RepositoryID, current.ID, actor(c), attempt.ID, attempt)
 		writeRegressionInvestigation(w, project(out), e, 201)
 	})
 }
@@ -397,6 +454,16 @@ func validRegressionDependencyName(v string) bool {
 		}
 	}
 	return true
+}
+
+func regressionSetupFailure(failure, logs string) bool {
+	diagnostic := strings.ToLower(failure + "\n" + logs)
+	for _, marker := range []string{"no such image", "unable to find image", "working directory", "executable file not found", "cannot connect to the docker daemon"} {
+		if strings.Contains(diagnostic, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func projectRegressionEvidence(evidence regressioninvestigations.Evidence, current bool) regressioninvestigations.Evidence {

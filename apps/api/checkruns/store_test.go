@@ -1,6 +1,7 @@
 package checkruns
 
 import (
+	"archive/tar"
 	"bytes"
 	"errors"
 	"fmt"
@@ -13,6 +14,37 @@ import (
 	"testing"
 	"time"
 )
+
+func TestWriteVerificationArchiveMaterializesBoundedDependency(t *testing.T) {
+	var body bytes.Buffer
+	w := tar.NewWriter(&body)
+	content := []byte("dependency source")
+	if err := w.WriteHeader(&tar.Header{Name: "src/value.txt", Mode: 0o644, Size: int64(len(content)), Typeflag: tar.TypeReg}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write(content); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	if err := writeVerificationArchive(root, "dependencies/runtime", body.Bytes()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(root, "dependencies/runtime/src/value.txt"))
+	if err != nil || string(got) != "dependency source" {
+		t.Fatalf("materialized dependency = %q, %v", got, err)
+	}
+	var unsafe bytes.Buffer
+	uw := tar.NewWriter(&unsafe)
+	_ = uw.WriteHeader(&tar.Header{Name: "../escape", Mode: 0o644, Size: 1, Typeflag: tar.TypeReg})
+	_, _ = uw.Write([]byte("x"))
+	_ = uw.Close()
+	if err := writeVerificationArchive(root, "dependencies/unsafe", unsafe.Bytes()); err == nil {
+		t.Fatal("traversal archive was accepted")
+	}
+}
 
 func TestParseConfigValidatesExecutionContext(t *testing.T) {
 	config, err := ParseConfig([]byte(`{"version":1,"checks":[{"name":"test","image":"alpine:3.22","command":"test \"$MODE\" = ci","working_directory":"app","environment":{"MODE":"ci"},"timeout_seconds":30,"cpus":0.5,"memory_mb":384,"storage_mb":96}]}`))

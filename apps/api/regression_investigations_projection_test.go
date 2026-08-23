@@ -25,3 +25,12 @@ func TestRegressionEvidenceProjectionKeepsUnresolvedSourceUnavailable(t *testing
 		t.Fatalf("unresolved evidence changed projection: %#v", projected)
 	}
 }
+
+func TestRegressionSetupFailureUsesRetainedDockerStderr(t *testing.T) {
+	if !regressionSetupFailure("exit status 125", "docker: Error response from daemon: No such image: unavailable:never") {
+		t.Fatal("unavailable image was treated as behavioral evidence")
+	}
+	if regressionSetupFailure("exit status 1", "expected behavior differed") {
+		t.Fatal("behavioral failure was treated as setup failure")
+	}
+}

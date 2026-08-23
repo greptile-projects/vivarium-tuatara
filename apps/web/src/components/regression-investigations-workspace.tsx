@@ -54,7 +54,7 @@ type Scenario = {
 };
 type Attempt = {
   id: string; scenario_id: string; target_kind: string; target_id?: string; revision?: string;
-  dependency_revisions: Record<string, string>; classification: string; diagnostic?: string;
+  dependencies: { name: string; repository_id: string; revision: string; path: string; archive_sha256?: string }[]; classification: string; diagnostic?: string;
   cost_compute_seconds: number; requested_by: string;
   runs: { run_id?: string; state: string; exit_code?: number; failure?: string; output?: string; logs?: string; duration_ms: number; artifacts: { path: string; sha256: string; size: number }[] }[];
 };
@@ -86,6 +86,7 @@ export function RegressionInvestigationsWorkspace({
   const [selected, setSelected] = useState<Investigation>();
   const [error, setError] = useState("");
   const createRequestID = useRef(crypto.randomUUID());
+  const attemptRequestIDs = useRef<Record<string, string>>({});
   const load = useCallback(async () => {
     try {
       const x = await api<{ regression_investigations: Investigation[] }>(
@@ -217,11 +218,12 @@ export function RegressionInvestigationsWorkspace({
   async function runScenario(e: FormEvent<HTMLFormElement>, scenario: Scenario) {
     e.preventDefault();
     if (!token || !selected) return;
-    const f = new FormData(e.currentTarget), dependencies: Record<string, string> = {};
-    for (const item of list(value(f, "dependencies"))) { const [name, revision] = item.split("="); if (name && revision) dependencies[name] = revision; }
+    const f = new FormData(e.currentTarget), dependencies: { name: string; repository_id: string; revision: string }[] = [];
+    for (const item of list(value(f, "dependencies"))) { const [name, repository_id, revision] = item.split("@"); if (name && repository_id && revision) dependencies.push({name,repository_id,revision}); }
+    const requestID = attemptRequestIDs.current[scenario.id] ?? crypto.randomUUID(); attemptRequestIDs.current[scenario.id]=requestID;
     try {
-      const out = await api<Investigation>(`/repositories/${repositoryID}/regression-investigations/${selected.id}/scenarios/${scenario.id}/attempts`, { method: "POST", body: JSON.stringify({ expected_version: selected.version, target_kind: value(f, "target_kind"), target_id: value(f, "target_id"), revision: value(f, "revision"), dependency_revisions: dependencies, repeats: Number(value(f, "repeats")) }) }, token);
-      replace(out); setError("");
+      const out = await api<Investigation>(`/repositories/${repositoryID}/regression-investigations/${selected.id}/scenarios/${scenario.id}/attempts`, { method: "POST", body: JSON.stringify({ expected_version: selected.version, request_id:requestID, target_kind: value(f, "target_kind"), target_id: value(f, "target_id"), revision: value(f, "revision"), dependencies, repeats: Number(value(f, "repeats")) }) }, token);
+      replace(out); delete attemptRequestIDs.current[scenario.id]; setError("");
     } catch (x) { setError(x instanceof Error ? x.message : "Historical attempt failed"); }
   }
   return (
@@ -456,7 +458,7 @@ export function RegressionInvestigationsWorkspace({
                       <select className={field} name="target_kind" defaultValue="commit"><option value="commit">Commit</option><option value="release">Attested release</option></select>
                       <input className={field} name="target_id" placeholder="Release ID (for release targets)" />
                       <input className={field} name="revision" pattern="[0-9a-f]{40}" placeholder="Exact commit (optional for release)" />
-                      <input className={field} name="dependencies" placeholder="Dependency=40-char revision, …" />
+                      <input className={field} name="dependencies" placeholder="Name@RepositoryID@40-char revision, …" />
                       <input className={field} name="repeats" type="number" min="1" max="5" defaultValue="2" aria-label="Repeat count" />
                       <Button type="submit">Run isolated comparison</Button>
                     </form>
@@ -465,7 +467,7 @@ export function RegressionInvestigationsWorkspace({
                         <details key={attempt.id} className="rounded-md bg-[var(--surface-muted)] p-3 text-sm">
                           <summary className="cursor-pointer"><Badge tone={attempt.classification === "passed" ? "success" : attempt.classification === "flaky" ? "warning" : "danger"}>{attempt.classification.replaceAll("_", " ")}</Badge> <code className="ml-2">{attempt.revision?.slice(0, 12) || attempt.target_id}</code> · {attempt.runs.length} run(s) · {attempt.cost_compute_seconds.toFixed(2)} compute-seconds</summary>
                           {attempt.diagnostic && <p className="mt-2 text-[var(--muted)]">{attempt.diagnostic}</p>}
-                          {Object.keys(attempt.dependency_revisions).length > 0 && <p className="mt-2"><b>Dependencies:</b> {Object.entries(attempt.dependency_revisions).map(([k,v]) => `${k}@${v.slice(0,12)}`).join(", ")}</p>}
+                          {attempt.dependencies.length > 0 && <p className="mt-2"><b>Dependencies:</b> {attempt.dependencies.map((dependency) => `${dependency.name}@${dependency.repository_id}:${dependency.revision.slice(0,12)} → ${dependency.path}`).join(", ")}</p>}
                           {attempt.runs.map((run, index) => <div key={run.run_id || index} className="mt-3 border-t border-[var(--border)] pt-2"><b>Run {index + 1}:</b> {run.state} ({run.duration_ms} ms){run.failure && <p>{run.failure}</p>}{run.logs && <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap text-xs">{run.logs}</pre>}{run.artifacts.length > 0 && <p>{run.artifacts.length} digest-addressed artifact(s)</p>}</div>)}
                         </details>
                       ))}

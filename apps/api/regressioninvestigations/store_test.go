@@ -147,7 +147,7 @@ func TestScenarioAndHistoricalAttemptRetainFrozenComparisonEvidence(t *testing.T
 	if len(v.Scenarios) != 1 || len(v.Scenarios[0].EnvironmentVariants) != 1 || v.Scenarios[0].CreatedBy != "owner-1" || v.Version != 2 {
 		t.Fatalf("scenario not retained: %#v", v)
 	}
-	attempt := Attempt{ScenarioID: v.Scenarios[0].ID, TargetKind: "commit", Revision: commit, DependencyRevisions: map[string]string{"runtime": strings.Repeat("c", 40)}, Environment: v.Scenarios[0].Environment, Command: "./setup-old-revision && ./compare", Classification: "flaky", CostComputeSeconds: 2.5, Runs: []AttemptRun{{RunID: "run-1", State: "succeeded", DurationMS: 1000, Artifacts: []AttemptArtifact{}}, {RunID: "run-2", State: "failed", Failure: "exit status 1", DurationMS: 1500, Artifacts: []AttemptArtifact{{Path: "result.json", SHA256: strings.Repeat("d", 64), Size: 12}}}}}
+	attempt := Attempt{ScenarioID: v.Scenarios[0].ID, TargetKind: "commit", Revision: commit, Dependencies: []Dependency{{Name: "runtime", RepositoryID: "dependency-repo", Revision: strings.Repeat("c", 40), Path: "dependencies/runtime"}}, Environment: v.Scenarios[0].Environment, Command: "./setup-old-revision && ./compare", Classification: "flaky", CostComputeSeconds: 2.5, Runs: []AttemptRun{{RunID: "run-1", State: "succeeded", DurationMS: 1000, Artifacts: []AttemptArtifact{}}, {RunID: "run-2", State: "failed", Failure: "exit status 1", DurationMS: 1500, Artifacts: []AttemptArtifact{{Path: "result.json", SHA256: strings.Repeat("d", 64), Size: 12}}}}}
 	v, err = s.RecordAttempt(v.RepositoryID, v.ID, "agent-1", attempt, v.Version)
 	if err != nil {
 		t.Fatal(err)
@@ -166,5 +166,31 @@ func TestScenarioRejectsUnboundedEnvironment(t *testing.T) {
 	scenario := Scenario{Name: "Unbounded", Environment: ScenarioEnvironment{Image: "alpine:3.22", WorkingDirectory: ".", Command: "./compare", TimeoutSeconds: 7200, CPUs: 1, MemoryMB: 256, StorageMB: 64}, AcceptanceCriteria: []string{"Compare"}}
 	if _, err := s.AddScenario(v.RepositoryID, v.ID, "owner-1", scenario, v.Version); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("want invalid unbounded scenario, got %v", err)
+	}
+}
+
+func TestAttemptReservationSurvivesConcurrentInvestigationChangesAndReconciles(t *testing.T) {
+	s, _ := New(t.TempDir())
+	v, _ := s.Create(validInvestigation(), "actor-1")
+	v, _ = s.AddScenario(v.RepositoryID, v.ID, "owner-1", Scenario{Name: "Comparison", Environment: ScenarioEnvironment{Image: "alpine:3.22", WorkingDirectory: ".", Command: "./compare", TimeoutSeconds: 60, CPUs: 1, MemoryMB: 128, StorageMB: 32}}, v.Version)
+	in := Attempt{RequestID: "attempt-request-1", ScenarioID: v.Scenarios[0].ID, TargetKind: "commit", Revision: commit, Environment: v.Scenarios[0].Environment, Repeats: 2}
+	reservedInvestigation, reserved, existed, err := s.ReserveAttempt(v.RepositoryID, v.ID, "agent-1", in, v.Version)
+	if err != nil || existed || reserved.State != "running" || len(reservedInvestigation.Attempts) != 1 {
+		t.Fatalf("reservation = %#v %#v %v %v", reservedInvestigation, reserved, existed, err)
+	}
+	changed, err := s.Append(v.RepositoryID, v.ID, "owner-1", "discussion", "Concurrent context", "", reservedInvestigation.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	completed := reserved
+	completed.Classification = "passed"
+	completed.Runs = []AttemptRun{{RunID: "run-1", State: "succeeded", Artifacts: []AttemptArtifact{}}}
+	finalized, err := s.FinalizeAttempt(v.RepositoryID, v.ID, "agent-1", reserved.ID, completed)
+	if err != nil || finalized.Version != changed.Version+1 || finalized.Attempts[0].State != "completed" {
+		t.Fatalf("finalization = %#v %v", finalized, err)
+	}
+	reconciled, same, existed, err := s.ReserveAttempt(v.RepositoryID, v.ID, "agent-1", in, v.Version)
+	if err != nil || !existed || same.ID != reserved.ID || reconciled.Attempts[0].Classification != "passed" {
+		t.Fatalf("retry = %#v %#v %v %v", reconciled, same, existed, err)
 	}
 }

@@ -101,23 +101,34 @@ type AttemptRun struct {
 	Artifacts  []AttemptArtifact `json:"artifacts"`
 	DurationMS int64             `json:"duration_ms"`
 }
+type Dependency struct {
+	Name          string `json:"name"`
+	RepositoryID  string `json:"repository_id"`
+	Revision      string `json:"revision"`
+	Path          string `json:"path"`
+	ArchiveSHA256 string `json:"archive_sha256,omitempty"`
+}
 type Attempt struct {
-	ID                  string              `json:"id"`
-	ScenarioID          string              `json:"scenario_id"`
-	TargetKind          string              `json:"target_kind"`
-	TargetID            string              `json:"target_id,omitempty"`
-	Revision            string              `json:"revision,omitempty"`
-	DependencyRevisions map[string]string   `json:"dependency_revisions"`
-	Environment         ScenarioEnvironment `json:"environment"`
-	Inputs              []ScenarioInput     `json:"inputs"`
-	Command             string              `json:"command"`
-	Runs                []AttemptRun        `json:"runs"`
-	Classification      string              `json:"classification"`
-	Diagnostic          string              `json:"diagnostic,omitempty"`
-	CostComputeSeconds  float64             `json:"cost_compute_seconds"`
-	RequestedBy         string              `json:"requested_by"`
-	CreatedAt           time.Time           `json:"created_at"`
-	CompletedAt         time.Time           `json:"completed_at"`
+	ID                 string              `json:"id"`
+	RequestID          string              `json:"request_id"`
+	RequestDigest      string              `json:"request_digest"`
+	ScenarioID         string              `json:"scenario_id"`
+	TargetKind         string              `json:"target_kind"`
+	TargetID           string              `json:"target_id,omitempty"`
+	Revision           string              `json:"revision,omitempty"`
+	Dependencies       []Dependency        `json:"dependencies"`
+	Environment        ScenarioEnvironment `json:"environment"`
+	Inputs             []ScenarioInput     `json:"inputs"`
+	Command            string              `json:"command"`
+	Repeats            int                 `json:"repeats"`
+	Runs               []AttemptRun        `json:"runs"`
+	Classification     string              `json:"classification"`
+	State              string              `json:"state"`
+	Diagnostic         string              `json:"diagnostic,omitempty"`
+	CostComputeSeconds float64             `json:"cost_compute_seconds"`
+	RequestedBy        string              `json:"requested_by"`
+	CreatedAt          time.Time           `json:"created_at"`
+	CompletedAt        time.Time           `json:"completed_at"`
 }
 type Investigation struct {
 	ID                 string     `json:"id"`
@@ -414,13 +425,108 @@ func (s *Store) RecordAttempt(repo, wid, actor string, attempt Attempt, expected
 	if attempt.Runs == nil {
 		attempt.Runs = []AttemptRun{}
 	}
-	if attempt.DependencyRevisions == nil {
-		attempt.DependencyRevisions = map[string]string{}
+	if attempt.Dependencies == nil {
+		attempt.Dependencies = []Dependency{}
 	}
 	v.Attempts = append(v.Attempts, attempt)
 	v.History = append(v.History, Entry{ID: id(), Kind: "scenario_attempt", ActorID: actor, Message: "Historical comparison classified as " + attempt.Classification, CreatedAt: attempt.CompletedAt})
 	v.Version++
 	v.UpdatedAt = attempt.CompletedAt
+	return v, s.write(v)
+}
+
+func (s *Store) ReserveAttempt(repo, wid, actor string, attempt Attempt, expected int) (Investigation, Attempt, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, e := s.lock()
+	if e != nil {
+		return Investigation{}, Attempt{}, false, e
+	}
+	defer unlock()
+	v, e := s.Get(repo, wid)
+	if e != nil {
+		return Investigation{}, Attempt{}, false, e
+	}
+	if !token(attempt.RequestID) || !token(actor) {
+		return Investigation{}, Attempt{}, false, ErrInvalid
+	}
+	digestBody, e := json.Marshal(struct {
+		Actor   string  `json:"actor"`
+		Attempt Attempt `json:"attempt"`
+	}{actor, attempt})
+	if e != nil {
+		return Investigation{}, Attempt{}, false, e
+	}
+	digest := sha256.Sum256(digestBody)
+	encoded := hex.EncodeToString(digest[:])
+	for _, retained := range v.Attempts {
+		if retained.RequestID != attempt.RequestID {
+			continue
+		}
+		if retained.RequestDigest != encoded || retained.RequestedBy != actor {
+			return Investigation{}, Attempt{}, false, ErrConflict
+		}
+		return v, retained, true, nil
+	}
+	if v.Version != expected {
+		return Investigation{}, Attempt{}, false, ErrConflict
+	}
+	found := false
+	for _, scenario := range v.Scenarios {
+		if scenario.ID == attempt.ScenarioID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return Investigation{}, Attempt{}, false, ErrInvalid
+	}
+	now := s.now()
+	attempt.ID, attempt.RequestDigest, attempt.RequestedBy, attempt.State = id(), encoded, actor, "running"
+	attempt.CreatedAt = now
+	attempt.Runs = []AttemptRun{}
+	if attempt.Dependencies == nil {
+		attempt.Dependencies = []Dependency{}
+	}
+	v.Attempts = append(v.Attempts, attempt)
+	v.History = append(v.History, Entry{ID: id(), Kind: "scenario_attempt_reserved", ActorID: actor, Message: "Historical comparison execution reserved", CreatedAt: now})
+	v.Version++
+	v.UpdatedAt = now
+	return v, attempt, false, s.write(v)
+}
+
+func (s *Store) FinalizeAttempt(repo, wid, actor, attemptID string, completed Attempt) (Investigation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, e := s.lock()
+	if e != nil {
+		return Investigation{}, e
+	}
+	defer unlock()
+	v, e := s.Get(repo, wid)
+	if e != nil {
+		return Investigation{}, e
+	}
+	index := -1
+	for i := range v.Attempts {
+		if v.Attempts[i].ID == attemptID {
+			index = i
+			break
+		}
+	}
+	if index < 0 || v.Attempts[index].RequestedBy != actor || v.Attempts[index].State != "running" || !attemptClassification(completed.Classification) {
+		return Investigation{}, ErrConflict
+	}
+	reserved := v.Attempts[index]
+	completed.ID, completed.RequestID, completed.RequestDigest, completed.RequestedBy, completed.CreatedAt = reserved.ID, reserved.RequestID, reserved.RequestDigest, reserved.RequestedBy, reserved.CreatedAt
+	completed.State = "completed"
+	if completed.CompletedAt.IsZero() {
+		completed.CompletedAt = s.now()
+	}
+	v.Attempts[index] = completed
+	v.History = append(v.History, Entry{ID: id(), Kind: "scenario_attempt", ActorID: actor, Message: "Historical comparison classified as " + completed.Classification, CreatedAt: completed.CompletedAt})
+	v.Version++
+	v.UpdatedAt = completed.CompletedAt
 	return v, s.write(v)
 }
 func valid(v Investigation, actor string) bool {
