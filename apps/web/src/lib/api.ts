@@ -167,9 +167,36 @@ export type Incubator = {
     bootstrap_plan_id: string;
     journey: string;
     status: string;
-    participants: { principal_type: "human" | "agent"; principal_id: string; role: string }[];
-    work_items: { id: string; kind: "code" | "tests" | "documentation" | "infrastructure" | "interface"; title: string; repository_id: string; base_revision: string; owner_type: "human" | "agent"; owner_id: string; dependency_ids: string[]; acceptance_criteria: string[]; integration_order: number }[];
-    reports: { id: string; work_item_id?: string; kind: string; repository_id?: string; resource_id?: string; revision?: string; summary: string; cost_cents?: number; actor_type: string; actor_id: string; created_at: string }[];
+    participants: {
+      principal_type: "human" | "agent";
+      principal_id: string;
+      role: string;
+    }[];
+    work_items: {
+      id: string;
+      kind: "code" | "tests" | "documentation" | "infrastructure" | "interface";
+      title: string;
+      repository_id: string;
+      base_revision: string;
+      owner_type: "human" | "agent";
+      owner_id: string;
+      dependency_ids: string[];
+      acceptance_criteria: string[];
+      integration_order: number;
+    }[];
+    reports: {
+      id: string;
+      work_item_id?: string;
+      kind: string;
+      repository_id?: string;
+      resource_id?: string;
+      revision?: string;
+      summary: string;
+      cost_cents?: number;
+      actor_type: string;
+      actor_id: string;
+      created_at: string;
+    }[];
   }[];
   launch_readiness: {
     id: string;
@@ -180,16 +207,83 @@ export type Incubator = {
     effective_audience: "experimental" | "limited" | "public";
     ready: boolean;
     blockers: string[];
-    evidence: { dimension: string; owner_id: string; summary: string; reference: string; status: "current" | "missing" | "unsafe" | "unsupported" | "failed" | "stale"; risk?: string }[];
-    decisions: { dimension: string; owner_id: string; kind: "accepted" | "exception"; rationale: string; follow_up_work?: string; expires_at?: string; created_at: string }[];
+    evidence: {
+      dimension: string;
+      owner_id: string;
+      summary: string;
+      reference: string;
+      status:
+        "current" | "missing" | "unsafe" | "unsupported" | "failed" | "stale";
+      risk?: string;
+    }[];
+    decisions: {
+      dimension: string;
+      owner_id: string;
+      kind: "accepted" | "exception";
+      rationale: string;
+      follow_up_work?: string;
+      expires_at?: string;
+      created_at: string;
+    }[];
   }[];
   project_launches: {
-    id: string; version: number; readiness_id: string; audience: "experimental" | "limited" | "public";
-    artifacts: { kind: "release" | "documentation" | "package" | "api_contract" | "contributor_opportunity" | "environment"; repository_id?: string; resource_id: string; revision?: string; audience: string }[];
-    observations: { id: string; kind: "adoption" | "support" | "reliability" | "cost" | "success_measure" | "feedback"; repository_id?: string; resource_id: string; summary: string; actor_type: string; actor_id: string; created_at: string }[];
-    work: { id: string; kind: "roadmap_revision" | "proposal_task"; repository_id: string; resource_id: string; owner_type: "human" | "agent"; owner_id: string; rationale: string; created_by: string; created_at: string }[];
-    transition?: { disposition: "organization_initiative" | "experimental" | "merged" | "archived"; target_resource_id?: string; rationale: string; resolved_resources: string[]; resolved_obligations: string[]; decided_by: string; decided_at: string };
-    published_by: string; published_at: string; updated_at: string;
+    id: string;
+    version: number;
+    readiness_id: string;
+    audience: "experimental" | "limited" | "public";
+    artifacts: {
+      kind:
+        | "release"
+        | "documentation"
+        | "package"
+        | "api_contract"
+        | "contributor_opportunity"
+        | "environment";
+      repository_id?: string;
+      resource_id: string;
+      revision?: string;
+      audience: string;
+    }[];
+    observations: {
+      id: string;
+      kind:
+        | "adoption"
+        | "support"
+        | "reliability"
+        | "cost"
+        | "success_measure"
+        | "feedback";
+      repository_id?: string;
+      resource_id: string;
+      summary: string;
+      actor_type: string;
+      actor_id: string;
+      created_at: string;
+    }[];
+    work: {
+      id: string;
+      kind: "roadmap_revision" | "proposal_task";
+      repository_id: string;
+      resource_id: string;
+      owner_type: "human" | "agent";
+      owner_id: string;
+      rationale: string;
+      created_by: string;
+      created_at: string;
+    }[];
+    transition?: {
+      disposition:
+        "organization_initiative" | "experimental" | "merged" | "archived";
+      target_resource_id?: string;
+      rationale: string;
+      resolved_resources: string[];
+      resolved_obligations: string[];
+      decided_by: string;
+      decided_at: string;
+    };
+    published_by: string;
+    published_at: string;
+    updated_at: string;
   }[];
   durability_uncertain: boolean;
   created_by: string;
@@ -1335,18 +1429,20 @@ export type ImpactAssessment = {
     created_at: string;
   };
 };
+export type ConflictCitation = {
+  side: "base" | "source" | "target" | "proposed";
+  revision: string;
+  path: string;
+  evidence_id?: string;
+};
+export type ConflictAuthorship = { actor_id: string; agent_id?: string };
 export type DevelopmentWorkspace = {
   id: string;
   repository_id: string;
   commit_id: string;
   creator_id: string;
   state:
-    | "provisioning"
-    | "running"
-    | "suspended"
-    | "failed"
-    | "stopped"
-    | "expired";
+    "provisioning" | "running" | "suspended" | "failed" | "stopped" | "expired";
   definition_sha256: string;
   created_at: string;
   updated_at: string;
@@ -1373,15 +1469,68 @@ export type DevelopmentWorkspace = {
     conflict_launch_id?: string;
   };
   conflict_context?: {
+    version: number;
     pull_request_id: string;
     candidate_id?: string;
     base_commit_id: string;
     source: { branch: string; commit_id: string; owner_ids: string[] };
     target: { branch: string; commit_id: string; owner_ids: string[] };
-    files: { path: string; kinds: string[]; symbols: string[]; source_change: string; target_change: string }[];
+    files: {
+      path: string;
+      kinds: string[];
+      symbols: string[];
+      source_change: string;
+      target_change: string;
+    }[];
     affected_checks: string[];
     incomplete: string[];
-    publication_targets: { repository_id: string; branch: string; revision: string; authority: string }[];
+    publication_targets: {
+      repository_id: string;
+      branch: string;
+      revision: string;
+      authority: string;
+    }[];
+    questions: {
+      id: string;
+      body: string;
+      uncertainty: string;
+      citations: ConflictCitation[];
+      authorship: ConflictAuthorship;
+      created_at: string;
+      answer?: {
+        body: string;
+        uncertainty: string;
+        citations: ConflictCitation[];
+        authorship: ConflictAuthorship;
+        created_at: string;
+      };
+    }[];
+    resolutions: {
+      id: string;
+      path: string;
+      summary: string;
+      proposed_content: string;
+      expected_sha256: string;
+      applied_sha256?: string;
+      state: "proposed" | "applying" | "applied" | "undoing" | "undone";
+      uncertainty: string;
+      preservation: {
+        kind:
+          | "acceptance_criterion"
+          | "design_decision"
+          | "migration"
+          | "user_behavior";
+        reference: string;
+        disposition: "preserved" | "intentionally_changed";
+        rationale: string;
+        citations: ConflictCitation[];
+      }[];
+      authorship: ConflictAuthorship;
+      applied_by?: ConflictAuthorship;
+      created_at: string;
+      applied_at?: string;
+      undone_at?: string;
+    }[];
   };
   participants?: {
     principal_kind: "human" | "approved_agent";
@@ -1922,10 +2071,7 @@ export type OrganizationAgentProfile = {
   model_provenance: string;
   execution_provenance: string;
   deployment_boundaries: (
-    | "platform"
-    | "operator_managed"
-    | "customer_managed"
-    | "external_service"
+    "platform" | "operator_managed" | "customer_managed" | "external_service"
   )[];
   data_use: string;
   retention: string;
@@ -2413,11 +2559,7 @@ export type EvolutionPlan = {
       migration_task_ids: Record<string, string>;
       environment_ids?: Record<string, string>;
       state?:
-        | "blocked"
-        | "awaiting_approval"
-        | "ready"
-        | "paused"
-        | "completed";
+        "blocked" | "awaiting_approval" | "ready" | "paused" | "completed";
       next_action?: string;
     }[];
     outcomes: {
@@ -2670,12 +2812,7 @@ export type RecoveryOperation = {
         evidence: { kind: string; resource_id: string; sha256: string };
       }[];
       status:
-        | "pending"
-        | "paused"
-        | "running"
-        | "validated"
-        | "failed"
-        | "blocked";
+        "pending" | "paused" | "running" | "validated" | "failed" | "blocked";
       message?: string;
       updated_by?: string;
       updated_at?: string;
@@ -2920,12 +3057,7 @@ export type SecurityAdvisory = {
   evidence: {
     id?: string;
     kind?:
-      | "commit"
-      | "dependency"
-      | "build"
-      | "artifact"
-      | "release"
-      | "deployment";
+      "commit" | "dependency" | "build" | "artifact" | "release" | "deployment";
     repository_id?: string;
     commit_id?: string;
     release_id?: string;
@@ -2942,11 +3074,7 @@ export type SecurityAdvisory = {
   response_team: string[];
   severity: "untriaged" | "low" | "moderate" | "high" | "critical";
   embargo_state:
-    | "reported"
-    | "triaging"
-    | "embargoed"
-    | "coordinating"
-    | "disclosed";
+    "reported" | "triaging" | "embargoed" | "coordinating" | "disclosed";
   messages: {
     id: string;
     actor_id: string;
@@ -3105,12 +3233,7 @@ export type IncidentAction = {
   deployment_id: string;
   rationale: string;
   status:
-    | "proposed"
-    | "approved"
-    | "rejected"
-    | "executing"
-    | "failed"
-    | "recovered";
+    "proposed" | "approved" | "rejected" | "executing" | "failed" | "recovered";
   proposed_by: string;
   evidence: IncidentEvidence[];
   health_criteria: { stage: string; signal: string }[];
@@ -3642,12 +3765,7 @@ export type MergeReadiness = {
       kind: "automated_check" | "scenario" | "acknowledgement" | "barrier";
       name: string;
       status:
-        | "missing"
-        | "stale"
-        | "pending"
-        | "unevaluated"
-        | "failed"
-        | "passed";
+        "missing" | "stale" | "pending" | "unevaluated" | "failed" | "passed";
       message: string;
     }[];
     active_exceptions: {
@@ -3749,7 +3867,12 @@ export type ConflictAnalysis = {
     detector: string;
     explanation: string;
   }[];
-  affected_checks: { name: string; status: string; commit_id?: string; run_id?: string }[];
+  affected_checks: {
+    name: string;
+    status: string;
+    commit_id?: string;
+    run_id?: string;
+  }[];
 };
 export type ConflictAnalysisSide = {
   branch: string;
@@ -4022,11 +4145,7 @@ export type ActivityEvent = {
   repository_id: string;
   repository_name: string;
   resource_type:
-    | "proposal"
-    | "pull_request"
-    | "repository"
-    | "deployment"
-    | "incident";
+    "proposal" | "pull_request" | "repository" | "deployment" | "incident";
   resource_id: string;
   resource_title: string;
   target_user_id: string | null;

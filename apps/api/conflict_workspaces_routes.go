@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"net/http"
 	"os"
@@ -8,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
@@ -224,6 +227,244 @@ func registerConflictWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, cat
 		}
 		writeJSON(w, 200, updated)
 	})
+
+	mux.HandleFunc("GET /workspaces/{workspace_id}/conflict-comparison", func(w http.ResponseWriter, r *http.Request) {
+		item, actor, ok := authorizeRunningWorkspace(w, r, workspaceStore, catalog, authStore, "repositories:read")
+		if !ok {
+			return
+		}
+		pathValue := strings.TrimSpace(r.URL.Query().Get("path"))
+		if !conflictPath(item, pathValue) {
+			writeAPIError(w, 422, "conflict_path_invalid", "path must name a file retained in the immutable conflict evidence")
+			return
+		}
+		type side struct {
+			Revision string `json:"revision"`
+			Content  string `json:"content"`
+			SHA256   string `json:"sha256"`
+			Missing  bool   `json:"missing"`
+		}
+		readGit := func(revision string) side {
+			out, err := workspaceAuthorizedExec(catalog, item, actor, false, 10*time.Second, "/workspace", nil, "git", "show", revision+":"+pathValue)
+			if err != nil {
+				return side{Revision: revision, Missing: true}
+			}
+			if len(out) > workspaceOutputLimit {
+				return side{Revision: revision, Missing: true}
+			}
+			digest := sha256.Sum256(out)
+			return side{Revision: revision, Content: string(out), SHA256: hex.EncodeToString(digest[:])}
+		}
+		proposedBytes, proposedErr := workspaceAuthorizedExec(catalog, item, actor, false, 10*time.Second, "/workspace", nil, "sh", "-c", "test -f \"$1\" && test ! -L \"$1\" && cat -- \"$1\"", "sh", pathValue)
+		proposed := side{Revision: "workspace:" + item.ID, Missing: proposedErr != nil}
+		if proposedErr == nil && len(proposedBytes) <= workspaceOutputLimit {
+			digest := sha256.Sum256(proposedBytes)
+			proposed.Content, proposed.SHA256 = string(proposedBytes), hex.EncodeToString(digest[:])
+		} else if len(proposedBytes) > workspaceOutputLimit {
+			proposed.Missing = true
+		}
+		writeJSON(w, 200, map[string]any{"path": pathValue, "base": readGit(item.ConflictContext.BaseCommitID), "source": readGit(item.ConflictContext.Source.CommitID), "target": readGit(item.ConflictContext.Target.CommitID), "proposed": proposed})
+	})
+
+	mux.HandleFunc("POST /workspaces/{workspace_id}/conflict-questions", func(w http.ResponseWriter, r *http.Request) {
+		item, actor, ok := authorizeWorkspace(w, r, workspaceStore, catalog, authStore, "repositories:read")
+		if !ok {
+			return
+		}
+		var in struct {
+			ExpectedVersion int                           `json:"expected_version"`
+			Body            string                        `json:"body"`
+			Uncertainty     string                        `json:"uncertainty"`
+			Citations       []workspaces.ConflictCitation `json:"citations"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		if !validConflictStatement(item, in.Body, in.Uncertainty, in.Citations) {
+			writeAPIError(w, 422, "conflict_question_invalid", "question, uncertainty, and one to ten exact conflict citations are required")
+			return
+		}
+		updated, err := workspaceStore.AddConflictQuestion(item.ID, in.ExpectedVersion, workspaces.ConflictQuestion{Body: strings.TrimSpace(in.Body), Uncertainty: strings.TrimSpace(in.Uncertainty), Citations: in.Citations, Authorship: conflictAuthorship(actor)})
+		writeConflictMutation(w, updated, err)
+	})
+
+	mux.HandleFunc("POST /workspaces/{workspace_id}/conflict-questions/{question_id}/answer", func(w http.ResponseWriter, r *http.Request) {
+		item, actor, ok := authorizeWorkspace(w, r, workspaceStore, catalog, authStore, "repositories:read")
+		if !ok {
+			return
+		}
+		var in struct {
+			ExpectedVersion int                           `json:"expected_version"`
+			Body            string                        `json:"body"`
+			Uncertainty     string                        `json:"uncertainty"`
+			Citations       []workspaces.ConflictCitation `json:"citations"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		if !validConflictStatement(item, in.Body, in.Uncertainty, in.Citations) {
+			writeAPIError(w, 422, "conflict_answer_invalid", "answer, uncertainty, and one to ten exact conflict citations are required")
+			return
+		}
+		updated, err := workspaceStore.AnswerConflictQuestion(item.ID, r.PathValue("question_id"), in.ExpectedVersion, workspaces.ConflictAnswer{Body: strings.TrimSpace(in.Body), Uncertainty: strings.TrimSpace(in.Uncertainty), Citations: in.Citations, Authorship: conflictAuthorship(actor)})
+		writeConflictMutation(w, updated, err)
+	})
+
+	mux.HandleFunc("POST /workspaces/{workspace_id}/conflict-resolutions", func(w http.ResponseWriter, r *http.Request) {
+		item, actor, ok := authorizeWorkspace(w, r, workspaceStore, catalog, authStore, "repositories:write")
+		if !ok {
+			return
+		}
+		var in struct {
+			ExpectedVersion int                               `json:"expected_version"`
+			Path            string                            `json:"path"`
+			Summary         string                            `json:"summary"`
+			ProposedContent string                            `json:"proposed_content"`
+			ExpectedSHA256  string                            `json:"expected_sha256"`
+			Uncertainty     string                            `json:"uncertainty"`
+			Preservation    []workspaces.ConflictPreservation `json:"preservation"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		if !conflictPath(item, in.Path) || strings.TrimSpace(in.Summary) == "" || len(in.Summary) > 1000 || len(in.ProposedContent) > workspaceOutputLimit || !validWorkspaceDigest(in.ExpectedSHA256) || strings.TrimSpace(in.Uncertainty) == "" || len(in.Uncertainty) > 1000 || !validPreservation(item, in.Preservation) {
+			writeAPIError(w, 422, "conflict_resolution_invalid", "resolution must be bounded, target retained evidence, state uncertainty, and explain at least one preserved or intentionally changed outcome")
+			return
+		}
+		updated, err := workspaceStore.AddConflictResolution(item.ID, in.ExpectedVersion, workspaces.ConflictResolution{Path: in.Path, Summary: strings.TrimSpace(in.Summary), ProposedContent: in.ProposedContent, ExpectedSHA256: in.ExpectedSHA256, Uncertainty: strings.TrimSpace(in.Uncertainty), Preservation: in.Preservation, Authorship: conflictAuthorship(actor)})
+		writeConflictMutation(w, updated, err)
+	})
+
+	mux.HandleFunc("POST /workspaces/{workspace_id}/conflict-resolutions/{resolution_id}/{action}", func(w http.ResponseWriter, r *http.Request) {
+		item, actor, ok := authorizeRunningWorkspace(w, r, workspaceStore, catalog, authStore, "repositories:write")
+		if !ok {
+			return
+		}
+		var in struct {
+			ExpectedVersion int `json:"expected_version"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		var resolution *workspaces.ConflictResolution
+		for i := range item.ConflictContext.Resolutions {
+			if item.ConflictContext.Resolutions[i].ID == r.PathValue("resolution_id") {
+				resolution = &item.ConflictContext.Resolutions[i]
+			}
+		}
+		applying := r.PathValue("action") == "apply"
+		validApplyState := applying && slices.Contains([]string{"proposed", "applying", "applied"}, resolutionState(resolution))
+		validUndoState := !applying && r.PathValue("action") == "undo" && slices.Contains([]string{"applied", "undoing", "undone"}, resolutionState(resolution))
+		if resolution == nil || (!validApplyState && !validUndoState) {
+			writeAPIError(w, 422, "conflict_resolution_action_invalid", "resolution is not in a state that permits this action")
+			return
+		}
+		name, valid := workspaceFilePath(w, resolution.Path)
+		if !valid {
+			return
+		}
+		inspect := func(current workspaces.Workspace, retained workspaces.ConflictResolution) (string, string, error) {
+			previous, readErr := workspaceAuthorizedExec(catalog, current, actor, false, 10*time.Second, "/workspace", nil, "sh", "-c", "test -f \"$1\" && test ! -L \"$1\" && cat -- \"$1\"", "sh", retained.Path)
+			if readErr != nil {
+				return "", "", readErr
+			}
+			digest := sha256.Sum256(previous)
+			return string(previous), hex.EncodeToString(digest[:]), nil
+		}
+		mutate := func(current workspaces.Workspace, retained workspaces.ConflictResolution, content, expected string) error {
+			_, writeErr := workspaceAuthorizedExec(catalog, current, actor, true, 10*time.Second, filepath.Dir(name), strings.NewReader(content), "sh", "-c", workspaceFileWriteScript, "sh", filepath.Base(name), expected)
+			return writeErr
+		}
+		updated, err := workspaceStore.ActConflictResolution(item.ID, resolution.ID, in.ExpectedVersion, applying, workspacePrincipal(actor), conflictAuthorship(actor), inspect, mutate)
+		if errors.Is(err, workspaces.ErrControl) {
+			writeAPIError(w, 409, "workspace_control_required", "live file control is held by another participant or has expired")
+			return
+		}
+		if errors.Is(err, workspaces.ErrConflict) {
+			writeAPIError(w, 409, "conflict_resolution_changed", "proposed file changed; compare all four versions before retrying")
+			return
+		}
+		if err != nil {
+			writeAPIError(w, 503, "conflict_resolution_pending", "resolution execution was interrupted; refresh and retry the visible pending action to reconcile it")
+			return
+		}
+		writeConflictMutation(w, updated, err)
+	})
+}
+
+func resolutionState(resolution *workspaces.ConflictResolution) string {
+	if resolution == nil {
+		return ""
+	}
+	return resolution.State
+}
+
+func conflictAuthorship(actor auth.Credential) workspaces.ConflictAuthorship {
+	return workspaces.ConflictAuthorship{ActorID: actor.UserID, AgentID: actor.AgentID}
+}
+func conflictPath(item workspaces.Workspace, candidate string) bool {
+	if item.ConflictContext == nil || candidate == "" {
+		return false
+	}
+	for _, file := range item.ConflictContext.Files {
+		if file.Path == candidate {
+			return true
+		}
+	}
+	return false
+}
+func validConflictStatement(item workspaces.Workspace, body, uncertainty string, citations []workspaces.ConflictCitation) bool {
+	if strings.TrimSpace(body) == "" || len(body) > 2000 || strings.TrimSpace(uncertainty) == "" || len(uncertainty) > 1000 || len(citations) < 1 || len(citations) > 10 {
+		return false
+	}
+	for _, citation := range citations {
+		if !validConflictCitation(item, citation) {
+			return false
+		}
+	}
+	return true
+}
+func validConflictCitation(item workspaces.Workspace, citation workspaces.ConflictCitation) bool {
+	if !conflictPath(item, citation.Path) {
+		return false
+	}
+	expected := map[string]string{"base": item.ConflictContext.BaseCommitID, "source": item.ConflictContext.Source.CommitID, "target": item.ConflictContext.Target.CommitID, "proposed": "workspace:" + item.ID}[citation.Side]
+	return expected != "" && citation.Revision == expected && len(citation.EvidenceID) <= 200
+}
+func validPreservation(item workspaces.Workspace, records []workspaces.ConflictPreservation) bool {
+	if len(records) < 1 || len(records) > 20 {
+		return false
+	}
+	for _, record := range records {
+		if !slices.Contains([]string{"acceptance_criterion", "design_decision", "migration", "user_behavior"}, record.Kind) || !slices.Contains([]string{"preserved", "intentionally_changed"}, record.Disposition) || strings.TrimSpace(record.Reference) == "" || len(record.Reference) > 500 || strings.TrimSpace(record.Rationale) == "" || len(record.Rationale) > 1000 || len(record.Citations) < 1 || len(record.Citations) > 10 {
+			return false
+		}
+		for _, citation := range record.Citations {
+			if !validConflictCitation(item, citation) {
+				return false
+			}
+		}
+	}
+	return true
+}
+func writeConflictMutation(w http.ResponseWriter, item workspaces.Workspace, err error) {
+	if errors.Is(err, workspaces.ErrConflict) {
+		writeAPIError(w, 409, "conflict_workspace_changed", "meaning ledger changed; refresh before retrying")
+		return
+	}
+	if errors.Is(err, workspaces.ErrInvalid) {
+		writeAPIError(w, 422, "conflict_record_invalid", "the referenced conflict record is unavailable or already complete")
+		return
+	}
+	if err != nil {
+		writeAPIError(w, 500, "conflict_record_failed", "conflict record could not be saved")
+		return
+	}
+	writeJSON(w, 200, item)
 }
 
 func stageConflictHistories(repositoryPath, workspaceID, source, target string) error {

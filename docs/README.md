@@ -2801,6 +2801,23 @@ The frozen publication targets explain that source- and target-branch changes st
 ordinary repository permissions, review, checks, and merge controls. The reconciliation workspace
 therefore shares context and isolated compute without transferring either side's Git authority.
 
+Inside it, `GET /workspaces/{workspace_id}/conflict-comparison?path=...` returns one retained
+overlap at the exact merge base, source, target, and current proposed checkout, including bounded
+contents and SHA-256 identities. Participants append compare-and-swap revision-grounded questions
+and answers through `/conflict-questions`; each statement carries residual uncertainty and exact
+side/revision/path citations. They propose resolutions through `/conflict-resolutions`, recording
+whether named acceptance criteria, design decisions, migrations, and user behaviors are preserved
+or intentionally changed and why. A proposal does not edit code. Apply and undo require the active
+file-control lease and persist an intent before editing. If runtime execution or later persistence
+is interrupted, the visible `applying` or `undoing` state lets an identical retry compare the
+before and intended digests, finish only the missing work, and deduplicate change provenance.
+Human, agent, and operator attribution comes from the original retained intent.
+Finalization rechecks the running lifecycle and the original principal's live file-control lease;
+stop, suspension, expiry, takeover, release, or lease expiry leaves the action pending and appends
+no completion or change provenance. Every retry requires the exact control version frozen by the
+intent; reacquiring a newer lease under the same principal does not revive revoked authority.
+These records grant no merge, secret, environment, branch, review, check, or publication authority.
+
 An owner applies an accepted request through its merge endpoint. The operation
 rechecks readiness, materializes a two-parent merge commit through the storage
 boundary, and compare-and-swaps the live target reference. The durable pull

@@ -167,6 +167,206 @@ func TestConflictLaunchClaimReconcilesOneDurableWorkspace(t *testing.T) {
 	}
 }
 
+func TestConflictMeaningLedgerRetainsCASAuthorshipAndUndo(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := store.Create(Workspace{RepositoryID: "repo", CommitID: "target", CreatorID: "operator", ConflictContext: &ConflictContext{PullRequestID: "pull", BaseCommitID: "base", Files: []ConflictFileEvidence{{Path: "service.go"}}}}, []byte("definition"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	citation := ConflictCitation{Side: "source", Revision: "source", Path: "service.go"}
+	created, err = store.AddConflictQuestion(created.ID, 1, ConflictQuestion{Body: "Which retry remains intentional?", Uncertainty: "The migration note is incomplete.", Citations: []ConflictCitation{citation}, Authorship: ConflictAuthorship{ActorID: "operator", AgentID: "agent"}})
+	if err != nil || created.ConflictContext.Version != 2 || created.ConflictContext.Questions[0].Authorship.AgentID != "agent" {
+		t.Fatalf("question = %#v, %v", created.ConflictContext, err)
+	}
+	if _, err = store.AnswerConflictQuestion(created.ID, created.ConflictContext.Questions[0].ID, 1, ConflictAnswer{}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale answer = %v", err)
+	}
+	created, err = store.AnswerConflictQuestion(created.ID, created.ConflictContext.Questions[0].ID, 2, ConflictAnswer{Body: "Both retries remain.", Uncertainty: "Load behavior needs a check.", Citations: []ConflictCitation{citation}, Authorship: ConflictAuthorship{ActorID: "owner"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimeContent := "before"
+	created, err = store.AddConflictResolution(created.ID, 3, ConflictResolution{Path: "service.go", Summary: "Retain both retries", ProposedContent: "resolved", ExpectedSHA256: digestContent(runtimeContent), Preservation: []ConflictPreservation{{Kind: "user_behavior", Reference: "retry", Disposition: "preserved", Citations: []ConflictCitation{citation}}}, Authorship: ConflictAuthorship{ActorID: "operator", AgentID: "agent"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err = store.Complete(created.ID, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolution := created.ConflictContext.Resolutions[0]
+	inspect := func(Workspace, ConflictResolution) (string, string, error) {
+		return runtimeContent, digestContent(runtimeContent), nil
+	}
+	mutate := func(_ Workspace, _ ConflictResolution, content, _ string) error {
+		runtimeContent = content
+		return os.Chmod(filepath.Join(store.root, "provenance"), 0500)
+	}
+	if _, err = store.ActConflictResolution(created.ID, resolution.ID, 4, true, "operator", ConflictAuthorship{ActorID: "operator", AgentID: "agent"}, inspect, mutate); err == nil {
+		t.Fatal("apply unexpectedly finalized without durable provenance")
+	}
+	if chmodErr := os.Chmod(filepath.Join(store.root, "provenance"), 0700); chmodErr != nil {
+		t.Fatal(chmodErr)
+	}
+	pending, _ := store.Get(created.ID)
+	if pending.ConflictContext.Resolutions[0].State != "applying" || runtimeContent != "resolved" {
+		t.Fatalf("recoverable apply = %s / %q", pending.ConflictContext.Resolutions[0].State, runtimeContent)
+	}
+	created, err = store.ActConflictResolution(created.ID, resolution.ID, 4, true, "operator", ConflictAuthorship{ActorID: "different retry"}, inspect, func(Workspace, ConflictResolution, string, string) error {
+		t.Fatal("reconciled apply repeated runtime edit")
+		return nil
+	})
+	if err != nil || created.ConflictContext.Resolutions[0].State != "applied" || created.ConflictContext.Resolutions[0].PreviousContent != "before" {
+		t.Fatalf("apply = %#v, %v", created.ConflictContext.Resolutions[0], err)
+	}
+	mutate = func(_ Workspace, _ ConflictResolution, content, _ string) error {
+		runtimeContent = content
+		return os.Chmod(store.root, 0500)
+	}
+	_, err = store.ActConflictResolution(created.ID, resolution.ID, 6, false, "operator", ConflictAuthorship{ActorID: "operator"}, inspect, mutate)
+	if err == nil {
+		t.Fatal("undo finalization unexpectedly survived unwritable workspace store")
+	}
+	if chmodErr := os.Chmod(store.root, 0700); chmodErr != nil {
+		t.Fatal(chmodErr)
+	}
+	pending, _ = store.Get(created.ID)
+	if pending.ConflictContext.Resolutions[0].State != "undoing" || runtimeContent != "before" {
+		t.Fatalf("recoverable undo = %s / %q", pending.ConflictContext.Resolutions[0].State, runtimeContent)
+	}
+	created, err = store.ActConflictResolution(created.ID, resolution.ID, 6, false, "operator", ConflictAuthorship{ActorID: "different retry"}, inspect, func(Workspace, ConflictResolution, string, string) error {
+		t.Fatal("reconciled undo repeated runtime edit")
+		return nil
+	})
+	if err != nil || created.ConflictContext.Resolutions[0].State != "undone" {
+		t.Fatalf("undo = %#v, %v", created.ConflictContext.Resolutions[0], err)
+	}
+	if len(created.Changes) != 2 || created.Changes[0].SHA256 != digestContent("resolved") || created.Changes[1].SHA256 != digestContent("before") {
+		t.Fatalf("resolution provenance = %#v", created.Changes)
+	}
+}
+
+func TestConflictResolutionDoesNotFinalizeAfterLifecycleRevokesControl(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := store.Create(Workspace{RepositoryID: "repo", CommitID: "target", CreatorID: "operator", ConflictContext: &ConflictContext{PullRequestID: "pull", Files: []ConflictFileEvidence{{Path: "conflict.txt"}}}}, []byte("definition"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err = store.Complete(created.ID, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimeContent := "before"
+	created, err = store.AddConflictResolution(created.ID, 1, ConflictResolution{Path: "conflict.txt", Summary: "resolve", ProposedContent: "resolved", ExpectedSHA256: digestContent(runtimeContent), Authorship: ConflictAuthorship{ActorID: "operator"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolution := created.ConflictContext.Resolutions[0]
+	inspect := func(Workspace, ConflictResolution) (string, string, error) {
+		return runtimeContent, digestContent(runtimeContent), nil
+	}
+	mutate := func(_ Workspace, _ ConflictResolution, content, _ string) error {
+		runtimeContent = content
+		_, stopErr := store.Stop(created.ID, "owner", "revoked during edit", "stopped")
+		return stopErr
+	}
+	if _, err = store.ActConflictResolution(created.ID, resolution.ID, 2, true, "operator", ConflictAuthorship{ActorID: "operator"}, inspect, mutate); !errors.Is(err, ErrControl) {
+		t.Fatalf("revoked finalization = %v", err)
+	}
+	durable, err := store.Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if durable.State != "stopped" || durable.ConflictContext.Resolutions[0].State != "applying" || durable.ConflictContext.Resolutions[0].PendingAction.PrincipalID != "operator" || len(durable.Changes) != 0 || runtimeContent != "resolved" {
+		t.Fatalf("revoked action finalized: state=%s resolution=%s changes=%d runtime=%q", durable.State, durable.ConflictContext.Resolutions[0].State, len(durable.Changes), runtimeContent)
+	}
+	provenance, err := store.readProvenance(created.ID)
+	if err != nil || len(provenance.Changes) != 0 {
+		t.Fatalf("revoked provenance = %#v, %v", provenance.Changes, err)
+	}
+}
+
+func TestPendingConflictResolutionRejectsFreshLeaseForSamePrincipal(t *testing.T) {
+	for _, action := range []string{"apply", "undo"} {
+		t.Run(action, func(t *testing.T) {
+			store, err := New(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			created, err := store.Create(Workspace{RepositoryID: "repo", CommitID: "target", CreatorID: "operator", ConflictContext: &ConflictContext{PullRequestID: "pull", Files: []ConflictFileEvidence{{Path: "conflict.txt"}}}}, []byte("definition"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			created, err = store.Complete(created.ID, nil, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			runtimeContent := "before"
+			created, err = store.AddConflictResolution(created.ID, 1, ConflictResolution{Path: "conflict.txt", Summary: "resolve", ProposedContent: "resolved", ExpectedSHA256: digestContent(runtimeContent), Authorship: ConflictAuthorship{ActorID: "operator"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			resolution := created.ConflictContext.Resolutions[0]
+			inspect := func(Workspace, ConflictResolution) (string, string, error) {
+				return runtimeContent, digestContent(runtimeContent), nil
+			}
+			mutate := func(_ Workspace, _ ConflictResolution, content, _ string) error { runtimeContent = content; return nil }
+			expected, applying := 2, true
+			if action == "undo" {
+				created, err = store.ActConflictResolution(created.ID, resolution.ID, expected, true, "operator", ConflictAuthorship{ActorID: "operator"}, inspect, mutate)
+				if err != nil {
+					t.Fatal(err)
+				}
+				expected, applying = created.ConflictContext.Version, false
+			}
+			interrupted := func(_ Workspace, _ ConflictResolution, content, _ string) error {
+				runtimeContent = content
+				return errors.New("executor disconnected after edit")
+			}
+			if _, err = store.ActConflictResolution(created.ID, resolution.ID, expected, applying, "operator", ConflictAuthorship{ActorID: "operator"}, inspect, interrupted); err == nil {
+				t.Fatal("interrupted action finalized")
+			}
+			pending, err := store.Get(created.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			originalControlVersion := pending.ConflictContext.Resolutions[0].PendingAction.ControlVersion
+			released, err := store.ReleaseControl(created.ID, "operator", pending.Control.Version)
+			if err != nil {
+				t.Fatal(err)
+			}
+			regained, err := store.SetControl(created.ID, "operator", "human", "operator", "edit", []string{"files"}, released.Control.Version, 300)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if regained.Control.Version == originalControlVersion {
+				t.Fatal("test did not replace the lease")
+			}
+			beforeChanges := len(regained.Changes)
+			if _, err = store.ActConflictResolution(created.ID, resolution.ID, expected, applying, "operator", ConflictAuthorship{ActorID: "operator"}, inspect, func(Workspace, ConflictResolution, string, string) error {
+				t.Fatal("stale pending action repeated runtime edit")
+				return nil
+			}); !errors.Is(err, ErrControl) {
+				t.Fatalf("fresh same-principal lease finalized %s: %v", action, err)
+			}
+			durable, err := store.Get(created.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantState := map[bool]string{true: "applying", false: "undoing"}[applying]
+			if durable.ConflictContext.Resolutions[0].State != wantState || len(durable.Changes) != beforeChanges {
+				t.Fatalf("stale lease changed ledger: state=%s changes=%d", durable.ConflictContext.Resolutions[0].State, len(durable.Changes))
+			}
+		})
+	}
+}
+
 func TestControlTransferWaitsForAdmittedMutationAndRejectsStaleActor(t *testing.T) {
 	store, _ := New(t.TempDir())
 	creator := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
