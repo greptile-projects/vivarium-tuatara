@@ -33,6 +33,37 @@ subscriptions, stages, authority preview, actor, and time beneath `$COLLABORATIO
 execute actions, grant agent or repository authority, or bypass runtime, secret, review, release, or
 deployment controls.
 
+Authorized repository event dispatchers create durable runs at
+`/{workflow_id}/executions` with a caller-stable event ID, the selected immutable workflow version,
+authenticated actor, occurrence time, declared trigger inputs, and exact resource commits that still
+resolve from ordinary branches. Identical delivery retries reconcile to the same run; changed reuse is
+a conflict. A workflow admits one active run and at most 60 starts per hour. Execution records freeze the
+reviewed source, action budget, step attempts, output provenance, interruption or cancellation reason,
+and terminal state.
+
+Current step owners claim only dependency-ready work with the execution CAS version. A claim returns a
+random, one-step capability that expires at the reviewed timeout and contains only that invocation's
+declared authority plus event or successful predecessor outputs named by the step input mapping. The
+ledger persists only its digest. Completion requires that capability, accounts actions against both
+step and workflow ceilings, rejects undeclared or credential-shaped outputs, and never forwards hidden
+event context. Failed or expired attempts remain visible and may be reclaimed only within the reviewed
+retry bound; cancellation revokes outstanding capabilities deterministically. The capability authorizes
+workflow bookkeeping only: invoked platform, repository, organization, agent, embargo, environment,
+approval, review, release, and deployment operations still apply their own current policy.
+Pull-trigger dispatch specifically binds the declared `pull_id` input to a same-repository pull and
+requires its `pull_id` resource revision to equal the server-resolved current source commit; omitted,
+invented, unreachable, and mismatched provenance is rejected. Successful completion retains a digest
+of the exact token and result request, so a retry after an ambiguous rename, directory-sync, or response
+failure returns the already committed execution without double-accounting. When one parallel step
+exhausts its attempts, terminal publication cancels and clears every sibling lease in the same atomic
+record.
+The dispatch request itself contains only a workflow version and server-issued activity delivery ID.
+Immutable pull-created, pull-synchronized, and pull-merged deliveries retain their platform actor,
+time, resource identity, and exact source revision. The workflow runtime maps those records to reviewed
+trigger names and derives every `TriggerEvent` field server-side; arbitrary participant-supplied event
+IDs, names, times, actors, inputs, revisions, cross-repository deliveries, unsupported event kinds, and
+deliveries made stale by pull movement all fail closed.
+
 ## Evidence-backed software adoption
 
 Authenticated collaborators use `/adoption-workspaces` or the web adoption workspace to ask whether

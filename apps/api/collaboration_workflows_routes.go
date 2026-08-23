@@ -11,9 +11,11 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/activities"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/agentprojects"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/collaborationworkflows"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 )
@@ -27,7 +29,7 @@ type collaborationWorkflowSourceInput struct {
 
 var exactCommit = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
-func registerCollaborationWorkflowRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, workflows *collaborationworkflows.Store, agents *agentprojects.Store) {
+func registerCollaborationWorkflowRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, workflows *collaborationworkflows.Store, agents *agentprojects.Store, pulls *pullrequests.Store, deliveries *activities.Store) {
 	mux.HandleFunc("GET /repositories/{id}/collaboration-workflows", func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id")); !ok {
 			return
@@ -126,6 +128,212 @@ func registerCollaborationWorkflowRoutes(mux *http.ServeMux, git *storage.Store,
 	mux.HandleFunc("POST /repositories/{id}/collaboration-workflows/preview", handle(false, false))
 	mux.HandleFunc("POST /repositories/{id}/collaboration-workflows", handle(true, false))
 	mux.HandleFunc("POST /repositories/{id}/collaboration-workflows/{workflow_id}/revisions", handle(true, true))
+
+	type startInput struct {
+		DeliveryID      string `json:"delivery_id"`
+		WorkflowVersion int    `json:"workflow_version"`
+	}
+	mux.HandleFunc("POST /repositories/{id}/collaboration-workflows/{workflow_id}/executions", func(w http.ResponseWriter, r *http.Request) {
+		_, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var in startInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "a revision-exact triggering event is required")
+			return
+		}
+		wf, err := workflows.Get(r.PathValue("workflow_id"))
+		if err != nil || wf.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "collaboration_workflow_not_found", "collaboration workflow not found")
+			return
+		}
+		if in.WorkflowVersion < 1 || in.WorkflowVersion != wf.CurrentVersion || in.WorkflowVersion > len(wf.Revisions) {
+			writeAPIError(w, 409, "stale_workflow_input", "workflow revision is no longer current")
+			return
+		}
+		event, ok := workflowEventFromDelivery(git, pulls, deliveries, r.PathValue("id"), in.DeliveryID)
+		if !ok {
+			writeAPIError(w, 409, "stale_workflow_input", "a trusted current repository event delivery is required")
+			return
+		}
+		out, err := workflows.StartExecution(wf.ID, in.WorkflowVersion, event)
+		writeWorkflowExecution(w, out, err, 201)
+	})
+	mux.HandleFunc("GET /repositories/{id}/collaboration-workflows/{workflow_id}/executions", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id")); !ok {
+			return
+		}
+		out, err := workflows.ListExecutions(r.PathValue("id"), r.PathValue("workflow_id"))
+		if err != nil {
+			writeAPIError(w, 500, "workflow_executions_unavailable", "executions could not be read")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"executions": out})
+	})
+	mux.HandleFunc("GET /repositories/{id}/collaboration-workflows/{workflow_id}/executions/{execution_id}", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id")); !ok {
+			return
+		}
+		out, err := workflows.GetExecution(r.PathValue("execution_id"))
+		if err != nil || out.RepositoryID != r.PathValue("id") || out.WorkflowID != r.PathValue("workflow_id") {
+			writeAPIError(w, 404, "workflow_execution_not_found", "workflow execution not found")
+			return
+		}
+		writeJSON(w, 200, out)
+	})
+	type claimInput struct {
+		ExpectedVersion int `json:"expected_version"`
+	}
+	mux.HandleFunc("POST /repositories/{id}/collaboration-workflows/{workflow_id}/executions/{execution_id}/steps/{step_id}/claim", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var in claimInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "expected execution version is required")
+			return
+		}
+		ex, err := workflows.GetExecution(r.PathValue("execution_id"))
+		if err != nil || ex.WorkflowID != r.PathValue("workflow_id") || ex.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "workflow_execution_not_found", "workflow execution not found")
+			return
+		}
+		wf, _ := workflows.Get(ex.WorkflowID)
+		stepOwner := false
+		if ex.WorkflowVersion > 0 && ex.WorkflowVersion <= len(wf.Revisions) {
+			for _, st := range wf.Revisions[ex.WorkflowVersion-1].Definition.Steps {
+				if st.ID == r.PathValue("step_id") {
+					for _, owner := range st.OwnerIDs {
+						if owner == actor.UserID {
+							stepOwner = true
+						}
+					}
+				}
+			}
+		}
+		out, err := workflows.ClaimStep(ex.ID, r.PathValue("step_id"), in.ExpectedVersion, stepOwner)
+		if err != nil {
+			writeWorkflowLeaseError(w, err)
+			return
+		}
+		writeJSON(w, 200, out)
+	})
+	type completeInput struct {
+		Token       string         `json:"token"`
+		Actions     int            `json:"actions"`
+		Outputs     map[string]any `json:"outputs"`
+		FailureCode string         `json:"failure_code"`
+	}
+	mux.HandleFunc("POST /repositories/{id}/collaboration-workflows/{workflow_id}/executions/{execution_id}/steps/{step_id}/complete", func(w http.ResponseWriter, r *http.Request) {
+		var in completeInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "the step credential and result are required")
+			return
+		}
+		ex, err := workflows.GetExecution(r.PathValue("execution_id"))
+		if err != nil || ex.WorkflowID != r.PathValue("workflow_id") || ex.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "workflow_execution_not_found", "workflow execution not found")
+			return
+		}
+		out, err := workflows.CompleteStep(ex.ID, r.PathValue("step_id"), in.Token, in.Actions, in.Outputs, in.FailureCode)
+		writeWorkflowExecution(w, out, err, 200)
+	})
+	type cancelInput struct {
+		Code string `json:"code"`
+	}
+	mux.HandleFunc("POST /repositories/{id}/collaboration-workflows/{workflow_id}/executions/{execution_id}/cancel", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write"); !ok {
+			return
+		}
+		var in cancelInput
+		if decodeJSON(r, &in) != nil || in.Code == "" {
+			writeAPIError(w, 400, "invalid_request", "a cancellation code is required")
+			return
+		}
+		ex, err := workflows.GetExecution(r.PathValue("execution_id"))
+		if err != nil || ex.WorkflowID != r.PathValue("workflow_id") || ex.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "workflow_execution_not_found", "workflow execution not found")
+			return
+		}
+		out, err := workflows.CancelExecution(ex.ID, in.Code)
+		writeWorkflowExecution(w, out, err, 200)
+	})
+}
+
+func workflowEventFromDelivery(git *storage.Store, pulls *pullrequests.Store, deliveries *activities.Store, repo, deliveryID string) (collaborationworkflows.TriggerEvent, bool) {
+	if deliveries == nil {
+		return collaborationworkflows.TriggerEvent{}, false
+	}
+	delivery, err := deliveries.Get(deliveryID)
+	if err != nil || delivery.RepositoryID != repo || delivery.ResourceType != "pull_request" || delivery.ResourceRevision == "" {
+		return collaborationworkflows.TriggerEvent{}, false
+	}
+	names := map[string]string{"pull_request.created": "pull.opened", "pull_request.synchronized": "pull.synchronized", "pull_request.merged": "pull.merged"}
+	name := names[delivery.Kind]
+	if name == "" || pulls == nil {
+		return collaborationworkflows.TriggerEvent{}, false
+	}
+	pull, err := pulls.Get(repo, delivery.ResourceID)
+	if err != nil || pull.SourceCommitID != delivery.ResourceRevision || !workflowCommitReachable(git, repo, delivery.ResourceRevision) {
+		return collaborationworkflows.TriggerEvent{}, false
+	}
+	return collaborationworkflows.TriggerEvent{ID: delivery.ID, Kind: "repository_event", Name: name, ActorID: delivery.ActorID, OccurredAt: delivery.CreatedAt, Inputs: map[string]any{"pull_id": delivery.ResourceID}, ResourceRevisions: map[string]string{"pull_id": delivery.ResourceRevision}}, true
+}
+
+func workflowCommitReachable(git *storage.Store, repo, revision string) bool {
+	if git == nil || !exactCommit.MatchString(revision) {
+		return false
+	}
+	r, err := git.Open(repo)
+	if err != nil {
+		return false
+	}
+	branches, err := exec.Command("git", "--git-dir="+r.Path(), "for-each-ref", "--format=%(refname)", "refs/heads").Output()
+	if err != nil {
+		return false
+	}
+	for _, branch := range strings.Fields(string(branches)) {
+		if strings.HasPrefix(branch, "refs/heads/vivarium-security/") {
+			continue
+		}
+		if exec.Command("git", "--git-dir="+r.Path(), "merge-base", "--is-ancestor", revision, branch).Run() == nil {
+			return true
+		}
+	}
+	return false
+}
+func writeWorkflowLeaseError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, collaborationworkflows.ErrNotFound):
+		writeAPIError(w, 404, "workflow_step_not_found", "workflow step not found")
+	case errors.Is(err, collaborationworkflows.ErrExecutionConflict):
+		writeAPIError(w, 409, "workflow_execution_conflict", "execution changed or the step already has a live credential")
+	case errors.Is(err, collaborationworkflows.ErrExecutionBlocked):
+		writeAPIError(w, 409, "workflow_step_blocked", "dependencies, policy, retry, concurrency, rate, or budget prevent this step")
+	default:
+		writeAPIError(w, 500, "workflow_executions_unavailable", "step could not be scheduled")
+	}
+}
+func writeWorkflowExecution(w http.ResponseWriter, out collaborationworkflows.Execution, err error, status int) {
+	switch {
+	case err == nil:
+		writeJSON(w, status, out)
+	case errors.Is(err, collaborationworkflows.ErrInvalid):
+		writeAPIError(w, 400, "invalid_workflow_event", "event inputs or outputs violate the reviewed workflow contract")
+	case errors.Is(err, collaborationworkflows.ErrCredential):
+		writeAPIError(w, 401, "workflow_step_credential_invalid", "step credential is invalid, expired, or revoked")
+	case errors.Is(err, collaborationworkflows.ErrExecutionConflict):
+		writeAPIError(w, 409, "workflow_execution_conflict", "duplicate event or execution version conflicts with durable state")
+	case errors.Is(err, collaborationworkflows.ErrExecutionBlocked):
+		writeAPIError(w, 409, "workflow_execution_blocked", "policy, concurrency, rate, retry, stale input, or budget limits block execution")
+	case errors.Is(err, collaborationworkflows.ErrNotFound):
+		writeAPIError(w, 404, "workflow_execution_not_found", "workflow execution not found")
+	default:
+		log.Printf("workflow execution storage: %v", err)
+		writeAPIError(w, 500, "workflow_executions_unavailable", "workflow execution could not be persisted")
+	}
 }
 
 func workflowReaches(store *collaborationworkflows.Store, start, goal string, seen map[string]bool) bool {
