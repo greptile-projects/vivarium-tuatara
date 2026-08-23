@@ -249,21 +249,35 @@ func registerIssueRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *rep
 			writeAPIError(w, 404, "repository_not_found", "repository not found")
 			return
 		}
-		v, err := store.UpdateStatus(r.PathValue("id"), r.PathValue("issue_id"), actor.UserID, input.Status, input.ExpectedVersion, input.Message, repo.OwnerID == actor.UserID)
+		statusRevision := ""
+		if input.Status == "triaged" {
+			statusRevision = workflowRepositoryHead(gitStore, r.PathValue("id"))
+		}
+		v, err := store.UpdateStatus(r.PathValue("id"), r.PathValue("issue_id"), actor.UserID, input.Status, input.ExpectedVersion, input.Message, repo.OwnerID == actor.UserID, statusRevision)
+		if errors.Is(err, issues.ErrConflict) && input.Status == "triaged" {
+			current, currentErr := store.Get(r.PathValue("id"), r.PathValue("issue_id"))
+			if currentErr == nil && current.Status == "triaged" && current.Version == input.ExpectedVersion+1 && current.StatusRevision != "" {
+				acceptedBy := statusTransitionActor(current, "triaged")
+				if acceptedBy != "" && recordIssueAcceptedActivity(activity, repos, current, acceptedBy) == nil {
+					writeJSON(w, 200, current)
+					return
+				}
+			}
+		}
 		if err != nil && !errors.Is(err, issues.ErrDurabilityUncertain) {
 			writeIssueError(w, err)
 			return
+		}
+		if input.Status == "triaged" && v.StatusRevision != "" {
+			if activityErr := recordIssueAcceptedActivity(activity, repos, v, actor.UserID); activityErr != nil {
+				writeAPIError(w, 503, "issue_acceptance_delivery_unavailable", "issue acceptance is visible but its workflow delivery could not be reconciled")
+				return
+			}
 		}
 		if errors.Is(err, issues.ErrDurabilityUncertain) {
 			w.Header().Set("Vivarium-Durability", "uncertain")
 			writeJSON(w, 202, v)
 			return
-		}
-		if input.Status == "triaged" {
-			revision := workflowRepositoryHead(gitStore, v.RepositoryID)
-			if revision != "" {
-				recordActivity(activity, repos, activities.Event{Kind: "issue.accepted", ActorID: actor.UserID, RepositoryID: v.RepositoryID, ResourceType: "issue", ResourceID: v.ID, ResourceTitle: v.Title, ResourceRevision: revision})
-			}
 		}
 		writeJSON(w, 200, v)
 	})
@@ -1222,6 +1236,19 @@ func registerIssueRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *rep
 		}
 		writeJSON(w, 201, updated)
 	})
+}
+
+func recordIssueAcceptedActivity(activity *activities.Store, repos *repositories.Store, issue issues.Issue, actorID string) error {
+	return recordActivityOnce(activity, repos, fmt.Sprintf("issue.accepted:%s:%s:%d", issue.RepositoryID, issue.ID, issue.Version), activities.Event{Kind: "issue.accepted", ActorID: actorID, RepositoryID: issue.RepositoryID, ResourceType: "issue", ResourceID: issue.ID, ResourceTitle: issue.Title, ResourceRevision: issue.StatusRevision})
+}
+
+func statusTransitionActor(issue issues.Issue, status string) string {
+	for i := len(issue.History) - 1; i >= 0; i-- {
+		if issue.History[i].Kind == "status_changed" && issue.History[i].To == status {
+			return issue.History[i].ActorID
+		}
+	}
+	return ""
 }
 
 // latestReporterConfirmation applies the append-only decision log in order.

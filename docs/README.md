@@ -63,9 +63,10 @@ time, resource identity, and exact source revision. The workflow runtime maps th
 trigger names and derives every `TriggerEvent` field server-side; arbitrary participant-supplied event
 IDs, names, times, actors, inputs, revisions, cross-repository deliveries, unsupported event kinds, and
 deliveries made stale by pull movement all fail closed.
-Repository-owner issue triage similarly emits `issue.accepted` at the then-current reachable `main`
-revision. Dispatch derives its issue, actor, time, and revision and rejects the delivery if the issue
-leaves triage or repository head moves, preventing acceptance from being replayed against different code.
+Repository-owner issue triage similarly emits an idempotency-keyed `issue.accepted` at the then-current
+reachable `main` revision before returning a committed-but-durability-uncertain status mutation. Dispatch
+derives its issue, actor, time, and revision and rejects the delivery if the issue leaves triage or repository
+head moves, preventing acceptance from being replayed against different code.
 
 The workflow workspace and execution reads project a live dependency graph and preserve every attempt's
 timing, resolved inputs, declared redacted outputs, sanitized logs, artifact digest metadata, agent session,
