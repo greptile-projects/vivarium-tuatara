@@ -680,7 +680,7 @@ func deriveCulpritRanges(candidates []regressioninvestigations.SearchCandidate) 
 func projectRegressionCandidateAttempts(candidate *regressioninvestigations.SearchCandidate, scenarioID string, attempts []regressioninvestigations.Attempt) {
 	candidate.AttemptIDs = []string{}
 	for _, attempt := range attempts {
-		if attempt.State != "completed" || attempt.ScenarioID != scenarioID || attempt.Revision != candidate.Revision {
+		if attempt.State != "completed" || attempt.ScenarioID != scenarioID || !attemptMatchesRegressionCandidate(attempt, *candidate) {
 			continue
 		}
 		candidate.AttemptIDs = append(candidate.AttemptIDs, attempt.ID)
@@ -696,6 +696,20 @@ func projectRegressionCandidateAttempts(candidate *regressioninvestigations.Sear
 			candidate.Classification = "flaky"
 		}
 	}
+}
+
+func attemptMatchesRegressionCandidate(attempt regressioninvestigations.Attempt, candidate regressioninvestigations.SearchCandidate) bool {
+	if candidate.Kind == "commit" {
+		return attempt.Revision == candidate.Revision
+	}
+	if candidate.Kind == "dependency" {
+		for _, dependency := range attempt.Dependencies {
+			if dependency.RepositoryID == candidate.RepositoryID && dependency.Revision == candidate.Revision {
+				return true
+			}
+		}
+	}
+	return false
 }
 func uniqStrings(values []string) []string {
 	seen := map[string]bool{}

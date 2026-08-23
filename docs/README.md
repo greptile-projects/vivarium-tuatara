@@ -63,6 +63,8 @@ graph-ancestry-proven working-to-regressed ranges
 rather than publishing an opaque bisect answer. Each range reports its remaining candidates, confidence, and
 merge or flaky ambiguity. Candidate views include the direct changed paths, commit author, linked ordinary pull
 requests, and the exact attempts supporting their classification.
+Dependency evidence joins on both repository identity and revision, preventing an equal hash from a different
+repository from supplying or hiding a candidate outcome.
 
 CAS-versioned collaborator guidance records working, regressed, flaky, invalid, excluded, and restored trials
 with attribution and rationale. Rewritten or missing commits become explicit exclusions on reads. Causal

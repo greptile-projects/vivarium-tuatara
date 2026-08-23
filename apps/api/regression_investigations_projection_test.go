@@ -73,7 +73,7 @@ func TestCulpritRangesRejectTopoOrderedMergeSiblings(t *testing.T) {
 }
 
 func TestSearchAttemptProjectionIsScopedToFrozenScenario(t *testing.T) {
-	candidate := regressioninvestigations.SearchCandidate{Revision: "revision"}
+	candidate := regressioninvestigations.SearchCandidate{Kind: "commit", Revision: "revision"}
 	attempts := []regressioninvestigations.Attempt{
 		{ID: "other", ScenarioID: "scenario-a", Revision: "revision", State: "completed", Classification: "failed"},
 		{ID: "selected", ScenarioID: "scenario-b", Revision: "revision", State: "completed", Classification: "passed"},
@@ -81,5 +81,19 @@ func TestSearchAttemptProjectionIsScopedToFrozenScenario(t *testing.T) {
 	projectRegressionCandidateAttempts(&candidate, "scenario-b", attempts)
 	if candidate.Classification != "working" || len(candidate.AttemptIDs) != 1 || candidate.AttemptIDs[0] != "selected" {
 		t.Fatalf("cross-scenario attempt projected: %#v", candidate)
+	}
+}
+
+func TestSearchAttemptProjectionIncludesExactDependencyCandidate(t *testing.T) {
+	attempt := regressioninvestigations.Attempt{ID: "attempt", ScenarioID: "scenario", Revision: "primary", State: "completed", Classification: "failed", Dependencies: []regressioninvestigations.Dependency{{RepositoryID: "dependency-repo", Revision: "dependency-revision"}}}
+	wrongRepository := regressioninvestigations.SearchCandidate{Kind: "dependency", RepositoryID: "other-repo", Revision: "dependency-revision"}
+	projectRegressionCandidateAttempts(&wrongRepository, "scenario", []regressioninvestigations.Attempt{attempt})
+	if len(wrongRepository.AttemptIDs) != 0 || wrongRepository.Classification != "" {
+		t.Fatalf("cross-repository dependency attempt projected: %#v", wrongRepository)
+	}
+	candidate := regressioninvestigations.SearchCandidate{Kind: "dependency", RepositoryID: "dependency-repo", Revision: "dependency-revision"}
+	projectRegressionCandidateAttempts(&candidate, "scenario", []regressioninvestigations.Attempt{attempt})
+	if candidate.Classification != "regressed" || len(candidate.AttemptIDs) != 1 || candidate.AttemptIDs[0] != "attempt" {
+		t.Fatalf("exact dependency attempt omitted: %#v", candidate)
 	}
 }
