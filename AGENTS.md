@@ -255,6 +255,23 @@ whenever dependencies change or the web job fails before it starts.
 
 ## Conventions
 
+- **Repository-reviewed collaboration workflows** — `/repositories/{id}/collaboration-workflows`
+  and the repository `/workflows` workspace resolve definitions only from an exact JSON blob at a
+  40-character commit reachable from a non-`vivarium-security/` branch. Definitions retain a shared
+  outcome, owners, typed repository-event/schedule/manual triggers and inputs, conditions, ordered or
+  parallel dependency steps, outputs, retries, timeouts, action budgets, owners, and completion
+  criteria. Step invocations select a closed permitted platform action, reusable component, active
+  same-repository workflow, or gap-free reviewed same-repository agent project and declare their
+  authority explicitly. Preview derives subscriptions, execution stages, effective principals and
+  grants, the exact source digest, and attributable blockers. Missing owners, invalid/cyclic graphs,
+  self/event trigger loops, inaccessible resources, over-budget steps, and conflicting policies block
+  activation. Creates require a caller-stable activation ID and derive the workflow identity from
+  it, so retrying an ambiguous post-rename durability failure reconciles the published record instead
+  of duplicating active automation. Successful activation retains immutable CAS-versioned revisions beneath
+  `$COLLABORATION_WORKFLOW_STORAGE_ROOT` (`collaboration-workflows`); records explain coordination but
+  grant no repository, event, action, agent, component, runtime, secret, review, release, deployment,
+  or linked-workflow authority.
+
 - **Collaborative software adoption** — `/adoption-workspaces` and the web `/adoption`
   workspace retain shared software-fit evaluations beneath `$ADOPTION_WORKSPACE_STORAGE_ROOT`
   (`adoption-workspaces`). A human collaborator starts from a roadmap outcome, support gap,
