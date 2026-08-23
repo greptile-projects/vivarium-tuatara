@@ -26,6 +26,12 @@ func registerRegressionInvestigationRoutes(mux *http.ServeMux, git *storage.Stor
 		return c.UserID
 	}
 	project := func(v regressioninvestigations.Investigation) regressioninvestigations.Investigation { // Staleness is live and never rewrites retained evidence.
+		if v.Evidence == nil {
+			v.Evidence = []regressioninvestigations.Evidence{}
+		}
+		if v.Diagnostics == nil {
+			v.Diagnostics = []string{}
+		}
 		r, err := git.Open(v.RepositoryID)
 		if err != nil {
 			v.Diagnostics = append(v.Diagnostics, "repository history is unavailable")
@@ -41,9 +47,20 @@ func registerRegressionInvestigationRoutes(mux *http.ServeMux, git *storage.Stor
 			v.Comparable = false
 		}
 		for i := range v.Evidence {
-			if v.Evidence[i].Revision != "" && exec.Command("git", "--git-dir="+r.Path(), "cat-file", "-e", v.Evidence[i].Revision+"^{commit}").Run() != nil {
-				v.Evidence[i].Stale = true
-				v.Evidence[i].Diagnostic = "referenced revision is no longer available"
+			ev := &v.Evidence[i]
+			if !ev.Available {
+				continue
+			}
+			current := false
+			if ev.Kind == "commit" {
+				current = ev.ResourceID == v.RepositoryID && ev.Revision != "" && exec.Command("git", "--git-dir="+r.Path(), "cat-file", "-e", ev.Revision+"^{commit}").Run() == nil
+			} else {
+				current = validRegressionSource(regressioninvestigations.Reference{Kind: ev.Kind, ResourceID: ev.ResourceID, Revision: ev.Revision, Label: ev.Label}, v.RepositoryID, issueStore, supportStore, checkStore, releaseStore, deploymentStore, debugStore)
+			}
+			if !current {
+				ev.Available = false
+				ev.Stale = true
+				ev.Diagnostic = "retained evidence no longer resolves to its required source state"
 			}
 		}
 		return v
@@ -89,6 +106,15 @@ func registerRegressionInvestigationRoutes(mux *http.ServeMux, git *storage.Stor
 		in.RepositoryID = repoID
 		in.Diagnostics = []string{}
 		in.Comparable = false
+		reconciled, found, reconcileErr := investigations.Reconcile(in, actor(c))
+		if reconcileErr != nil {
+			writeRegressionInvestigation(w, project(reconciled), reconcileErr, 201)
+			return
+		}
+		if found {
+			writeJSON(w, 201, project(reconciled))
+			return
+		}
 		repository, catalogErr := catalog.GetByID(repoID)
 		if catalogErr != nil {
 			writeAPIError(w, 404, "repository_not_found", "repository not found")

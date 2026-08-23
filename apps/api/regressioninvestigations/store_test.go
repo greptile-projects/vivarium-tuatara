@@ -105,3 +105,29 @@ func TestCreateRejectsChangedRequestIdentityReuse(t *testing.T) {
 		t.Fatalf("want conflict, got %v", err)
 	}
 }
+
+func TestReconcileFindsPublishedRequestBeforeMutableValidation(t *testing.T) {
+	s, _ := New(t.TempDir())
+	in := validInvestigation()
+	published, err := s.Create(in, "actor-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reconciled, found, err := s.Reconcile(in, "actor-1")
+	if err != nil || !found || reconciled.ID != published.ID {
+		t.Fatalf("reconciliation = %#v, %v, %v", reconciled, found, err)
+	}
+}
+
+func TestCreateNormalizesOmittedEvidence(t *testing.T) {
+	s, _ := New(t.TempDir())
+	in := validInvestigation()
+	in.Evidence = nil
+	v, err := s.Create(in, "actor-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.Evidence == nil {
+		t.Fatal("evidence must serialize as an empty collection")
+	}
+}

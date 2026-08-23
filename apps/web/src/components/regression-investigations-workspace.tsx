@@ -50,6 +50,14 @@ const list = (v: string) =>
     .split(",")
     .map((x) => x.trim())
     .filter(Boolean);
+const normalized = (investigation: Investigation): Investigation => ({
+  ...investigation,
+  evidence: investigation.evidence ?? [],
+  diagnostics: investigation.diagnostics ?? [],
+  history: investigation.history ?? [],
+  acceptance_criteria: investigation.acceptance_criteria ?? [],
+  affected_environments: investigation.affected_environments ?? [],
+});
 export function RegressionInvestigationsWorkspace({
   repositoryID,
 }: {
@@ -67,11 +75,10 @@ export function RegressionInvestigationsWorkspace({
         {},
         token,
       );
-      setItems(x.regression_investigations);
+      const investigations = x.regression_investigations.map(normalized);
+      setItems(investigations);
       setSelected(
-        (s) =>
-          x.regression_investigations.find((v) => v.id === s?.id) ??
-          x.regression_investigations[0],
+        (s) => investigations.find((v) => v.id === s?.id) ?? investigations[0],
       );
       setError("");
     } catch (e) {

@@ -104,22 +104,9 @@ func (s *Store) Create(v Investigation, actor string) (Investigation, error) {
 	if !valid(v, actor) {
 		return Investigation{}, ErrInvalid
 	}
-	digest, e := requestDigest(v, actor)
-	if e != nil {
-		return Investigation{}, e
-	}
-	existing, e := s.list(v.RepositoryID)
-	if e != nil {
-		return Investigation{}, e
-	}
-	for _, item := range existing {
-		if item.RequestID != v.RequestID {
-			continue
-		}
-		if item.RequestDigest != digest {
-			return Investigation{}, ErrConflict
-		}
-		return item, nil
+	existing, found, digest, e := s.reconcile(v, actor)
+	if e != nil || found {
+		return existing, e
 	}
 	now := s.now()
 	v.ID = id()
@@ -133,11 +120,52 @@ func (s *Store) Create(v Investigation, actor string) (Investigation, error) {
 	v.OwnerIDs = uniq(v.OwnerIDs)
 	v.Environments = uniq(v.Environments)
 	v.AcceptanceCriteria = uniq(v.AcceptanceCriteria)
+	if v.Evidence == nil {
+		v.Evidence = []Evidence{}
+	}
 	for i := range v.Evidence {
 		v.Evidence[i].ID = id()
 	}
 	v.History = []Entry{{ID: id(), Kind: "opened", ActorID: actor, To: "open", Message: "Search boundary agreed", CreatedAt: now}}
 	return v, s.write(v)
+}
+
+// Reconcile returns an already-published create before callers re-evaluate
+// mutable repository facts. Current access authorization remains the route's
+// responsibility; the stable actor and exact payload digest prevent takeover.
+func (s *Store) Reconcile(v Investigation, actor string) (Investigation, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, e := s.lock()
+	if e != nil {
+		return Investigation{}, false, e
+	}
+	defer unlock()
+	existing, found, _, e := s.reconcile(v, actor)
+	return existing, found, e
+}
+func (s *Store) reconcile(v Investigation, actor string) (Investigation, bool, string, error) {
+	if !token(v.RepositoryID) || !token(v.RequestID) || !token(actor) {
+		return Investigation{}, false, "", ErrInvalid
+	}
+	digest, e := requestDigest(v, actor)
+	if e != nil {
+		return Investigation{}, false, "", e
+	}
+	existing, e := s.list(v.RepositoryID)
+	if e != nil {
+		return Investigation{}, false, "", e
+	}
+	for _, item := range existing {
+		if item.RequestID != v.RequestID {
+			continue
+		}
+		if item.RequestDigest != digest {
+			return Investigation{}, false, "", ErrConflict
+		}
+		return item, true, digest, nil
+	}
+	return Investigation{}, false, digest, nil
 }
 func (s *Store) Get(repo, wid string) (Investigation, error) {
 	if !token(repo) || !token(wid) {

@@ -12,12 +12,16 @@ deployment, or demonstrated/reproduced debugging scenario (`workspace_id/scenari
 resolves release and check commits, requires both 40-character boundary commits to exist, and proves
 that known-good is an ancestor of known-bad before retaining the record. Creates include a stable
 `request_id`; exact retries reconcile to the already-published record, while changed reuse conflicts.
+Reconciliation occurs after authenticating current repository access but before mutable owner, source,
+boundary, and ancestry validation, so an ambiguous successful publication remains discoverable.
 
 The immutable starting context contains the expected and regressed behavior, good/bad labels and
 revisions, affected environments, severity, owners, acceptance criteria, and evidence metadata.
 Evidence availability is derived from repository-owned issue, support, check, release, deployment,
 debugging, and Git stores rather than caller visibility prose. Unresolved evidence is retained as an
 explicit unavailable diagnostic, and later missing revisions are projected as stale without rewriting history.
+Reads also re-evaluate stateful evidence predicates: for example, rerunning a retained failed check
+downgrades that evidence to stale and unavailable rather than preserving its old available projection.
 Discussion, hypotheses, environment scope, and open/bounded/paused/closed status append through a
 compare-and-swap event route with actor and time attribution. This ledger agrees on what history to
 search; it grants no Git, private-machine, check execution, environment, deployment, or evidence
