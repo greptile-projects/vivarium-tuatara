@@ -265,7 +265,9 @@ whenever dependencies change or the web job fails before it starts.
   authority explicitly. Preview derives subscriptions, execution stages, effective principals and
   grants, the exact source digest, and attributable blockers. Missing owners, invalid/cyclic graphs,
   self/event trigger loops, inaccessible resources, over-budget steps, and conflicting policies block
-  activation. Successful activation retains immutable CAS-versioned revisions beneath
+  activation. Creates require a caller-stable activation ID and derive the workflow identity from
+  it, so retrying an ambiguous post-rename durability failure reconciles the published record instead
+  of duplicating active automation. Successful activation retains immutable CAS-versioned revisions beneath
   `$COLLABORATION_WORKFLOW_STORAGE_ROOT` (`collaboration-workflows`); records explain coordination but
   grant no repository, event, action, agent, component, runtime, secret, review, release, deployment,
   or linked-workflow authority.

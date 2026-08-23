@@ -21,7 +21,12 @@ self-invocation and subscribed-event loops, inaccessible resources, invalid cond
 budget violations, and allow/deny or required-authority policy conflicts become attributable preview
 diagnostics and make activation impossible.
 
-Activation and successor activation re-resolve the same reviewed blob and owner/resource facts. A
+Activation and successor activation re-resolve the same reviewed blob and owner/resource facts. The
+create request carries a caller-stable activation ID from which the server derives its workflow ID;
+if directory sync fails after atomic publication, retrying that request therefore returns the same
+record instead of activating a duplicate. Workflow-reference traversal is repeated inside the locked
+revision transaction so concurrent successor publication cannot introduce direct or indirect
+recursion. A
 successful transition appends an immutable compare-and-swap version containing its exact source digest,
 subscriptions, stages, authority preview, actor, and time beneath `$COLLABORATION_WORKFLOW_STORAGE_ROOT`
 (`collaboration-workflows`). The record explains coordination only; it does not subscribe to events,

@@ -2,7 +2,7 @@
 package collaborationworkflows
 
 import (
-	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -117,6 +117,7 @@ type Revision struct {
 }
 type Workflow struct {
 	ID             string     `json:"id"`
+	ActivationID   string     `json:"activation_id"`
 	RepositoryID   string     `json:"repository_id"`
 	CurrentVersion int        `json:"current_version"`
 	Status         string     `json:"status"`
@@ -194,7 +195,11 @@ func (s *Store) Preview(repo string, d Definition, src Source, check ResourceChe
 		}
 		if check != nil {
 			if ok, reason := check(inv); !ok {
-				add("inaccessible_resource", reason, "resource_resolver", st.ID, resource)
+				kind := "inaccessible_resource"
+				if strings.HasPrefix(reason, "trigger loop:") {
+					kind = "trigger_loop"
+				}
+				add(kind, reason, "resource_resolver", st.ID, resource)
 			}
 		}
 		principal := "platform"
@@ -237,14 +242,27 @@ func (s *Store) Preview(repo string, d Definition, src Source, check ResourceChe
 	return p
 }
 
-func (s *Store) Create(repo, actor string, p Preview) (Workflow, error) {
+func (s *Store) Create(repo, actor, activationID string, p Preview) (Workflow, error) {
 	if !p.Activatable {
+		return Workflow{}, ErrInvalid
+	}
+	if strings.TrimSpace(activationID) == "" || len(activationID) > 200 {
 		return Workflow{}, ErrInvalid
 	}
 	var w Workflow
 	err := s.lock(func() error {
+		workflowID := requestID(repo, activationID)
+		if existing, err := s.read(workflowID); err == nil {
+			if existing.RepositoryID != repo || existing.ActivationID != activationID || existing.Revisions[0].ActivatedBy != actor || existing.Revisions[0].Source != p.Source {
+				return ErrConflict
+			}
+			w = existing
+			return nil
+		} else if !errors.Is(err, ErrNotFound) {
+			return err
+		}
 		now := s.now()
-		w = Workflow{ID: id(), RepositoryID: repo, CurrentVersion: 1, Status: "active", Revisions: []Revision{revision(1, actor, now, p)}, CreatedAt: now, UpdatedAt: now}
+		w = Workflow{ID: workflowID, ActivationID: activationID, RepositoryID: repo, CurrentVersion: 1, Status: "active", Revisions: []Revision{revision(1, actor, now, p)}, CreatedAt: now, UpdatedAt: now}
 		return s.write(w)
 	})
 	return w, err
@@ -263,6 +281,11 @@ func (s *Store) Revise(id string, expected int, actor string, p Preview) (Workfl
 		if w.CurrentVersion != expected {
 			return ErrConflict
 		}
+		for _, step := range p.Definition.Steps {
+			if step.Invocation.Kind == "workflow" && s.reaches(step.Invocation.WorkflowID, id, map[string]bool{}) {
+				return ErrInvalid
+			}
+		}
 		now := s.now()
 		w.CurrentVersion++
 		w.Revisions = append(w.Revisions, revision(w.CurrentVersion, actor, now, p))
@@ -270,6 +293,25 @@ func (s *Store) Revise(id string, expected int, actor string, p Preview) (Workfl
 		return s.write(w)
 	})
 	return w, err
+}
+func (s *Store) reaches(start, goal string, seen map[string]bool) bool {
+	if start == goal {
+		return true
+	}
+	if seen[start] {
+		return false
+	}
+	seen[start] = true
+	w, err := s.read(start)
+	if err != nil || len(w.Revisions) == 0 {
+		return false
+	}
+	for _, step := range w.Revisions[len(w.Revisions)-1].Definition.Steps {
+		if step.Invocation.Kind == "workflow" && s.reaches(step.Invocation.WorkflowID, goal, seen) {
+			return true
+		}
+	}
+	return false
 }
 func (s *Store) Get(id string) (Workflow, error) {
 	var w Workflow
@@ -362,7 +404,10 @@ func (s *Store) lock(fn func() error) error {
 	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 	return fn()
 }
-func id() string { b := make([]byte, 16); _, _ = rand.Read(b); return hex.EncodeToString(b) }
+func requestID(repo, activationID string) string {
+	sum := sha256.Sum256([]byte(repo + "\x00" + activationID))
+	return hex.EncodeToString(sum[:16])
+}
 func oneOf(v string, x ...string) bool {
 	for _, a := range x {
 		if v == a {

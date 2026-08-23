@@ -43,7 +43,7 @@ func TestPreviewBlocksCyclesLoopsPoliciesAndResources(t *testing.T) {
 func TestVersionsAreImmutableAndCASBound(t *testing.T) {
 	s, _ := New(t.TempDir())
 	p := s.Preview("repo", validDefinition(), Source{}, func(Invocation) (bool, string) { return true, "" })
-	w, e := s.Create("repo", "owner", p)
+	w, e := s.Create("repo", "owner", "activation-1", p)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -56,5 +56,50 @@ func TestVersionsAreImmutableAndCASBound(t *testing.T) {
 	w, e = s.Revise(w.ID, 1, "owner", p)
 	if e != nil || len(w.Revisions) != 2 || w.Revisions[0].Definition.Outcome == w.Revisions[1].Definition.Outcome {
 		t.Fatalf("unexpected revisions: %#v %v", w, e)
+	}
+}
+
+func TestCreateActivationIDIsRetrySafe(t *testing.T) {
+	s, _ := New(t.TempDir())
+	p := s.Preview("repo", validDefinition(), Source{Revision: "abc", Path: "workflow.json"}, func(Invocation) (bool, string) { return true, "" })
+	first, e := s.Create("repo", "owner", "request-123", p)
+	if e != nil {
+		t.Fatal(e)
+	}
+	second, e := s.Create("repo", "owner", "request-123", p)
+	if e != nil || second.ID != first.ID {
+		t.Fatalf("retry = %#v, %v", second, e)
+	}
+	all, _ := s.List("repo")
+	if len(all) != 1 {
+		t.Fatalf("retry created %d workflows", len(all))
+	}
+}
+
+func TestReviseRejectsPersistedAndIndirectWorkflowRecursion(t *testing.T) {
+	s, _ := New(t.TempDir())
+	check := func(Invocation) (bool, string) { return true, "" }
+	p := s.Preview("repo", validDefinition(), Source{Revision: "a"}, check)
+	a, e := s.Create("repo", "owner", "a", p)
+	if e != nil {
+		t.Fatal(e)
+	}
+	bDef := validDefinition()
+	bDef.Name = "B"
+	bDef.Steps[0].Invocation = Invocation{Kind: "workflow", WorkflowID: a.ID, Authority: []string{"workflow:invoke"}}
+	bPreview := s.Preview("repo", bDef, Source{Revision: "b"}, check)
+	b, e := s.Create("repo", "owner", "b", bPreview)
+	if e != nil {
+		t.Fatal(e)
+	}
+	self := validDefinition()
+	self.Steps[0].Invocation = Invocation{Kind: "workflow", WorkflowID: a.ID, Authority: []string{"workflow:invoke"}}
+	if _, e = s.Revise(a.ID, 1, "owner", s.Preview("repo", self, Source{Revision: "self"}, check)); e != ErrInvalid {
+		t.Fatalf("persisted self reference = %v", e)
+	}
+	cycle := validDefinition()
+	cycle.Steps[0].Invocation = Invocation{Kind: "workflow", WorkflowID: b.ID, Authority: []string{"workflow:invoke"}}
+	if _, e = s.Revise(a.ID, 1, "owner", s.Preview("repo", cycle, Source{Revision: "cycle"}, check)); e != ErrInvalid {
+		t.Fatalf("indirect cycle = %v", e)
 	}
 }

@@ -20,6 +20,7 @@ import (
 
 type collaborationWorkflowSourceInput struct {
 	ExpectedVersion int    `json:"expected_version"`
+	ActivationID    string `json:"activation_id"`
 	Revision        string `json:"revision"`
 	Path            string `json:"path"`
 }
@@ -88,6 +89,12 @@ func registerCollaborationWorkflowRoutes(mux *http.ServeMux, git *storage.Store,
 					if e != nil || target.RepositoryID != r.PathValue("id") || target.Status != "active" {
 						return false, "reusable workflow is not an active readable workflow in this repository"
 					}
+					if revise {
+						currentID := r.PathValue("workflow_id")
+						if inv.WorkflowID == currentID || workflowReaches(workflows, inv.WorkflowID, currentID, map[string]bool{}) {
+							return false, "trigger loop: workflow invocation would create a recursive dependency"
+						}
+					}
 				}
 				return true, ""
 			}
@@ -110,7 +117,7 @@ func registerCollaborationWorkflowRoutes(mux *http.ServeMux, git *storage.Store,
 					out, e = workflows.Revise(current.ID, in.ExpectedVersion, actor.UserID, preview)
 					return e
 				}
-				out, err = workflows.Create(r.PathValue("id"), actor.UserID, preview)
+				out, err = workflows.Create(r.PathValue("id"), actor.UserID, in.ActivationID, preview)
 				return err
 			})
 			writeCollaborationWorkflow(w, out, err, revise)
@@ -119,6 +126,26 @@ func registerCollaborationWorkflowRoutes(mux *http.ServeMux, git *storage.Store,
 	mux.HandleFunc("POST /repositories/{id}/collaboration-workflows/preview", handle(false, false))
 	mux.HandleFunc("POST /repositories/{id}/collaboration-workflows", handle(true, false))
 	mux.HandleFunc("POST /repositories/{id}/collaboration-workflows/{workflow_id}/revisions", handle(true, true))
+}
+
+func workflowReaches(store *collaborationworkflows.Store, start, goal string, seen map[string]bool) bool {
+	if start == goal {
+		return true
+	}
+	if seen[start] {
+		return false
+	}
+	seen[start] = true
+	w, err := store.Get(start)
+	if err != nil || len(w.Revisions) == 0 {
+		return false
+	}
+	for _, step := range w.Revisions[len(w.Revisions)-1].Definition.Steps {
+		if step.Invocation.Kind == "workflow" && workflowReaches(store, step.Invocation.WorkflowID, goal, seen) {
+			return true
+		}
+	}
+	return false
 }
 
 func readWorkflowDefinition(git *storage.Store, repo, revision, file string) (collaborationworkflows.Definition, collaborationworkflows.Source, error) {
