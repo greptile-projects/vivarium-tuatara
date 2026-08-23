@@ -249,10 +249,29 @@ func stageConflictHistories(repositoryPath, workspaceID, source, target string) 
 	if out, e := exec.Command("docker", "exec", container, "mkdir", "-p", "/workspace/.vivarium").CombinedOutput(); e != nil {
 		return errors.New(strings.TrimSpace(string(out)))
 	}
-	if out, e := exec.Command("docker", "cp", bundle, container+":/workspace/.vivarium/conflicting-histories.bundle").CombinedOutput(); e != nil {
+	bundleReader, err := os.Open(bundle)
+	if err != nil {
+		return err
+	}
+	defer bundleReader.Close()
+	transfer := exec.Command("docker", "exec", "-i", container, "sh", "-c", "umask 077; cat > /workspace/.vivarium/conflicting-histories.bundle")
+	transfer.Stdin = bundleReader
+	if out, e := transfer.CombinedOutput(); e != nil {
 		return errors.New(strings.TrimSpace(string(out)))
 	}
-	if out, e := exec.Command("docker", "exec", "--workdir", "/workspace", container, "sh", "-lc", "git init && git fetch .vivarium/conflicting-histories.bundle 'refs/heads/*:refs/remotes/conflict/*' && git reset --hard conflict/target").CombinedOutput(); e != nil {
+	for _, args := range [][]string{{"git", "init"}, {"git", "fetch", ".vivarium/conflicting-histories.bundle", "refs/heads/*:refs/remotes/conflict/*"}} {
+		command := append([]string{"exec", "--workdir", "/workspace", container}, args...)
+		if out, e := exec.Command("docker", command...).CombinedOutput(); e != nil {
+			return errors.New(strings.TrimSpace(string(out)))
+		}
+	}
+	for name, expected := range map[string]string{"source": source, "target": target} {
+		out, e := exec.Command("docker", "exec", "--workdir", "/workspace", container, "git", "rev-parse", "refs/remotes/conflict/"+name).CombinedOutput()
+		if e != nil || strings.TrimSpace(string(out)) != expected {
+			return errors.New("staged conflict/" + name + " does not match its frozen revision")
+		}
+	}
+	if out, e := exec.Command("docker", "exec", "--workdir", "/workspace", container, "git", "reset", "--hard", "refs/remotes/conflict/target").CombinedOutput(); e != nil {
 		return errors.New(strings.TrimSpace(string(out)))
 	}
 	return nil
