@@ -47,18 +47,22 @@ type Invocation struct {
 	Emits      []string `json:"emits,omitempty"`
 }
 type Step struct {
-	ID             string            `json:"id"`
-	Name           string            `json:"name"`
-	Needs          []string          `json:"needs,omitempty"`
-	Conditions     []Condition       `json:"conditions,omitempty"`
-	Invocation     Invocation        `json:"invocation"`
-	Inputs         map[string]string `json:"inputs,omitempty"`
-	Outputs        []string          `json:"outputs,omitempty"`
-	Retries        int               `json:"retries"`
-	TimeoutSeconds int               `json:"timeout_seconds"`
-	BudgetActions  int               `json:"budget_actions"`
-	OwnerIDs       []string          `json:"owner_ids"`
-	Completion     []string          `json:"completion"`
+	ID              string            `json:"id"`
+	Name            string            `json:"name"`
+	Needs           []string          `json:"needs,omitempty"`
+	Conditions      []Condition       `json:"conditions,omitempty"`
+	Invocation      Invocation        `json:"invocation"`
+	Inputs          map[string]string `json:"inputs,omitempty"`
+	Outputs         []string          `json:"outputs,omitempty"`
+	Retries         int               `json:"retries"`
+	TimeoutSeconds  int               `json:"timeout_seconds"`
+	BudgetActions   int               `json:"budget_actions"`
+	OwnerIDs        []string          `json:"owner_ids"`
+	Completion      []string          `json:"completion"`
+	Optional        bool              `json:"optional,omitempty"`
+	Manual          bool              `json:"manual,omitempty"`
+	RequestedInputs []string          `json:"requested_inputs,omitempty"`
+	Approval        string            `json:"approval,omitempty"`
 }
 type Policy struct {
 	ID                string   `json:"id"`
@@ -187,8 +191,18 @@ func (s *Store) Preview(repo string, d Definition, src Source, check ResourceChe
 		}
 		inv := st.Invocation
 		resource := inv.Action + inv.Component + inv.WorkflowID + inv.AgentID
-		if !oneOf(inv.Kind, "platform_action", "component", "agent", "workflow") || len(inv.Authority) == 0 {
+		if !oneOf(inv.Kind, "platform_action", "component", "agent", "workflow", "manual") || (len(inv.Authority) == 0 && !st.Manual) {
 			add("invalid_invocation", "step invocation kind and explicit authority are required", "configuration", st.ID, resource)
+		}
+		if st.Manual != (inv.Kind == "manual") {
+			add("invalid_step", "manual steps must use the manual invocation kind", "configuration", st.ID, resource)
+		}
+		inputNames := map[string]bool{}
+		for _, name := range st.RequestedInputs {
+			if strings.TrimSpace(name) == "" || inputNames[name] {
+				add("invalid_input", "requested input names must be non-empty and unique", "configuration", st.ID, name)
+			}
+			inputNames[name] = true
 		}
 		if inv.Kind == "workflow" && inv.WorkflowID == "self" {
 			add("trigger_loop", "a workflow cannot invoke itself", "configuration", st.ID, inv.WorkflowID)

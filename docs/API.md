@@ -1,5 +1,21 @@
 # HTTP API contract
 
+## Live collaboration workflow executions
+
+`GET /repositories/{id}/collaboration-workflows/{workflow_id}/executions` and its execution-detail
+variant return the revision/event-bound graph, current step states, append-only attempts, sanitized logs,
+artifact metadata, agent sessions, action and cost use, timing, failures, provenance, waiting reasons,
+predicted next actions, and attributed intervention history. Public projections omit step capability and
+completion digests and replace restricted artifact names with an opaque label.
+
+`POST .../executions/{execution_id}/interventions` compare-and-swaps `expected_version` and accepts
+`pause`, `resume`, `cancel`, `retry`, `approve`, `provide_input`, `skip`, or `take_over` with a reason and,
+where required, step and named input. Skip is limited to definition-declared optional work; takeover is
+limited to manual steps; requested inputs must be declared; retry remains within the reviewed retry bound.
+Every accepted intervention retains its authenticated collaborator, target, reason, time, and resulting
+version. Credential-shaped values and private terminal streams are not admitted, and the route grants no
+authority over the step's target system.
+
 ## Adoption workspaces
 
 `POST /adoption-workspaces` opens a human-owned software-fit evaluation. It records a starting

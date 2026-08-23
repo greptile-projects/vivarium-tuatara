@@ -64,6 +64,16 @@ trigger names and derives every `TriggerEvent` field server-side; arbitrary part
 IDs, names, times, actors, inputs, revisions, cross-repository deliveries, unsupported event kinds, and
 deliveries made stale by pull movement all fail closed.
 
+The workflow workspace and execution reads project a live dependency graph and preserve every attempt's
+timing, resolved inputs, declared redacted outputs, sanitized logs, artifact digest metadata, agent session,
+cost, failure, and source/event provenance after the run finishes. Capability and completion digests never
+leave the store, and restricted artifacts have opaque names. Waiting approval, requested-input, manual,
+dependency, retry, and optional states feed predicted next actions. Current write collaborators use a single
+CAS intervention route to pause, resume, cancel, retry, approve, provide a named non-secret input, skip a
+reviewed optional step, or take over a declared manual step. The immutable intervention trail attributes the
+actor, reason, target, time, and resulting version; it accepts neither private terminal streams nor
+credential-shaped content and does not grant authority to the invoked system.
+
 ## Evidence-backed software adoption
 
 Authenticated collaborators use `/adoption-workspaces` or the web adoption workspace to ask whether

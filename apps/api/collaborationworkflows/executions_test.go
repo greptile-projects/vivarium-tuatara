@@ -131,12 +131,66 @@ func TestExecutionCanRetryInterruptedStepAndCancel(t *testing.T) {
 	if ex.Steps[0].Status != "interrupted" {
 		t.Fatalf("step=%#v", ex.Steps[0])
 	}
-	if _, err := s.ClaimStep(ex.ID, "classify", ex.Version, true); err != nil {
+	retryLease, err := s.ClaimStep(ex.ID, "classify", ex.Version, true)
+	if err != nil {
 		t.Fatal(err)
 	}
-	ex, err := s.CancelExecution(ex.ID, "access_revoked")
+	ex, err = s.CompleteStep(ex.ID, "classify", retryLease.Token, 1, map[string]any{"review_id": "retry-review"}, "")
+	if err != nil || len(ex.Steps[0].Attempts) != 2 || ex.Steps[0].Attempts[1].Status != "succeeded" {
+		t.Fatalf("completed retry=%#v %v", ex.Steps[0], err)
+	}
+	ex, err = s.CancelExecution(ex.ID, "access_revoked")
 	if err != nil || ex.Status != "cancelled" || ex.CancellationCode != "access_revoked" {
 		t.Fatalf("cancel=%#v %v", ex, err)
+	}
+}
+
+func TestExecutionEvidenceProjectionAndAttributedInterventions(t *testing.T) {
+	s, _, event := executionFixture(t)
+	d := validDefinition()
+	d.Steps[0].Optional = true
+	d.Steps[1].Manual = true
+	d.Steps[1].Invocation.Kind = "manual"
+	d.Steps[1].Invocation.Authority = nil
+	p := s.Preview("repo", d, Source{Revision: strings.Repeat("c", 40)}, func(Invocation) (bool, string) { return true, "" })
+	w, err := s.Create("repo", "owner", "observable", p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event.ID = "observable-event"
+	ex, err := s.StartExecution(w.ID, 1, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, err := s.ClaimStep(ex.ID, "classify", ex.Version, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ex, err = s.CompleteStepEvidence(ex.ID, "classify", lease.Token, 1, map[string]any{"review_id": "review-1"}, "transient", []StepLog{{Time: time.Now().UTC(), Level: "error", Message: "bounded failure"}}, []StepArtifact{{Name: "report", Kind: "log", SHA256: strings.Repeat("d", 64), Size: 12, Restricted: true}}, &AgentSession{ID: "session-1", AgentID: "agent-1", Status: "failed"}, 2.5, []string{"runner:isolated"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ex.Steps[0].Attempts) != 1 || ex.Steps[0].Attempts[0].CostUnits != 2.5 {
+		t.Fatalf("attempt=%#v", ex.Steps[0].Attempts)
+	}
+	ex, err = s.Intervene(ex.ID, "collaborator", "retry", "classify", "retry retained failure", "", nil, ex.Version)
+	if err != nil || ex.Steps[0].Status != "pending" || len(ex.Interventions) != 1 {
+		t.Fatalf("retry=%#v %v", ex, err)
+	}
+	ex, err = s.Intervene(ex.ID, "collaborator", "skip", "classify", "optional result is not required", "", nil, ex.Version)
+	if err != nil || ex.Steps[0].Status != "skipped" {
+		t.Fatalf("skip=%#v %v", ex, err)
+	}
+	ex, err = s.Intervene(ex.ID, "collaborator", "take_over", "notify", "handle declared manual work", "", nil, ex.Version)
+	if err != nil || ex.Steps[1].TakenOverBy != "collaborator" {
+		t.Fatalf("takeover=%#v %v", ex, err)
+	}
+	public := PublicExecution(ex)
+	if public.Steps[0].CredentialSHA256 != "" || public.Steps[0].CompletionSHA256 != "" || public.Steps[0].Attempts[0].Artifacts[0].Name != "Restricted artifact" {
+		t.Fatalf("projection=%#v", public.Steps[0])
+	}
+	if _, err = s.Intervene(ex.ID, "collaborator", "provide_input", "notify", "unsafe", "value", "password=abcdefghijklmnop", ex.Version); !errorsIs(err, ErrInvalid) {
+		t.Fatalf("secret intervention=%v", err)
 	}
 }
 

@@ -288,6 +288,14 @@ whenever dependencies change or the web job fails before it starts.
   version. Pull creation, synchronization, and merge activity retains its exact source revision; the
   runtime derives trigger kind/name, occurrence time, actor, pull input, and revision from that server
   record and rejects stale or unsupported deliveries. Participants cannot supply trigger metadata.
+  Execution reads are public projections: capability and completion digests are never returned, and
+  restricted artifact names remain opaque. Each step retains append-only attempts with declared inputs,
+  redacted outputs and logs, digest-addressed artifacts, agent-session references, costs, timing,
+  failures, and provenance. Derived next actions explain dependency, approval, requested-input, manual,
+  retry, and optional-work waits. Versioned collaborator interventions pause, resume, cancel, retry,
+  approve, provide non-secret input, skip only reviewed optional steps, or take over only declared manual
+  steps; every accepted change retains actor, reason, step, time, and resulting version. Private terminal
+  input and credential-shaped content are rejected, and these controls grant no underlying action authority.
 
 - **Collaborative software adoption** — `/adoption-workspaces` and the web `/adoption`
   workspace retain shared software-fit evaluations beneath `$ADOPTION_WORKSPACE_STORAGE_ROOT`
