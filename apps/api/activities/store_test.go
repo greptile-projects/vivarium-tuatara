@@ -43,6 +43,18 @@ func TestAppendOnceRetainsOneStableEvent(t *testing.T) {
 	}
 }
 
+func TestGetRetainsServerIssuedResourceRevision(t *testing.T) {
+	store, _ := New(t.TempDir())
+	event, err := store.Append(Event{Kind: "pull_request.created", ActorID: "11111111111111111111111111111111", RepositoryID: "22222222222222222222222222222222", RepositoryName: "garden", ResourceType: "pull_request", ResourceID: "33333333333333333333333333333333", ResourceTitle: "Ship tests", ResourceRevision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Get(event.ID)
+	if err != nil || got.ResourceRevision != event.ResourceRevision || got.ActorID != event.ActorID || !got.CreatedAt.Equal(event.CreatedAt) {
+		t.Fatalf("delivery = %#v, %v", got, err)
+	}
+}
+
 func TestClearPersistsPerUserWithoutChangingActivity(t *testing.T) {
 	root := t.TempDir()
 	store, err := New(root)

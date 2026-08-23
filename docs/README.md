@@ -57,6 +57,12 @@ of the exact token and result request, so a retry after an ambiguous rename, dir
 failure returns the already committed execution without double-accounting. When one parallel step
 exhausts its attempts, terminal publication cancels and clears every sibling lease in the same atomic
 record.
+The dispatch request itself contains only a workflow version and server-issued activity delivery ID.
+Immutable pull-created, pull-synchronized, and pull-merged deliveries retain their platform actor,
+time, resource identity, and exact source revision. The workflow runtime maps those records to reviewed
+trigger names and derives every `TriggerEvent` field server-side; arbitrary participant-supplied event
+IDs, names, times, actors, inputs, revisions, cross-repository deliveries, unsupported event kinds, and
+deliveries made stale by pull movement all fail closed.
 
 ## Evidence-backed software adoption
 

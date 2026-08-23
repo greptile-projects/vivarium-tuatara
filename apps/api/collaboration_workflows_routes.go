@@ -10,8 +10,8 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
-	"time"
 
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/activities"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/agentprojects"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/collaborationworkflows"
@@ -29,7 +29,7 @@ type collaborationWorkflowSourceInput struct {
 
 var exactCommit = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
-func registerCollaborationWorkflowRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, workflows *collaborationworkflows.Store, agents *agentprojects.Store, pulls *pullrequests.Store) {
+func registerCollaborationWorkflowRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, workflows *collaborationworkflows.Store, agents *agentprojects.Store, pulls *pullrequests.Store, deliveries *activities.Store) {
 	mux.HandleFunc("GET /repositories/{id}/collaboration-workflows", func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id")); !ok {
 			return
@@ -130,16 +130,11 @@ func registerCollaborationWorkflowRoutes(mux *http.ServeMux, git *storage.Store,
 	mux.HandleFunc("POST /repositories/{id}/collaboration-workflows/{workflow_id}/revisions", handle(true, true))
 
 	type startInput struct {
-		EventID           string            `json:"event_id"`
-		WorkflowVersion   int               `json:"workflow_version"`
-		TriggerKind       string            `json:"trigger_kind"`
-		EventName         string            `json:"event_name"`
-		OccurredAt        time.Time         `json:"occurred_at"`
-		Inputs            map[string]any    `json:"inputs"`
-		ResourceRevisions map[string]string `json:"resource_revisions"`
+		DeliveryID      string `json:"delivery_id"`
+		WorkflowVersion int    `json:"workflow_version"`
 	}
 	mux.HandleFunc("POST /repositories/{id}/collaboration-workflows/{workflow_id}/executions", func(w http.ResponseWriter, r *http.Request) {
-		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		_, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
 		if !ok {
 			return
 		}
@@ -157,11 +152,11 @@ func registerCollaborationWorkflowRoutes(mux *http.ServeMux, git *storage.Store,
 			writeAPIError(w, 409, "stale_workflow_input", "workflow revision is no longer current")
 			return
 		}
-		if !workflowResourcesMatch(git, pulls, r.PathValue("id"), wf.Revisions[in.WorkflowVersion-1].Definition.Triggers, in.TriggerKind, in.EventName, in.Inputs, in.ResourceRevisions) {
-			writeAPIError(w, 409, "stale_workflow_input", "trigger resources and revisions must resolve exactly from repository state")
+		event, ok := workflowEventFromDelivery(git, pulls, deliveries, r.PathValue("id"), in.DeliveryID)
+		if !ok {
+			writeAPIError(w, 409, "stale_workflow_input", "a trusted current repository event delivery is required")
 			return
 		}
-		event := collaborationworkflows.TriggerEvent{ID: in.EventID, Kind: in.TriggerKind, Name: in.EventName, ActorID: actor.UserID, OccurredAt: in.OccurredAt, Inputs: in.Inputs, ResourceRevisions: in.ResourceRevisions}
 		out, err := workflows.StartExecution(wf.ID, in.WorkflowVersion, event)
 		writeWorkflowExecution(w, out, err, 201)
 	})
@@ -267,38 +262,24 @@ func registerCollaborationWorkflowRoutes(mux *http.ServeMux, git *storage.Store,
 	})
 }
 
-func workflowResourcesMatch(git *storage.Store, pulls *pullrequests.Store, repo string, triggers []collaborationworkflows.Trigger, kind, event string, inputs map[string]any, revisions map[string]string) bool {
-	expected := map[string]string{}
-	matched := false
-	for _, trigger := range triggers {
-		if trigger.Kind != kind || trigger.Event != event {
-			continue
-		}
-		matched = true
-		for _, input := range trigger.Inputs {
-			if input.Source != "event.pull_id" {
-				continue
-			}
-			id, ok := inputs[input.Name].(string)
-			if !ok || id == "" || pulls == nil {
-				return false
-			}
-			pull, err := pulls.Get(repo, id)
-			if err != nil || pull.RepositoryID != repo || pull.SourceCommitID == "" {
-				return false
-			}
-			expected[input.Name] = pull.SourceCommitID
-		}
+func workflowEventFromDelivery(git *storage.Store, pulls *pullrequests.Store, deliveries *activities.Store, repo, deliveryID string) (collaborationworkflows.TriggerEvent, bool) {
+	if deliveries == nil {
+		return collaborationworkflows.TriggerEvent{}, false
 	}
-	if !matched || len(expected) != len(revisions) {
-		return false
+	delivery, err := deliveries.Get(deliveryID)
+	if err != nil || delivery.RepositoryID != repo || delivery.ResourceType != "pull_request" || delivery.ResourceRevision == "" {
+		return collaborationworkflows.TriggerEvent{}, false
 	}
-	for key, revision := range expected {
-		if revisions[key] != revision || !workflowCommitReachable(git, repo, revision) {
-			return false
-		}
+	names := map[string]string{"pull_request.created": "pull.opened", "pull_request.synchronized": "pull.synchronized", "pull_request.merged": "pull.merged"}
+	name := names[delivery.Kind]
+	if name == "" || pulls == nil {
+		return collaborationworkflows.TriggerEvent{}, false
 	}
-	return true
+	pull, err := pulls.Get(repo, delivery.ResourceID)
+	if err != nil || pull.SourceCommitID != delivery.ResourceRevision || !workflowCommitReachable(git, repo, delivery.ResourceRevision) {
+		return collaborationworkflows.TriggerEvent{}, false
+	}
+	return collaborationworkflows.TriggerEvent{ID: delivery.ID, Kind: "repository_event", Name: name, ActorID: delivery.ActorID, OccurredAt: delivery.CreatedAt, Inputs: map[string]any{"pull_id": delivery.ResourceID}, ResourceRevisions: map[string]string{"pull_id": delivery.ResourceRevision}}, true
 }
 
 func workflowCommitReachable(git *storage.Store, repo, revision string) bool {

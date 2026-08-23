@@ -284,6 +284,10 @@ whenever dependencies change or the web job fails before it starts.
   current source commit; missing, invented, or mismatched provenance fails closed. Exact completion
   retries reconcile through a retained request digest, while terminal failure atomically revokes every
   sibling lease so durable terminal records never advertise unusable live capabilities.
+  Repository-event execution requests accept only an immutable activity delivery ID and workflow
+  version. Pull creation, synchronization, and merge activity retains its exact source revision; the
+  runtime derives trigger kind/name, occurrence time, actor, pull input, and revision from that server
+  record and rejects stale or unsupported deliveries. Participants cannot supply trigger metadata.
 
 - **Collaborative software adoption** — `/adoption-workspaces` and the web `/adoption`
   workspace retain shared software-fit evaluations beneath `$ADOPTION_WORKSPACE_STORAGE_ROOT`

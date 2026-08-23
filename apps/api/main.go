@@ -1366,7 +1366,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		registerQualityPlanRoutes(mux, repositoryCatalog, authStore, qualityPlanStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && collaborationWorkflowStore != nil && store != nil && agentProjectStore != nil {
-		registerCollaborationWorkflowRoutes(mux, store, repositoryCatalog, authStore, collaborationWorkflowStore, agentProjectStore, pullRequestStore)
+		registerCollaborationWorkflowRoutes(mux, store, repositoryCatalog, authStore, collaborationWorkflowStore, agentProjectStore, pullRequestStore, activityStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && assuranceProgramStore != nil {
 		registerAssuranceProgramRoutes(mux, repositoryCatalog, authStore, assuranceProgramStore, assuranceScopeResources{git: store, dataFlows: dataFlowStore, infrastructure: infrastructureStore, environments: deploymentStore, releases: releaseStore})
@@ -2246,7 +2246,7 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 		if errors.Is(err, pullrequests.ErrDurabilityUncertain) {
 			required, _ := repositoriesStore.RequiredChecks(created.RepositoryID, created.TargetBranch)
 			startCheckRuns(gitStore, checkRunStore, created, required...)
-			recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "pull_request.created", ActorID: actor.UserID, RepositoryID: created.RepositoryID, ResourceType: "pull_request", ResourceID: created.ID, ResourceTitle: created.Title})
+			recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "pull_request.created", ActorID: actor.UserID, RepositoryID: created.RepositoryID, ResourceType: "pull_request", ResourceID: created.ID, ResourceTitle: created.Title, ResourceRevision: created.SourceCommitID})
 			recordMentions(activityStore, repositoriesStore, userStore, actor.UserID, created.RepositoryID, "pull_request", created.ID, created.Title, created.Title+"\n"+created.Body)
 			w.Header().Set("Location", location)
 			writeUncertainMutation(w, created)
@@ -2257,7 +2257,7 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 		}
 		required, _ := repositoriesStore.RequiredChecks(created.RepositoryID, created.TargetBranch)
 		startCheckRuns(gitStore, checkRunStore, created, required...)
-		recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "pull_request.created", ActorID: actor.UserID, RepositoryID: created.RepositoryID, ResourceType: "pull_request", ResourceID: created.ID, ResourceTitle: created.Title})
+		recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "pull_request.created", ActorID: actor.UserID, RepositoryID: created.RepositoryID, ResourceType: "pull_request", ResourceID: created.ID, ResourceTitle: created.Title, ResourceRevision: created.SourceCommitID})
 		recordMentions(activityStore, repositoriesStore, userStore, actor.UserID, created.RepositoryID, "pull_request", created.ID, created.Title, created.Title+"\n"+created.Body)
 		w.Header().Set("Location", location)
 		writeJSON(w, 201, created)
@@ -2388,7 +2388,7 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 		}
 		created, linkErr := reconcileTaskState(created)
 		startCheckRuns(gitStore, checkRunStore, created)
-		recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "pull_request.created", ActorID: actor.UserID, RepositoryID: created.RepositoryID, ResourceType: "pull_request", ResourceID: created.ID, ResourceTitle: created.Title})
+		recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "pull_request.created", ActorID: actor.UserID, RepositoryID: created.RepositoryID, ResourceType: "pull_request", ResourceID: created.ID, ResourceTitle: created.Title, ResourceRevision: created.SourceCommitID})
 		w.Header().Set("Location", "/repositories/"+created.RepositoryID+"/pulls/"+created.ID)
 		if errors.Is(err, pullrequests.ErrDurabilityUncertain) || linkErr != nil {
 			writeUncertainMutation(w, created)
@@ -2556,7 +2556,7 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 		if errors.Is(err, pullrequests.ErrDurabilityUncertain) {
 			required, _ := repositoriesStore.RequiredChecks(updated.RepositoryID, updated.TargetBranch)
 			startCheckRuns(gitStore, checkRunStore, updated, required...)
-			recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "pull_request.synchronized", ActorID: actor.UserID, RepositoryID: updated.RepositoryID, ResourceType: "pull_request", ResourceID: updated.ID, ResourceTitle: updated.Title})
+			recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "pull_request.synchronized", ActorID: actor.UserID, RepositoryID: updated.RepositoryID, ResourceType: "pull_request", ResourceID: updated.ID, ResourceTitle: updated.Title, ResourceRevision: updated.SourceCommitID})
 			writeUncertainMutation(w, updated)
 			return
 		}
@@ -2565,7 +2565,7 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 		}
 		required, _ := repositoriesStore.RequiredChecks(updated.RepositoryID, updated.TargetBranch)
 		startCheckRuns(gitStore, checkRunStore, updated, required...)
-		recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "pull_request.synchronized", ActorID: actor.UserID, RepositoryID: updated.RepositoryID, ResourceType: "pull_request", ResourceID: updated.ID, ResourceTitle: updated.Title})
+		recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "pull_request.synchronized", ActorID: actor.UserID, RepositoryID: updated.RepositoryID, ResourceType: "pull_request", ResourceID: updated.ID, ResourceTitle: updated.Title, ResourceRevision: updated.SourceCommitID})
 		writeJSON(w, http.StatusOK, updated)
 	})
 	mux.HandleFunc("GET /repositories/{id}/pulls/{pull_id}/checks", func(w http.ResponseWriter, r *http.Request) {
@@ -2810,7 +2810,7 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 		merged, err := store.Merge(r.PathValue("id"), r.PathValue("pull_id"), actor.UserID)
 		if errors.Is(err, pullrequests.ErrDurabilityUncertain) {
 			merged, _ = reconcileTaskState(merged)
-			recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "pull_request.merged", ActorID: actor.UserID, RepositoryID: merged.RepositoryID, ResourceType: "pull_request", ResourceID: merged.ID, ResourceTitle: merged.Title})
+			recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "pull_request.merged", ActorID: actor.UserID, RepositoryID: merged.RepositoryID, ResourceType: "pull_request", ResourceID: merged.ID, ResourceTitle: merged.Title, ResourceRevision: merged.SourceCommitID})
 			writeUncertainMutation(w, merged)
 			return
 		}
@@ -2861,7 +2861,7 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 				if closedLinkedProposal {
 					recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "proposal.closed", ActorID: actor.UserID, RepositoryID: merged.RepositoryID, ResourceType: "proposal", ResourceID: proposal.ID, ResourceTitle: proposal.Title})
 				}
-				recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "pull_request.merged", ActorID: actor.UserID, RepositoryID: merged.RepositoryID, ResourceType: "pull_request", ResourceID: merged.ID, ResourceTitle: merged.Title})
+				recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "pull_request.merged", ActorID: actor.UserID, RepositoryID: merged.RepositoryID, ResourceType: "pull_request", ResourceID: merged.ID, ResourceTitle: merged.Title, ResourceRevision: merged.SourceCommitID})
 				writeUncertainMutation(w, merged)
 				return
 			}
@@ -2874,7 +2874,7 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 				recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "proposal.closed", ActorID: actor.UserID, RepositoryID: merged.RepositoryID, ResourceType: "proposal", ResourceID: proposal.ID, ResourceTitle: proposal.Title})
 			}
 		}
-		recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "pull_request.merged", ActorID: actor.UserID, RepositoryID: merged.RepositoryID, ResourceType: "pull_request", ResourceID: merged.ID, ResourceTitle: merged.Title})
+		recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "pull_request.merged", ActorID: actor.UserID, RepositoryID: merged.RepositoryID, ResourceType: "pull_request", ResourceID: merged.ID, ResourceTitle: merged.Title, ResourceRevision: merged.SourceCommitID})
 		writeJSON(w, http.StatusOK, merged)
 	})
 	mux.HandleFunc("POST /repositories/{id}/pulls/{pull_id}/queue", func(w http.ResponseWriter, r *http.Request) {
@@ -3101,7 +3101,7 @@ func finalizeQueuedMerge(merged pullrequests.PullRequest, repositoriesStore *rep
 			return err
 		}
 	}
-	return recordActivityOnce(activityStore, repositoriesStore, "queue-pull-merged:"+merged.RepositoryID+":"+merged.ID, activities.Event{Kind: "pull_request.merged", ActorID: actorID, RepositoryID: merged.RepositoryID, ResourceType: "pull_request", ResourceID: merged.ID, ResourceTitle: merged.Title})
+	return recordActivityOnce(activityStore, repositoriesStore, "queue-pull-merged:"+merged.RepositoryID+":"+merged.ID, activities.Event{Kind: "pull_request.merged", ActorID: actorID, RepositoryID: merged.RepositoryID, ResourceType: "pull_request", ResourceID: merged.ID, ResourceTitle: merged.Title, ResourceRevision: merged.SourceCommitID})
 }
 
 func writePullRequestError(w http.ResponseWriter, err error) bool {
@@ -3490,7 +3490,7 @@ func registerChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, re
 		}
 		if errors.Is(err, changesessions.ErrDurabilityUncertain) || errors.Is(err, pullrequests.ErrDurabilityUncertain) {
 			if completed.ID != "" {
-				recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "pull_request.synchronized", ActorID: run.InitiatorID, RepositoryID: pull.RepositoryID, ResourceType: "pull_request", ResourceID: pull.ID, ResourceTitle: pull.Title})
+				recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "pull_request.synchronized", ActorID: run.InitiatorID, RepositoryID: pull.RepositoryID, ResourceType: "pull_request", ResourceID: pull.ID, ResourceTitle: pull.Title, ResourceRevision: pull.SourceCommitID})
 			}
 			writeUncertainMutation(w, response)
 			return
@@ -3499,7 +3499,7 @@ func registerChangeSessionRoutes(mux *http.ServeMux, gitStore *storage.Store, re
 			return
 		}
 		w.Header().Set("Location", strings.TrimSuffix(r.URL.Path, "/completion")+"#outcome")
-		recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "pull_request.synchronized", ActorID: run.InitiatorID, RepositoryID: pull.RepositoryID, ResourceType: "pull_request", ResourceID: pull.ID, ResourceTitle: pull.Title})
+		recordActivity(activityStore, repositoriesStore, activities.Event{Kind: "pull_request.synchronized", ActorID: run.InitiatorID, RepositoryID: pull.RepositoryID, ResourceType: "pull_request", ResourceID: pull.ID, ResourceTitle: pull.Title, ResourceRevision: pull.SourceCommitID})
 		writeJSON(w, http.StatusCreated, response)
 	})
 	mux.HandleFunc("POST /repositories/{id}/pulls/{pull_id}/sessions/{session_id}/runs/{run_id}/events", func(w http.ResponseWriter, r *http.Request) {

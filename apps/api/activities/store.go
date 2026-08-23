@@ -21,16 +21,17 @@ import (
 var ErrInvalid = errors.New("invalid activity event")
 
 type Event struct {
-	ID             string    `json:"id"`
-	Kind           string    `json:"kind"`
-	ActorID        string    `json:"actor_id"`
-	RepositoryID   string    `json:"repository_id"`
-	RepositoryName string    `json:"repository_name"`
-	ResourceType   string    `json:"resource_type"`
-	ResourceID     string    `json:"resource_id"`
-	ResourceTitle  string    `json:"resource_title"`
-	TargetUserID   *string   `json:"target_user_id"`
-	CreatedAt      time.Time `json:"created_at"`
+	ID               string    `json:"id"`
+	Kind             string    `json:"kind"`
+	ActorID          string    `json:"actor_id"`
+	RepositoryID     string    `json:"repository_id"`
+	RepositoryName   string    `json:"repository_name"`
+	ResourceType     string    `json:"resource_type"`
+	ResourceID       string    `json:"resource_id"`
+	ResourceTitle    string    `json:"resource_title"`
+	ResourceRevision string    `json:"resource_revision,omitempty"`
+	TargetUserID     *string   `json:"target_user_id"`
+	CreatedAt        time.Time `json:"created_at"`
 }
 
 type Store struct {
@@ -245,6 +246,22 @@ func (s *Store) List() ([]Event, error) {
 		return result[i].CreatedAt.After(result[j].CreatedAt)
 	})
 	return result, nil
+}
+
+// Get resolves one immutable, server-issued collaboration event by delivery ID.
+func (s *Store) Get(id string) (Event, error) {
+	if !validID(id) {
+		return Event{}, ErrInvalid
+	}
+	data, err := os.ReadFile(filepath.Join(s.root, id+".json"))
+	if err != nil {
+		return Event{}, err
+	}
+	var event Event
+	if json.Unmarshal(data, &event) != nil || event.ID != id || !validID(event.ActorID) || !validID(event.RepositoryID) {
+		return Event{}, fmt.Errorf("corrupt activity event %s", id)
+	}
+	return event, nil
 }
 
 func validID(value string) bool {
