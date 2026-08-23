@@ -1335,6 +1335,8 @@ export type ImpactAssessment = {
     created_at: string;
   };
 };
+export type ConflictCitation = { side: "base" | "source" | "target" | "proposed"; revision: string; path: string; evidence_id?: string };
+export type ConflictAuthorship = { actor_id: string; agent_id?: string };
 export type DevelopmentWorkspace = {
   id: string;
   repository_id: string;
@@ -1373,6 +1375,7 @@ export type DevelopmentWorkspace = {
     conflict_launch_id?: string;
   };
   conflict_context?: {
+    version: number;
     pull_request_id: string;
     candidate_id?: string;
     base_commit_id: string;
@@ -1382,6 +1385,17 @@ export type DevelopmentWorkspace = {
     affected_checks: string[];
     incomplete: string[];
     publication_targets: { repository_id: string; branch: string; revision: string; authority: string }[];
+    questions: {
+      id: string; body: string; uncertainty: string; citations: ConflictCitation[];
+      authorship: ConflictAuthorship; created_at: string;
+      answer?: { body: string; uncertainty: string; citations: ConflictCitation[]; authorship: ConflictAuthorship; created_at: string };
+    }[];
+    resolutions: {
+      id: string; path: string; summary: string; proposed_content: string; expected_sha256: string;
+      applied_sha256?: string; state: "proposed" | "applied" | "undone"; uncertainty: string;
+      preservation: { kind: "acceptance_criterion" | "design_decision" | "migration" | "user_behavior"; reference: string; disposition: "preserved" | "intentionally_changed"; rationale: string; citations: ConflictCitation[] }[];
+      authorship: ConflictAuthorship; applied_by?: ConflictAuthorship; created_at: string; applied_at?: string; undone_at?: string;
+    }[];
   };
   participants?: {
     principal_kind: "human" | "approved_agent";

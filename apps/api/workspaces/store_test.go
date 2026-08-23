@@ -167,6 +167,45 @@ func TestConflictLaunchClaimReconcilesOneDurableWorkspace(t *testing.T) {
 	}
 }
 
+func TestConflictMeaningLedgerRetainsCASAuthorshipAndUndo(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := store.Create(Workspace{RepositoryID: "repo", CommitID: "target", CreatorID: "operator", ConflictContext: &ConflictContext{PullRequestID: "pull", BaseCommitID: "base", Files: []ConflictFileEvidence{{Path: "service.go"}}}}, []byte("definition"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	citation := ConflictCitation{Side: "source", Revision: "source", Path: "service.go"}
+	created, err = store.AddConflictQuestion(created.ID, 1, ConflictQuestion{Body: "Which retry remains intentional?", Uncertainty: "The migration note is incomplete.", Citations: []ConflictCitation{citation}, Authorship: ConflictAuthorship{ActorID: "operator", AgentID: "agent"}})
+	if err != nil || created.ConflictContext.Version != 2 || created.ConflictContext.Questions[0].Authorship.AgentID != "agent" {
+		t.Fatalf("question = %#v, %v", created.ConflictContext, err)
+	}
+	if _, err = store.AnswerConflictQuestion(created.ID, created.ConflictContext.Questions[0].ID, 1, ConflictAnswer{}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale answer = %v", err)
+	}
+	created, err = store.AnswerConflictQuestion(created.ID, created.ConflictContext.Questions[0].ID, 2, ConflictAnswer{Body: "Both retries remain.", Uncertainty: "Load behavior needs a check.", Citations: []ConflictCitation{citation}, Authorship: ConflictAuthorship{ActorID: "owner"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err = store.AddConflictResolution(created.ID, 3, ConflictResolution{Path: "service.go", Summary: "Retain both retries", ProposedContent: "resolved", ExpectedSHA256: "old", Preservation: []ConflictPreservation{{Kind: "user_behavior", Reference: "retry", Disposition: "preserved", Citations: []ConflictCitation{citation}}}, Authorship: ConflictAuthorship{ActorID: "operator", AgentID: "agent"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolution := created.ConflictContext.Resolutions[0]
+	created, err = store.ActConflictResolution(created.ID, resolution.ID, 4, true, "operator", ConflictAuthorship{ActorID: "operator", AgentID: "agent"}, func(Workspace, ConflictResolution) (string, string, error) { return "before", "after", nil })
+	if err != nil || created.ConflictContext.Resolutions[0].State != "applied" || created.ConflictContext.Resolutions[0].PreviousContent != "before" {
+		t.Fatalf("apply = %#v, %v", created.ConflictContext.Resolutions[0], err)
+	}
+	created, err = store.ActConflictResolution(created.ID, resolution.ID, 5, false, "operator", ConflictAuthorship{ActorID: "operator"}, func(Workspace, ConflictResolution) (string, string, error) { return "resolved", "before-digest", nil })
+	if err != nil || created.ConflictContext.Resolutions[0].State != "undone" {
+		t.Fatalf("undo = %#v, %v", created.ConflictContext.Resolutions[0], err)
+	}
+	if len(created.Changes) != 2 || created.Changes[0].SHA256 != "after" || created.Changes[1].SHA256 != "before-digest" {
+		t.Fatalf("resolution provenance = %#v", created.Changes)
+	}
+}
+
 func TestControlTransferWaitsForAdmittedMutationAndRejectsStaleActor(t *testing.T) {
 	store, _ := New(t.TempDir())
 	creator := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"

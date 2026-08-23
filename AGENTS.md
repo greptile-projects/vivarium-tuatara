@@ -2907,6 +2907,12 @@ whenever dependencies change or the web job fails before it starts.
   `.vivarium/workspace.json` provisions compute, while a local Git bundle exposes complete immutable
   ancestry as `conflict/source` and `conflict/target`. Existing workspace editing, discussion,
   presence, commands, control leases, reconnect, and checkpoints provide the shared surface.
+  The compare-and-swap meaning ledger retains questions, answers, and bounded resolutions against
+  frozen base/source/target evidence and the current proposed file. Every statement cites an exact
+  side, revision, and overlap path; resolutions identify preserved or intentionally changed
+  acceptance criteria, design decisions, migrations, or user behaviors and residual uncertainty.
+  Apply and undo hold the renewable file-control lease across the runtime edit and durable update,
+  keeping human authors, agent identities, and human operators separately attributable.
   Creators may invite affected current human participants, who explicitly consent, and
   organization-approved agents with separately bounded file/command/lifecycle control. Invitations,
   evidence, or workspace access grant no repository, branch, credential, review, check, merge, or

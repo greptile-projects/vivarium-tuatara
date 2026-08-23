@@ -4231,6 +4231,28 @@ earlier task contribution is merged. Schema reads omit work in target repositori
 reader cannot access; definitions, privacy metadata, and data samples are never copied
 into the work contract.
 
+# Conflict meaning and resolution
+
+`GET /workspaces/{workspace_id}/conflict-comparison?path=...` compares one path retained by a
+conflict-reconciliation workspace across its exact base, source, target, and live proposed result.
+Each side returns its immutable revision (or workspace identity), bounded content, SHA-256 digest,
+and explicit missing state. The caller must retain current workspace and repository authorization.
+
+`POST /workspaces/{workspace_id}/conflict-questions` and `POST
+/workspaces/{workspace_id}/conflict-questions/{question_id}/answer` compare-and-swap the conflict
+ledger version. Questions and answers require a bounded statement, residual uncertainty, and one to
+ten citations whose side, revision, and path exactly match the frozen workspace evidence. Authorship
+is server-derived; an agent credential retains both agent identity and its human operator.
+
+`POST /workspaces/{workspace_id}/conflict-resolutions` proposes but does not apply a bounded complete
+file result. It binds the current proposed SHA-256 and records at least one acceptance criterion,
+design decision, migration, or user behavior as `preserved` or `intentionally_changed`, with
+rationale and exact citations. `POST .../conflict-resolutions/{resolution_id}/apply` and `/undo`
+require the current ledger version and active file-control lease. Control transfer, other ledger
+writes, the runtime edit, and its durable attribution are serialized; stale content fails closed.
+These endpoints grant no Git publication, branch, review, check, merge, secret, or environment
+authority.
+
 # Durable-state migration rehearsals
 
 `POST /repositories/{id}/durable-schemas/{schema_id}/migrations/{migration_id}/rehearsals`

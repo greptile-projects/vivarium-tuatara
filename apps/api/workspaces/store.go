@@ -75,6 +75,7 @@ type Source struct {
 // when a reconciliation workspace was launched. It is context, not authority:
 // publication still passes through the named repository's normal controls.
 type ConflictContext struct {
+	Version           int                    `json:"version"`
 	PullRequestID     string                 `json:"pull_request_id"`
 	CandidateID       string                 `json:"candidate_id,omitempty"`
 	BaseCommitID      string                 `json:"base_commit_id"`
@@ -84,6 +85,59 @@ type ConflictContext struct {
 	AffectedChecks    []string               `json:"affected_checks"`
 	Incomplete        []string               `json:"incomplete"`
 	PublicationTarget []ConflictPublication  `json:"publication_targets"`
+	Questions         []ConflictQuestion     `json:"questions"`
+	Resolutions       []ConflictResolution   `json:"resolutions"`
+}
+
+type ConflictCitation struct {
+	Side       string `json:"side"`
+	Revision   string `json:"revision"`
+	Path       string `json:"path"`
+	EvidenceID string `json:"evidence_id,omitempty"`
+}
+type ConflictAuthorship struct {
+	ActorID string `json:"actor_id"`
+	AgentID string `json:"agent_id,omitempty"`
+}
+type ConflictAnswer struct {
+	Body        string             `json:"body"`
+	Uncertainty string             `json:"uncertainty"`
+	Citations   []ConflictCitation `json:"citations"`
+	Authorship  ConflictAuthorship `json:"authorship"`
+	CreatedAt   time.Time          `json:"created_at"`
+}
+type ConflictQuestion struct {
+	ID          string             `json:"id"`
+	Body        string             `json:"body"`
+	Uncertainty string             `json:"uncertainty"`
+	Citations   []ConflictCitation `json:"citations"`
+	Authorship  ConflictAuthorship `json:"authorship"`
+	Answer      *ConflictAnswer    `json:"answer,omitempty"`
+	CreatedAt   time.Time          `json:"created_at"`
+}
+type ConflictPreservation struct {
+	Kind        string             `json:"kind"`
+	Reference   string             `json:"reference"`
+	Disposition string             `json:"disposition"`
+	Rationale   string             `json:"rationale"`
+	Citations   []ConflictCitation `json:"citations"`
+}
+type ConflictResolution struct {
+	ID              string                 `json:"id"`
+	Path            string                 `json:"path"`
+	Summary         string                 `json:"summary"`
+	ProposedContent string                 `json:"proposed_content"`
+	PreviousContent string                 `json:"previous_content,omitempty"`
+	ExpectedSHA256  string                 `json:"expected_sha256"`
+	AppliedSHA256   string                 `json:"applied_sha256,omitempty"`
+	State           string                 `json:"state"`
+	Uncertainty     string                 `json:"uncertainty"`
+	Preservation    []ConflictPreservation `json:"preservation"`
+	Authorship      ConflictAuthorship     `json:"authorship"`
+	AppliedBy       *ConflictAuthorship    `json:"applied_by,omitempty"`
+	CreatedAt       time.Time              `json:"created_at"`
+	AppliedAt       *time.Time             `json:"applied_at,omitempty"`
+	UndoneAt        *time.Time             `json:"undone_at,omitempty"`
 }
 type ConflictRevision struct {
 	Branch   string   `json:"branch"`
@@ -842,6 +896,207 @@ func (s *Store) RespondInvitation(id, actor, status string) (Workspace, error) {
 	return Workspace{}, ErrInvalid
 }
 
+func (s *Store) AddConflictQuestion(id string, expected int, question ConflictQuestion) (Workspace, error) {
+	control := s.controlLock(id)
+	control.Lock()
+	defer control.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w, err := s.read(id)
+	if err != nil {
+		return Workspace{}, err
+	}
+	if w.ConflictContext == nil || w.ConflictContext.Version != expected {
+		return Workspace{}, ErrConflict
+	}
+	question.ID, err = randomID(12)
+	if err != nil {
+		return Workspace{}, err
+	}
+	question.CreatedAt = s.now()
+	w.ConflictContext.Questions = append(w.ConflictContext.Questions, question)
+	w.ConflictContext.Version++
+	w.UpdatedAt = question.CreatedAt
+	w.Events = append(w.Events, Event{ID: question.ID, Kind: "conflict.question", ActorID: question.Authorship.ActorID, Role: "instruction", Detail: question.ID, CreatedAt: question.CreatedAt})
+	return w, s.write(w)
+}
+
+func (s *Store) AnswerConflictQuestion(id, questionID string, expected int, answer ConflictAnswer) (Workspace, error) {
+	control := s.controlLock(id)
+	control.Lock()
+	defer control.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w, err := s.read(id)
+	if err != nil {
+		return Workspace{}, err
+	}
+	if w.ConflictContext == nil || w.ConflictContext.Version != expected {
+		return Workspace{}, ErrConflict
+	}
+	now, found := s.now(), false
+	for i := range w.ConflictContext.Questions {
+		if w.ConflictContext.Questions[i].ID == questionID && w.ConflictContext.Questions[i].Answer == nil {
+			answer.CreatedAt = now
+			w.ConflictContext.Questions[i].Answer = &answer
+			found = true
+		}
+	}
+	if !found {
+		return Workspace{}, ErrInvalid
+	}
+	w.ConflictContext.Version++
+	w.UpdatedAt = now
+	w.Events = append(w.Events, Event{Kind: "conflict.question.answered", ActorID: answer.Authorship.ActorID, Role: "authorship", Detail: questionID, CreatedAt: now})
+	return w, s.write(w)
+}
+
+func (s *Store) AddConflictResolution(id string, expected int, resolution ConflictResolution) (Workspace, error) {
+	control := s.controlLock(id)
+	control.Lock()
+	defer control.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w, err := s.read(id)
+	if err != nil {
+		return Workspace{}, err
+	}
+	if w.ConflictContext == nil || w.ConflictContext.Version != expected {
+		return Workspace{}, ErrConflict
+	}
+	resolution.ID, err = randomID(12)
+	if err != nil {
+		return Workspace{}, err
+	}
+	resolution.CreatedAt, resolution.State = s.now(), "proposed"
+	w.ConflictContext.Resolutions = append(w.ConflictContext.Resolutions, resolution)
+	w.ConflictContext.Version++
+	w.UpdatedAt = resolution.CreatedAt
+	w.Events = append(w.Events, Event{ID: resolution.ID, Kind: "conflict.resolution.proposed", ActorID: resolution.Authorship.ActorID, Role: "authorship", Detail: resolution.ID, CreatedAt: resolution.CreatedAt})
+	return w, s.write(w)
+}
+
+func (s *Store) CompleteConflictResolution(id, resolutionID string, expected int, applying bool, authorship ConflictAuthorship, previousContent, digest string) (Workspace, error) {
+	control := s.controlLock(id)
+	control.Lock()
+	defer control.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w, err := s.read(id)
+	if err != nil {
+		return Workspace{}, err
+	}
+	if w.ConflictContext == nil || w.ConflictContext.Version != expected {
+		return Workspace{}, ErrConflict
+	}
+	now, found := s.now(), false
+	for i := range w.ConflictContext.Resolutions {
+		r := &w.ConflictContext.Resolutions[i]
+		if r.ID != resolutionID {
+			continue
+		}
+		if applying && r.State == "proposed" {
+			r.State, r.PreviousContent, r.AppliedSHA256, r.AppliedBy, r.AppliedAt = "applied", previousContent, digest, &authorship, &now
+			found = true
+		} else if !applying && r.State == "applied" {
+			r.State, r.UndoneAt = "undone", &now
+			found = true
+		}
+	}
+	if !found {
+		return Workspace{}, ErrInvalid
+	}
+	w.ConflictContext.Version++
+	w.UpdatedAt = now
+	kind := "conflict.resolution.applied"
+	if !applying {
+		kind = "conflict.resolution.undone"
+	}
+	w.Events = append(w.Events, Event{Kind: kind, ActorID: authorship.ActorID, Role: "authorship", Detail: resolutionID, CreatedAt: now})
+	return w, s.write(w)
+}
+
+// ActConflictResolution holds the same lease lock across the final ledger
+// compare, runtime edit, and durable state transition. Questions, proposals,
+// control transfer, and another action cannot interleave with that sequence.
+func (s *Store) ActConflictResolution(id, resolutionID string, expected int, applying bool, principal string, authorship ConflictAuthorship, operation func(Workspace, ConflictResolution) (string, string, error)) (Workspace, error) {
+	control := s.controlLock(id)
+	control.Lock()
+	defer control.Unlock()
+	s.mu.Lock()
+	w, err := s.read(id)
+	if err != nil {
+		s.mu.Unlock()
+		return Workspace{}, err
+	}
+	if w.ConflictContext == nil || w.ConflictContext.Version != expected || !w.CanControl(principal, "files", s.now()) {
+		s.mu.Unlock()
+		if w.ConflictContext != nil && w.ConflictContext.Version == expected {
+			return Workspace{}, ErrControl
+		}
+		return Workspace{}, ErrConflict
+	}
+	var resolution *ConflictResolution
+	for i := range w.ConflictContext.Resolutions {
+		if w.ConflictContext.Resolutions[i].ID == resolutionID {
+			resolution = &w.ConflictContext.Resolutions[i]
+		}
+	}
+	if resolution == nil || (applying && resolution.State != "proposed") || (!applying && resolution.State != "applied") {
+		s.mu.Unlock()
+		return Workspace{}, ErrInvalid
+	}
+	snapshot := *resolution
+	s.mu.Unlock()
+	previous, digest, err := operation(w, snapshot)
+	if err != nil {
+		return Workspace{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w, err = s.read(id)
+	if err != nil {
+		return Workspace{}, err
+	}
+	now := s.now()
+	for i := range w.ConflictContext.Resolutions {
+		r := &w.ConflictContext.Resolutions[i]
+		if r.ID != resolutionID {
+			continue
+		}
+		if applying {
+			r.State, r.PreviousContent, r.AppliedSHA256, r.AppliedBy, r.AppliedAt = "applied", previous, digest, &authorship, &now
+		} else {
+			r.State, r.UndoneAt = "undone", &now
+		}
+	}
+	w.ConflictContext.Version++
+	w.UpdatedAt = now
+	size := len(snapshot.ProposedContent)
+	if !applying {
+		size = len(snapshot.PreviousContent)
+	}
+	change := Change{Path: snapshot.Path, SHA256: digest, Size: size, ActorID: authorship.ActorID, CreatedAt: now}
+	provenance, provenanceErr := s.readOrSeedProvenance(id, w)
+	if provenanceErr != nil {
+		return Workspace{}, provenanceErr
+	}
+	provenance.Changes = append(provenance.Changes, change)
+	if provenanceErr = s.writeProvenance(id, provenance); provenanceErr != nil {
+		return Workspace{}, provenanceErr
+	}
+	w.Changes = append(w.Changes, change)
+	if len(w.Changes) > 200 {
+		w.Changes = w.Changes[len(w.Changes)-200:]
+	}
+	kind := "conflict.resolution.applied"
+	if !applying {
+		kind = "conflict.resolution.undone"
+	}
+	w.Events = append(w.Events, Event{Kind: kind, ActorID: authorship.ActorID, Role: "authorship", Detail: resolutionID, CreatedAt: now})
+	return w, s.write(w)
+}
+
 func (s *Store) Create(w Workspace, definitionBytes []byte) (Workspace, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -867,6 +1122,11 @@ func (s *Store) Create(w Workspace, definitionBytes []byte) (Workspace, error) {
 	w.Presence = []Presence{}
 	w.Messages = []Message{}
 	w.Events = []Event{{Kind: "created", ActorID: w.CreatorID, Role: "authorship", CreatedAt: now}}
+	if w.ConflictContext != nil && w.ConflictContext.Version == 0 {
+		w.ConflictContext.Version = 1
+		w.ConflictContext.Questions = []ConflictQuestion{}
+		w.ConflictContext.Resolutions = []ConflictResolution{}
+	}
 	if err := os.MkdirAll(s.RuntimePath(w.ID), 0700); err != nil {
 		return Workspace{}, err
 	}
