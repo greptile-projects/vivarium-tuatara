@@ -16,6 +16,19 @@ clears projected stale/unavailable state when that same authoritative source rec
 remain immutable. CAS history
 retains attributed discussion, hypotheses, scope changes, and status without granting Git, testing,
 workspace, environment, deployment, evidence, or debugging authority.
+Bounded regression scenarios freeze synthetic/privacy-preserving inputs, an exact preinstalled image,
+revision-appropriate setup and comparison commands, resources, and criteria. Attempts resolve exact commits,
+attested releases, and named dependency repository/revision pairs before digesting and materializing bounded
+dependency archives at deterministic read-only workspace paths and running one to five clean, networkless
+isolated executions. They retain outputs, logs, digest-addressed artifacts, cost, actor, environment, and
+provenance, and classify passed, failed, flaky, incompatible setup, missing dependency, unsafe fixture, and
+untestable revision distinctly; non-executable states are explicit gaps rather than behavioral evidence.
+Caller-stable attempt reservations precede check creation; retries reuse deterministic run identities and
+finalization survives unrelated investigation CAS changes, so completed execution cannot become orphaned.
+Overlapping exact retries expose the retained running reservation while any reused check is nonterminal and
+cannot finalize it as failed. Incompatible setup derives only from structured executor-originated setup
+failures, including a pre-run preinstalled-image inspection; command-controlled stderr and exit codes never
+alter a completed behavioral classification.
 
 Conflict reconciliation resolution checkpoints in the workspace ledger assemble an immutable unreferenced
 two-parent candidate and retain all affected required checks, reproductions, contract/schema scenarios,

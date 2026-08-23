@@ -1,6 +1,7 @@
 package checkruns
 
 import (
+	"archive/tar"
 	"bytes"
 	"errors"
 	"fmt"
@@ -13,6 +14,37 @@ import (
 	"testing"
 	"time"
 )
+
+func TestWriteVerificationArchiveMaterializesBoundedDependency(t *testing.T) {
+	var body bytes.Buffer
+	w := tar.NewWriter(&body)
+	content := []byte("dependency source")
+	if err := w.WriteHeader(&tar.Header{Name: "src/value.txt", Mode: 0o644, Size: int64(len(content)), Typeflag: tar.TypeReg}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write(content); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	if err := writeVerificationArchive(root, "dependencies/runtime", body.Bytes()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(root, "dependencies/runtime/src/value.txt"))
+	if err != nil || string(got) != "dependency source" {
+		t.Fatalf("materialized dependency = %q, %v", got, err)
+	}
+	var unsafe bytes.Buffer
+	uw := tar.NewWriter(&unsafe)
+	_ = uw.WriteHeader(&tar.Header{Name: "../escape", Mode: 0o644, Size: 1, Typeflag: tar.TypeReg})
+	_, _ = uw.Write([]byte("x"))
+	_ = uw.Close()
+	if err := writeVerificationArchive(root, "dependencies/unsafe", unsafe.Bytes()); err == nil {
+		t.Fatal("traversal archive was accepted")
+	}
+}
 
 func TestParseConfigValidatesExecutionContext(t *testing.T) {
 	config, err := ParseConfig([]byte(`{"version":1,"checks":[{"name":"test","image":"alpine:3.22","command":"test \"$MODE\" = ci","working_directory":"app","environment":{"MODE":"ci"},"timeout_seconds":30,"cpus":0.5,"memory_mb":384,"storage_mb":96}]}`))
@@ -570,6 +602,28 @@ func TestExecuteUsesExactDisposableSnapshotAndPersistsLifecycle(t *testing.T) {
 	}
 	if output, err := exec.Command("docker", "ps", "--quiet", "--filter", "name=vivarium-check-"+got[0].ID).Output(); err != nil || len(output) != 0 {
 		t.Fatalf("check descendants retained: %q, %v", output, err)
+	}
+	classificationStore, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	classificationRuns, err := classificationStore.Create(runs[0].RepositoryID, runs[0].PullRequestID, commit, []Definition{
+		{Name: "missing image", Image: "vivarium-unavailable-image:never", Command: "true", WorkingDirectory: ".", TimeoutSeconds: 10},
+		{Name: "spoofed docker stderr", Image: "alpine:3.22", Command: "echo 'error response from daemon: no such image:' >&2; exit 125", WorkingDirectory: ".", TimeoutSeconds: 10},
+	})
+	if err != nil || len(classificationRuns) != 2 {
+		t.Fatalf("classification runs = %#v, %v", classificationRuns, err)
+	}
+	for _, run := range classificationRuns {
+		classificationStore.Execute(run, repository)
+	}
+	missing, _ := classificationStore.Get(runs[0].RepositoryID, runs[0].PullRequestID, classificationRuns[0].ID)
+	spoofed, _ := classificationStore.Get(runs[0].RepositoryID, runs[0].PullRequestID, classificationRuns[1].ID)
+	if missing.State != "failed" || missing.FailureKind != "setup" {
+		t.Fatalf("missing image was not a structured setup failure: %#v", missing)
+	}
+	if spoofed.State != "failed" || spoofed.FailureKind != "" || spoofed.ExitCode == nil || *spoofed.ExitCode != 125 {
+		t.Fatalf("command-controlled stderr became setup evidence: %#v", spoofed)
 	}
 
 	// A process restart releases the execution lock; durable nonterminal work is

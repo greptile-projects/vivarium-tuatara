@@ -2,7 +2,9 @@
 package checkruns
 
 import (
+	"archive/tar"
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -62,9 +64,10 @@ type Definition struct {
 // configuration cannot declare these; issue verification supplies them from
 // retained, checksummed reporter evidence.
 type InputFile struct {
-	Name   string `json:"name"`
-	SHA256 string `json:"sha256"`
-	Data   string `json:"data"`
+	Name    string `json:"name"`
+	SHA256  string `json:"sha256"`
+	Data    string `json:"data"`
+	Archive bool   `json:"archive,omitempty"`
 }
 
 type Config struct {
@@ -88,6 +91,7 @@ type Run struct {
 	State          string     `json:"state"`
 	ExitCode       *int       `json:"exit_code,omitempty"`
 	Failure        string     `json:"failure,omitempty"`
+	FailureKind    string     `json:"failure_kind,omitempty"`
 	CleanupFailure string     `json:"cleanup_failure,omitempty"`
 	CreatedAt      time.Time  `json:"created_at"`
 	StartedAt      *time.Time `json:"started_at,omitempty"`
@@ -976,6 +980,7 @@ func (s *Store) Execute(run Run, repositoryPath string) {
 		err = p
 	}
 	exit := 0
+	setupFailure := err != nil
 	if err == nil {
 		for _, input := range run.Definition.Inputs {
 			clean := filepath.Clean(input.Name)
@@ -983,10 +988,18 @@ func (s *Store) Execute(run Run, repositoryPath string) {
 			sum := sha256.Sum256(raw)
 			if decodeErr != nil || clean == "." || filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) || hex.EncodeToString(sum[:]) != input.SHA256 {
 				err = errors.New("verification input is invalid")
+				setupFailure = true
 				break
 			}
-			if writeErr := writeVerificationInput(workspace, clean, raw); writeErr != nil {
+			var writeErr error
+			if input.Archive {
+				writeErr = writeVerificationArchive(workspace, clean, raw)
+			} else {
+				writeErr = writeVerificationInput(workspace, clean, raw)
+			}
+			if writeErr != nil {
 				err = writeErr
+				setupFailure = true
 				break
 			}
 		}
@@ -996,10 +1009,12 @@ func (s *Store) Execute(run Run, repositoryPath string) {
 		info, e := os.Stat(dir)
 		if e != nil || !info.IsDir() {
 			err = errors.New("working directory does not exist")
+			setupFailure = true
 		} else {
 			outputDirectory, outputErr := os.MkdirTemp("", "vivarium-output-*")
 			if outputErr != nil {
 				err = outputErr
+				setupFailure = true
 			} else {
 				defer os.RemoveAll(outputDirectory)
 				outputErr = os.Chmod(outputDirectory, 0o777)
@@ -1008,6 +1023,19 @@ func (s *Store) Execute(run Run, repositoryPath string) {
 				err = outputErr
 			}
 			if err != nil {
+				goto executionDone
+			}
+			imageDiagnostic, imageErr := exec.Command("docker", "image", "inspect", run.Definition.Image).CombinedOutput()
+			if imageErr != nil {
+				diagnostic := strings.TrimSpace(string(imageDiagnostic))
+				if len(diagnostic) > 1000 {
+					diagnostic = diagnostic[:1000]
+				}
+				if diagnostic == "" {
+					diagnostic = imageErr.Error()
+				}
+				err = errors.New("container image unavailable: " + diagnostic)
+				setupFailure = true
 				goto executionDone
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), time.Duration(run.Definition.TimeoutSeconds)*time.Second)
@@ -1087,6 +1115,9 @@ func (s *Store) Execute(run Run, repositoryPath string) {
 				if err != nil {
 					run.Failure = err.Error()
 				}
+				if setupFailure {
+					run.FailureKind = "setup"
+				}
 				last := &run.Attempts[len(run.Attempts)-1]
 				last.State, last.ExitCode, last.Failure = "cleanup_pending", run.ExitCode, run.Failure
 				if !s.updatePublished(run) {
@@ -1116,12 +1147,60 @@ executionDone:
 	if err != nil {
 		run.State = "failed"
 		run.Failure = err.Error()
+		if setupFailure {
+			run.FailureKind = "setup"
+		}
 	} else {
 		run.State = "succeeded"
 	}
 	last := &run.Attempts[len(run.Attempts)-1]
 	last.State, last.CompletedAt, last.ExitCode, last.Failure = run.State, &done, run.ExitCode, run.Failure
 	s.publishTerminal(run, attemptNumber, done)
+}
+
+func writeVerificationArchive(root, destination string, body []byte) error {
+	target := filepath.Join(root, destination)
+	if err := os.MkdirAll(target, 0o700); err != nil {
+		return err
+	}
+	reader := tar.NewReader(bytes.NewReader(body))
+	for {
+		header, err := reader.Next()
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return errors.New("verification archive is invalid")
+		}
+		clean := filepath.Clean(header.Name)
+		if clean == "." || filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+			return errors.New("verification archive path is invalid")
+		}
+		path := filepath.Join(destination, clean)
+		switch header.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(filepath.Join(root, path), 0o700); err != nil {
+				return err
+			}
+		case tar.TypeReg, tar.TypeRegA:
+			data, err := io.ReadAll(io.LimitReader(reader, 32*1024*1024+1))
+			if err != nil || len(data) > 32*1024*1024 {
+				return errors.New("verification archive entry is too large")
+			}
+			if err := writeVerificationInput(root, path, data); err != nil {
+				return err
+			}
+			mode := os.FileMode(0o600)
+			if header.Mode&0o111 != 0 {
+				mode = 0o700
+			}
+			if err := os.Chmod(filepath.Join(root, path), mode); err != nil {
+				return err
+			}
+		default:
+			return errors.New("verification archive contains an unsupported entry")
+		}
+	}
 }
 
 func directorySize(root string) (int64, error) {

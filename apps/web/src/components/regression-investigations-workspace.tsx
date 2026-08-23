@@ -41,6 +41,22 @@ type Investigation = {
     to?: string;
     created_at: string;
   }[];
+  scenarios: Scenario[];
+  attempts: Attempt[];
+};
+type ScenarioEnvironment = { image: string; working_directory: string; setup_command?: string; command: string; timeout_seconds: number; cpus: number; memory_mb: number; storage_mb: number };
+type Scenario = {
+  id: string;
+  name: string;
+  environment: ScenarioEnvironment;
+  acceptance_criteria: string[];
+  environment_variants: { revision: string; environment: ScenarioEnvironment }[];
+};
+type Attempt = {
+  id: string; scenario_id: string; target_kind: string; target_id?: string; revision?: string;
+  dependencies: { name: string; repository_id: string; revision: string; path: string; archive_sha256?: string }[]; classification: string; diagnostic?: string;
+  cost_compute_seconds: number; requested_by: string;
+  runs: { run_id?: string; state: string; exit_code?: number; failure?: string; output?: string; logs?: string; duration_ms: number; artifacts: { path: string; sha256: string; size: number }[] }[];
 };
 const field =
   "rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm";
@@ -57,6 +73,8 @@ const normalized = (investigation: Investigation): Investigation => ({
   history: investigation.history ?? [],
   acceptance_criteria: investigation.acceptance_criteria ?? [],
   affected_environments: investigation.affected_environments ?? [],
+  scenarios: investigation.scenarios ?? [],
+  attempts: investigation.attempts ?? [],
 });
 export function RegressionInvestigationsWorkspace({
   repositoryID,
@@ -68,6 +86,7 @@ export function RegressionInvestigationsWorkspace({
   const [selected, setSelected] = useState<Investigation>();
   const [error, setError] = useState("");
   const createRequestID = useRef(crypto.randomUUID());
+  const attemptRequestIDs = useRef<Record<string, string>>({});
   const load = useCallback(async () => {
     try {
       const x = await api<{ regression_investigations: Investigation[] }>(
@@ -88,6 +107,8 @@ export function RegressionInvestigationsWorkspace({
     }
   }, [repositoryID, token]);
   useEffect(() => {
+    // Repository and identity changes must refresh this API-backed workspace list.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void load();
   }, [load]);
   async function create(e: FormEvent<HTMLFormElement>) {
@@ -178,6 +199,32 @@ export function RegressionInvestigationsWorkspace({
     } catch (x) {
       setError(x instanceof Error ? x.message : "Update failed");
     }
+  }
+  function replace(out: Investigation) {
+    const next = normalized(out);
+    setSelected(next);
+    setItems((v) => v.map((x) => (x.id === next.id ? next : x)));
+  }
+  async function defineScenario(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!token || !selected) return;
+    const f = new FormData(e.currentTarget);
+    try {
+      const variantText = value(f, "environment_variants");
+      const out = await api<Investigation>(`/repositories/${repositoryID}/regression-investigations/${selected.id}/scenarios`, { method: "POST", body: JSON.stringify({ expected_version: selected.version, scenario: { name: value(f, "scenario_name"), environment: { image: value(f, "image"), working_directory: value(f, "working_directory") || ".", setup_command: value(f, "setup_command"), command: value(f, "command"), timeout_seconds: Number(value(f, "timeout")), cpus: Number(value(f, "cpus")), memory_mb: Number(value(f, "memory")), storage_mb: Number(value(f, "storage")) }, environment_variants: variantText ? JSON.parse(variantText) : [], inputs: [], acceptance_criteria: list(value(f, "scenario_criteria")) } }) }, token);
+      replace(out); e.currentTarget.reset(); setError("");
+    } catch (x) { setError(x instanceof Error ? x.message : "Scenario could not be defined"); }
+  }
+  async function runScenario(e: FormEvent<HTMLFormElement>, scenario: Scenario) {
+    e.preventDefault();
+    if (!token || !selected) return;
+    const f = new FormData(e.currentTarget), dependencies: { name: string; repository_id: string; revision: string }[] = [];
+    for (const item of list(value(f, "dependencies"))) { const [name, repository_id, revision] = item.split("@"); if (name && repository_id && revision) dependencies.push({name,repository_id,revision}); }
+    const requestID = attemptRequestIDs.current[scenario.id] ?? crypto.randomUUID(); attemptRequestIDs.current[scenario.id]=requestID;
+    try {
+      const out = await api<Investigation>(`/repositories/${repositoryID}/regression-investigations/${selected.id}/scenarios/${scenario.id}/attempts`, { method: "POST", body: JSON.stringify({ expected_version: selected.version, request_id:requestID, target_kind: value(f, "target_kind"), target_id: value(f, "target_id"), revision: value(f, "revision"), dependencies, repeats: Number(value(f, "repeats")) }) }, token);
+      replace(out); delete attemptRequestIDs.current[scenario.id]; setError("");
+    } catch (x) { setError(x instanceof Error ? x.message : "Historical attempt failed"); }
   }
   return (
     <main className="mx-auto max-w-7xl space-y-6 p-6">
@@ -382,6 +429,52 @@ export function RegressionInvestigationsWorkspace({
                   {x}
                 </p>
               ))}
+            </Card>
+            <Card className="p-5">
+              <h2 className="font-semibold">Repeatable comparison scenarios</h2>
+              <p className="mt-1 text-sm text-[var(--muted)]">Freeze a preinstalled image, setup, command, resources, and criteria before selecting historical revisions.</p>
+              <form onSubmit={defineScenario} className="mt-4 grid gap-2 sm:grid-cols-2">
+                <input className={field} name="scenario_name" required placeholder="Checkout historical behavior" />
+                <input className={field} name="image" required placeholder="alpine:3.22" />
+                <input className={field} name="working_directory" defaultValue="." placeholder="Working directory" />
+                <input className={field} name="setup_command" placeholder="Revision-specific setup command" />
+                <textarea className={`${field} sm:col-span-2`} name="command" required placeholder="Exact comparison command" />
+                <textarea className={`${field} sm:col-span-2`} name="environment_variants" placeholder='Optional revision-specific environments as JSON: [{"revision":"…","environment":{…}}]' />
+                <input className={field} name="scenario_criteria" required placeholder="Criteria, comma separated" />
+                <div className="grid grid-cols-4 gap-2">
+                  <input className={field} name="timeout" type="number" defaultValue="120" aria-label="Timeout seconds" />
+                  <input className={field} name="cpus" type="number" step="0.25" defaultValue="1" aria-label="CPUs" />
+                  <input className={field} name="memory" type="number" defaultValue="512" aria-label="Memory MB" />
+                  <input className={field} name="storage" type="number" defaultValue="64" aria-label="Storage MB" />
+                </div>
+                <Button type="submit" className="sm:col-span-2">Define scenario</Button>
+              </form>
+              <div className="mt-5 space-y-4">
+                {selected.scenarios.map((scenario) => (
+                  <section key={scenario.id} className="rounded-lg border border-[var(--border)] p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="font-medium">{scenario.name}</h3><code className="text-xs">{scenario.environment.image}</code></div>
+                    <code className="mt-2 block overflow-x-auto text-xs">{scenario.environment.setup_command ? `${scenario.environment.setup_command} && ` : ""}{scenario.environment.command}</code>
+                    <form onSubmit={(e) => runScenario(e, scenario)} className="mt-3 grid gap-2 sm:grid-cols-2">
+                      <select className={field} name="target_kind" defaultValue="commit"><option value="commit">Commit</option><option value="release">Attested release</option></select>
+                      <input className={field} name="target_id" placeholder="Release ID (for release targets)" />
+                      <input className={field} name="revision" pattern="[0-9a-f]{40}" placeholder="Exact commit (optional for release)" />
+                      <input className={field} name="dependencies" placeholder="Name@RepositoryID@40-char revision, …" />
+                      <input className={field} name="repeats" type="number" min="1" max="5" defaultValue="2" aria-label="Repeat count" />
+                      <Button type="submit">Run isolated comparison</Button>
+                    </form>
+                    <div className="mt-3 space-y-2">
+                      {selected.attempts.filter((attempt) => attempt.scenario_id === scenario.id).map((attempt) => (
+                        <details key={attempt.id} className="rounded-md bg-[var(--surface-muted)] p-3 text-sm">
+                          <summary className="cursor-pointer"><Badge tone={attempt.classification === "passed" ? "success" : attempt.classification === "flaky" ? "warning" : "danger"}>{attempt.classification.replaceAll("_", " ")}</Badge> <code className="ml-2">{attempt.revision?.slice(0, 12) || attempt.target_id}</code> · {attempt.runs.length} run(s) · {attempt.cost_compute_seconds.toFixed(2)} compute-seconds</summary>
+                          {attempt.diagnostic && <p className="mt-2 text-[var(--muted)]">{attempt.diagnostic}</p>}
+                          {attempt.dependencies.length > 0 && <p className="mt-2"><b>Dependencies:</b> {attempt.dependencies.map((dependency) => `${dependency.name}@${dependency.repository_id}:${dependency.revision.slice(0,12)} → ${dependency.path}`).join(", ")}</p>}
+                          {attempt.runs.map((run, index) => <div key={run.run_id || index} className="mt-3 border-t border-[var(--border)] pt-2"><b>Run {index + 1}:</b> {run.state} ({run.duration_ms} ms){run.failure && <p>{run.failure}</p>}{run.logs && <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap text-xs">{run.logs}</pre>}{run.artifacts.length > 0 && <p>{run.artifacts.length} digest-addressed artifact(s)</p>}</div>)}
+                        </details>
+                      ))}
+                    </div>
+                  </section>
+                ))}
+              </div>
             </Card>
             <Card className="p-5">
               <h2 className="font-semibold">Discussion and boundary history</h2>

@@ -29,6 +29,32 @@ compare-and-swap event route with actor and time attribution. This ledger agrees
 search; it grants no Git, private-machine, check execution, environment, deployment, or evidence
 access authority.
 
+Participants and repository-bound agents can define immutable comparison scenarios beneath an
+investigation. A scenario freezes its expected and regressed behavior, acceptance criteria, synthetic
+or privacy-preserving inputs, preinstalled container image, revision-specific setup and exact command,
+working directory, environment, timeout, CPU, memory, and storage limits. Attempts select an exact
+repository commit or attested release and may pin named dependency revisions. The server resolves every
+selected revision. Named dependencies include their authoritative readable repository, exact revision,
+and deterministic workspace path; each bounded Git archive is digest-checked and materialized beneath
+`/workspace/dependencies` before the workspace becomes read-only. The ordinary credential-free executor then runs: an exact Git archive is mounted
+read-only with no network or Linux capabilities, while only bounded scratch and digest-addressed output
+are writable. One to five clean repeats retain the complete environment, input digests, command, stdout,
+logs, exit state, artifacts, duration, compute cost, actor, and target/dependency provenance.
+Each caller-stable attempt request reserves its durable investigation identity before any check run is
+created. Completion finalizes that identity independently of later investigation edits; retries reconcile
+the reservation and deterministic run names, preventing completed but unattached duplicate work.
+An overlapping exact retry that observes a queued, running, or cleanup-pending check returns the same
+running reservation and never converts that nonterminal state into failure evidence. Environment
+incompatibility derives only from trusted executor setup metadata. The executor verifies the preinstalled
+image before starting the container and marks that failure source structurally; command-controlled stderr
+and exit codes cannot change a completed behavioral failure into a setup classification.
+
+Attempt classifications distinguish `passed`, `failed`, and mixed `flaky` runs from
+`incompatible_setup`, `missing_dependencies`, `unsafe_fixture`, and `untestable_revision`. The latter
+states are durable gaps rather than behavioral evidence, so collaborators can tell a code regression
+from historical setup, data, dependency, or nondeterminism differences. Scenario records and attempts
+grant no Git, package, network, environment, release, deployment, or general execution authority.
+
 ## Meaning-preserving conflict checkpoints
 
 Conflict-reconciliation workspaces can turn a resolved working tree into an unreferenced, immutable
