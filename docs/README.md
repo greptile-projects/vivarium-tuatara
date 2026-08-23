@@ -89,6 +89,20 @@ platform's existing task session and shared-workspace paths and publish ordinary
 regression ledger itself grants no rollback, Git, agent, workspace, pull, review, merge, queue, release,
 deployment, configuration, or environment authority.
 
+Every exact repair or backport is proved through `POST
+/repositories/{id}/regression-investigations/{investigation_id}/corrections`. The candidate must be the current
+revision of its published response task pull. Its retained historical scenario must have a completed passing
+attempt on that exact revision, each affected check name must resolve to one successful exact-revision pull run,
+every selected requirement must exist in a current quality plan, and the proof must carry all original change
+acceptance criteria. Exact request retries reconcile instead of duplicating proof.
+
+Reads derive the candidate's reviewed, merged, released, deployed, and observed state from ordinary pull,
+release, and deployment records. They reopen proof when the pull moves, a good/bad baseline becomes stale, a
+selected check disappears or fails on rerun, or deployment/health evidence disagrees with the correction.
+Failed scenario runs and partial acceptance never become corrections, including failed backports. Requirement
+IDs and check names retain the reviewable bridge for promoting a maintainable scenario into the quality plan and
+required-check policy; the investigation itself does not mutate either system or grant delivery authority.
+
 ## Meaning-preserving conflict checkpoints
 
 Conflict-reconciliation workspaces can turn a resolved working tree into an unreferenced, immutable

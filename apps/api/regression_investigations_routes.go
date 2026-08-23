@@ -18,6 +18,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/issues"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/qualityplans"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/regressioninvestigations"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
@@ -25,7 +26,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/supportthreads"
 )
 
-func registerRegressionInvestigationRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, investigations *regressioninvestigations.Store, issueStore *issues.Store, supportStore *supportthreads.Store, checkStore *checkruns.Store, releaseStore *releases.Store, deploymentStore *deployments.Store, debugStore *debugworkspaces.Store, pullStore *pullrequests.Store, proposalStore *proposals.Store) {
+func registerRegressionInvestigationRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, investigations *regressioninvestigations.Store, issueStore *issues.Store, supportStore *supportthreads.Store, checkStore *checkruns.Store, releaseStore *releases.Store, deploymentStore *deployments.Store, debugStore *debugworkspaces.Store, pullStore *pullrequests.Store, proposalStore *proposals.Store, qualityStore *qualityplans.Store) {
 	actor := func(c auth.Credential) string {
 		if c.AgentID != "" {
 			return c.AgentID
@@ -68,6 +69,7 @@ func registerRegressionInvestigationRoutes(mux *http.ServeMux, git *storage.Stor
 			*ev = projectRegressionEvidence(*ev, current)
 		}
 		v = projectRegressionSearches(v, r.Path(), pullStore)
+		v = projectRegressionCorrections(v, pullStore, checkStore, releaseStore, deploymentStore)
 		return v
 	}
 	mux.HandleFunc("GET /repositories/{id}/regression-investigations", func(w http.ResponseWriter, r *http.Request) {
@@ -690,6 +692,140 @@ func registerRegressionInvestigationRoutes(mux *http.ServeMux, git *storage.Stor
 		out, e := investigations.PublishResponse(current.RepositoryID, current.ID, response.ID, c.UserID, in.SelectedKind, in.Rationale, p.ID, ids, in.Work, in.ExpectedVersion)
 		writeRegressionInvestigation(w, project(out), e, 201)
 	})
+	mux.HandleFunc("POST /repositories/{id}/regression-investigations/{investigation_id}/corrections", func(w http.ResponseWriter, r *http.Request) {
+		c, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var in struct {
+			ExpectedVersion int                                 `json:"expected_version"`
+			Correction      regressioninvestigations.Correction `json:"correction"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "an exact correction proof is required")
+			return
+		}
+		current, e := investigations.Get(r.PathValue("id"), r.PathValue("investigation_id"))
+		if e != nil {
+			writeRegressionInvestigation(w, current, e, 201)
+			return
+		}
+		p, e := pullStore.Get(current.RepositoryID, in.Correction.PullRequestID)
+		if e != nil || p.SourceCommitID != in.Correction.Revision || p.TaskID == nil || *p.TaskID != in.Correction.TaskID {
+			writeAPIError(w, 422, "regression_correction_pull_invalid", "correction must be the exact current revision of its ordinary task pull")
+			return
+		}
+		if len(in.Correction.RequiredChecks) != len(in.Correction.CheckRunIDs) {
+			writeAPIError(w, 422, "regression_correction_checks_invalid", "every affected check must have one exact passing run")
+			return
+		}
+		for i, runID := range in.Correction.CheckRunIDs {
+			run, err := checkStore.Get(current.RepositoryID, p.ID, runID)
+			if err != nil || run.CommitID != in.Correction.Revision || run.State != "succeeded" || run.Definition.Name != in.Correction.RequiredChecks[i] {
+				writeAPIError(w, 422, "regression_correction_checks_invalid", "every affected check must pass on the exact correction revision")
+				return
+			}
+		}
+		knownRequirements := map[string]bool{}
+		plans, e := qualityStore.List(current.RepositoryID)
+		if e != nil {
+			writeAPIError(w, 500, "quality_plans_unavailable", "quality requirements could not be resolved")
+			return
+		}
+		for _, plan := range plans {
+			if len(plan.Revisions) > 0 {
+				for _, requirement := range plan.Revisions[len(plan.Revisions)-1].Requirements {
+					knownRequirements[requirement.ID] = true
+				}
+			}
+		}
+		for _, id := range in.Correction.RequirementIDs {
+			if !knownRequirements[id] {
+				writeAPIError(w, 422, "regression_correction_requirement_invalid", "every affected requirement must resolve in a current quality plan")
+				return
+			}
+		}
+		out, e := investigations.RecordCorrection(current.RepositoryID, current.ID, actor(c), in.Correction, in.ExpectedVersion)
+		writeRegressionInvestigation(w, project(out), e, 201)
+	})
+}
+
+func projectRegressionCorrections(v regressioninvestigations.Investigation, pulls *pullrequests.Store, checks *checkruns.Store, releaseStore *releases.Store, deploymentStore *deployments.Store) regressioninvestigations.Investigation {
+	if v.Corrections == nil {
+		v.Corrections = []regressioninvestigations.Correction{}
+	}
+	releaseItems, _ := releaseStore.List(v.RepositoryID)
+	promotions, _ := deploymentStore.ListPromotions(v.RepositoryID)
+	for i := range v.Corrections {
+		c := &v.Corrections[i]
+		c.ReleaseIDs, c.DeploymentIDs, c.ReopenReasons = []string{}, []string{}, []string{}
+		c.Reopened = false
+		c.DeliveryState = "proved"
+		if !v.Comparable {
+			c.Reopened = true
+			c.ReopenReasons = append(c.ReopenReasons, "historical good/bad baseline is stale or unavailable")
+		}
+		p, err := pulls.Get(v.RepositoryID, c.PullRequestID)
+		if err != nil || p.SourceCommitID != c.Revision {
+			c.Reopened = true
+			c.ReopenReasons = append(c.ReopenReasons, "candidate revision moved or became unavailable")
+			c.DeliveryState = "stale"
+			continue
+		}
+		for n, runID := range c.CheckRunIDs {
+			run, e := checks.Get(v.RepositoryID, c.PullRequestID, runID)
+			if e != nil || run.CommitID != c.Revision || run.State != "succeeded" || n >= len(c.RequiredChecks) || run.Definition.Name != c.RequiredChecks[n] {
+				c.Reopened = true
+				c.ReopenReasons = append(c.ReopenReasons, "affected check proof is missing or no longer passing")
+			}
+		}
+		reviews, _ := pulls.ListReviews(v.RepositoryID, p.ID)
+		for _, review := range reviews {
+			if !review.Stale && review.ReviewedCommitID == c.Revision && review.Decision == "approve" {
+				c.DeliveryState = "reviewed"
+			}
+		}
+		if p.Status == pullrequests.Merged && p.MergeCommitID != nil {
+			c.DeliveryState = "merged"
+		}
+		for _, release := range releaseItems {
+			if regressionContainsString(release.Inclusions.PullRequestIDs, p.ID) {
+				c.ReleaseIDs = append(c.ReleaseIDs, release.ID)
+				c.DeliveryState = "released"
+				for _, promotion := range promotions {
+					if promotion.ReleaseID != release.ID {
+						continue
+					}
+					c.DeploymentIDs = append(c.DeploymentIDs, promotion.ID)
+					c.DeliveryState = "deployed"
+					disagreement := promotion.State == "failed"
+					for _, signal := range promotion.Evidence {
+						disagreement = disagreement || signal.State != "succeeded"
+					}
+					if disagreement {
+						c.Reopened = true
+						c.ReopenReasons = append(c.ReopenReasons, "production deployment or observed outcome disagrees with correction proof")
+						c.Outcome = "disagreed"
+					} else if promotion.State == "succeeded" {
+						c.DeliveryState, c.Outcome = "observed", "confirmed"
+					}
+				}
+			}
+		}
+		if c.Reopened {
+			c.ProofState = "reopened"
+		}
+	}
+	return v
+}
+
+func regressionContainsString(values []string, wanted string) bool {
+	for _, value := range values {
+		if value == wanted {
+			return true
+		}
+	}
+	return false
 }
 
 func projectRegressionSearches(v regressioninvestigations.Investigation, gitPath string, pulls *pullrequests.Store) regressioninvestigations.Investigation {

@@ -223,34 +223,66 @@ type Response struct {
 	CreatedAt     time.Time        `json:"created_at"`
 	PublishedAt   time.Time        `json:"published_at,omitempty"`
 }
+
+// Correction binds one exact repair or backport candidate to the historical
+// scenario and the ordinary delivery evidence that must remain true.
+type Correction struct {
+	ID                 string    `json:"id"`
+	RequestID          string    `json:"request_id"`
+	RequestDigest      string    `json:"request_digest"`
+	Kind               string    `json:"kind"`
+	ResponseID         string    `json:"response_id"`
+	TaskID             string    `json:"task_id"`
+	PullRequestID      string    `json:"pull_request_id"`
+	Revision           string    `json:"revision"`
+	Target             string    `json:"target"`
+	ScenarioID         string    `json:"scenario_id"`
+	AttemptID          string    `json:"attempt_id"`
+	RequiredChecks     []string  `json:"required_checks"`
+	CheckRunIDs        []string  `json:"check_run_ids"`
+	RequirementIDs     []string  `json:"requirement_ids"`
+	AcceptanceCriteria []string  `json:"acceptance_criteria"`
+	CriteriaSatisfied  []string  `json:"criteria_satisfied"`
+	ProofState         string    `json:"proof_state"`
+	DeliveryState      string    `json:"delivery_state"`
+	ReleaseIDs         []string  `json:"release_ids"`
+	DeploymentIDs      []string  `json:"deployment_ids"`
+	Outcome            string    `json:"outcome,omitempty"`
+	Reopened           bool      `json:"reopened"`
+	ReopenReasons      []string  `json:"reopen_reasons"`
+	CreatedBy          string    `json:"created_by"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
+}
 type Investigation struct {
-	ID                 string     `json:"id"`
-	RequestID          string     `json:"request_id"`
-	RequestDigest      string     `json:"request_digest"`
-	RepositoryID       string     `json:"repository_id"`
-	Version            int        `json:"version"`
-	Title              string     `json:"title"`
-	Source             Reference  `json:"source"`
-	ExpectedBehavior   string     `json:"expected_behavior"`
-	RegressedBehavior  string     `json:"regressed_behavior"`
-	KnownGood          Boundary   `json:"known_good"`
-	KnownBad           Boundary   `json:"known_bad"`
-	Environments       []string   `json:"affected_environments"`
-	Severity           string     `json:"severity"`
-	OwnerIDs           []string   `json:"owner_ids"`
-	AcceptanceCriteria []string   `json:"acceptance_criteria"`
-	Evidence           []Evidence `json:"evidence"`
-	Diagnostics        []string   `json:"diagnostics"`
-	Comparable         bool       `json:"comparable"`
-	Status             string     `json:"status"`
-	History            []Entry    `json:"history"`
-	Scenarios          []Scenario `json:"scenarios"`
-	Attempts           []Attempt  `json:"attempts"`
-	Searches           []Search   `json:"searches"`
-	Responses          []Response `json:"responses"`
-	CreatedBy          string     `json:"created_by"`
-	CreatedAt          time.Time  `json:"created_at"`
-	UpdatedAt          time.Time  `json:"updated_at"`
+	ID                 string       `json:"id"`
+	RequestID          string       `json:"request_id"`
+	RequestDigest      string       `json:"request_digest"`
+	RepositoryID       string       `json:"repository_id"`
+	Version            int          `json:"version"`
+	Title              string       `json:"title"`
+	Source             Reference    `json:"source"`
+	ExpectedBehavior   string       `json:"expected_behavior"`
+	RegressedBehavior  string       `json:"regressed_behavior"`
+	KnownGood          Boundary     `json:"known_good"`
+	KnownBad           Boundary     `json:"known_bad"`
+	Environments       []string     `json:"affected_environments"`
+	Severity           string       `json:"severity"`
+	OwnerIDs           []string     `json:"owner_ids"`
+	AcceptanceCriteria []string     `json:"acceptance_criteria"`
+	Evidence           []Evidence   `json:"evidence"`
+	Diagnostics        []string     `json:"diagnostics"`
+	Comparable         bool         `json:"comparable"`
+	Status             string       `json:"status"`
+	History            []Entry      `json:"history"`
+	Scenarios          []Scenario   `json:"scenarios"`
+	Attempts           []Attempt    `json:"attempts"`
+	Searches           []Search     `json:"searches"`
+	Responses          []Response   `json:"responses"`
+	Corrections        []Correction `json:"corrections"`
+	CreatedBy          string       `json:"created_by"`
+	CreatedAt          time.Time    `json:"created_at"`
+	UpdatedAt          time.Time    `json:"updated_at"`
 }
 type Store struct {
 	root          string
@@ -302,7 +334,85 @@ func (s *Store) Create(v Investigation, actor string) (Investigation, error) {
 		v.Evidence[i].ID = id()
 	}
 	v.History = []Entry{{ID: id(), Kind: "opened", ActorID: actor, To: "open", Message: "Search boundary agreed", CreatedAt: now}}
-	v.Scenarios, v.Attempts, v.Searches, v.Responses = []Scenario{}, []Attempt{}, []Search{}, []Response{}
+	v.Scenarios, v.Attempts, v.Searches, v.Responses, v.Corrections = []Scenario{}, []Attempt{}, []Search{}, []Response{}, []Correction{}
+	return v, s.write(v)
+}
+
+func (s *Store) RecordCorrection(repo, wid, actor string, correction Correction, expected int) (Investigation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, e := s.lock()
+	if e != nil {
+		return Investigation{}, e
+	}
+	defer unlock()
+	v, e := s.Get(repo, wid)
+	if e != nil {
+		return Investigation{}, e
+	}
+	if !token(actor) || !token(correction.RequestID) {
+		return Investigation{}, ErrInvalid
+	}
+	correction.ID, correction.RequestDigest, correction.CreatedBy, correction.CreatedAt, correction.UpdatedAt = "", "", "", time.Time{}, time.Time{}
+	correction.DeliveryState, correction.ReleaseIDs, correction.DeploymentIDs, correction.Reopened, correction.ReopenReasons = "", nil, nil, false, nil
+	body, e := json.Marshal(struct {
+		Actor string     `json:"actor"`
+		Value Correction `json:"value"`
+	}{actor, correction})
+	if e != nil {
+		return Investigation{}, e
+	}
+	digest := sha256.Sum256(body)
+	encoded := hex.EncodeToString(digest[:])
+	for _, retained := range v.Corrections {
+		if retained.RequestID == correction.RequestID {
+			if retained.RequestDigest == encoded && retained.CreatedBy == actor {
+				return v, nil
+			}
+			return Investigation{}, ErrConflict
+		}
+	}
+	if v.Version != expected || (correction.Kind != "repair" && correction.Kind != "backport") || len(correction.Revision) != 40 || !token(correction.PullRequestID) || !token(correction.TaskID) || strings.TrimSpace(correction.Target) == "" || correction.ProofState != "passed" {
+		return Investigation{}, ErrInvalid
+	}
+	scenario, response, attempt := false, false, false
+	for _, x := range v.Scenarios {
+		scenario = scenario || x.ID == correction.ScenarioID
+	}
+	for _, x := range v.Responses {
+		if x.ID == correction.ResponseID && x.ProposalID != "" && x.ScenarioID == correction.ScenarioID {
+			for _, taskID := range x.TaskIDs {
+				response = response || taskID == correction.TaskID
+			}
+		}
+	}
+	for _, x := range v.Attempts {
+		attempt = attempt || (x.ID == correction.AttemptID && x.State == "completed" && x.ScenarioID == correction.ScenarioID && x.Revision == correction.Revision && x.Classification == "passed")
+	}
+	if !scenario || !response || !attempt || len(correction.RequiredChecks) == 0 || len(correction.RequiredChecks) != len(correction.CheckRunIDs) || len(correction.CriteriaSatisfied) != len(v.AcceptanceCriteria) || len(uniq(correction.RequiredChecks)) != len(correction.RequiredChecks) || len(uniq(correction.CheckRunIDs)) != len(correction.CheckRunIDs) {
+		return Investigation{}, ErrInvalid
+	}
+	want := map[string]bool{}
+	for _, x := range v.AcceptanceCriteria {
+		want[x] = true
+	}
+	for _, x := range correction.CriteriaSatisfied {
+		if !want[x] {
+			return Investigation{}, ErrInvalid
+		}
+	}
+	now := s.now()
+	correction.ID, correction.RequestDigest, correction.CreatedBy, correction.CreatedAt, correction.UpdatedAt = id(), encoded, actor, now, now
+	correction.AcceptanceCriteria = append([]string{}, v.AcceptanceCriteria...)
+	correction.RequiredChecks, correction.CheckRunIDs, correction.RequirementIDs, correction.CriteriaSatisfied = uniq(correction.RequiredChecks), uniq(correction.CheckRunIDs), uniq(correction.RequirementIDs), uniq(correction.CriteriaSatisfied)
+	if len(correction.RequiredChecks) != len(correction.CheckRunIDs) {
+		return Investigation{}, ErrInvalid
+	}
+	correction.ReleaseIDs, correction.DeploymentIDs, correction.ReopenReasons = []string{}, []string{}, []string{}
+	v.Corrections = append(v.Corrections, correction)
+	v.History = append(v.History, Entry{ID: id(), Kind: "correction_proved", ActorID: actor, Message: "Exact " + correction.Kind + " candidate proved against retained regression evidence", CreatedAt: now})
+	v.Version++
+	v.UpdatedAt = now
 	return v, s.write(v)
 }
 
@@ -923,7 +1033,7 @@ func valid(v Investigation, actor string) bool {
 func requestDigest(v Investigation, actor string) (string, error) {
 	v.ID, v.RequestDigest, v.CreatedBy, v.Status = "", "", "", ""
 	v.Version, v.CreatedAt, v.UpdatedAt, v.History = 0, time.Time{}, time.Time{}, nil
-	v.Scenarios, v.Attempts, v.Searches = nil, nil, nil
+	v.Scenarios, v.Attempts, v.Searches, v.Responses, v.Corrections = nil, nil, nil, nil, nil
 	v.Diagnostics, v.Comparable = nil, false
 	for i := range v.Evidence {
 		v.Evidence[i].ID = ""
