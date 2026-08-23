@@ -3,6 +3,31 @@
 Notes on how this project fits together. Mostly empty for now — things get
 written down here as they're decided, not before.
 
+## Repository-reviewed collaboration workflows
+
+Authorized repository collaborators use `/repositories/{id}/collaboration-workflows/preview` or the
+repository workflow workspace to inspect recurring collaboration before it reacts to project events.
+The caller supplies only an exact 40-character commit and repository-relative JSON path. The server
+requires that commit to remain reachable from a non-security branch, reads and hashes the blob, and
+derives typed event subscriptions, parallelizable dependency stages, and each step's effective
+principal, authority grants, and authority boundary.
+
+Definitions state a shared outcome and retain typed triggers and inputs, conditions, step dependencies,
+platform/component/agent/workflow invocations, outputs, retries, timeouts, per-step and workflow action
+budgets, accountable current-participant owners, and completion criteria. Platform actions and reusable
+components are closed sets. Agent invocations must resolve to a gap-free reviewed agent project in the
+same repository; reusable workflows must already be active there. Cyclic or missing dependencies,
+self-invocation and subscribed-event loops, inaccessible resources, invalid conditions, missing owners,
+budget violations, and allow/deny or required-authority policy conflicts become attributable preview
+diagnostics and make activation impossible.
+
+Activation and successor activation re-resolve the same reviewed blob and owner/resource facts. A
+successful transition appends an immutable compare-and-swap version containing its exact source digest,
+subscriptions, stages, authority preview, actor, and time beneath `$COLLABORATION_WORKFLOW_STORAGE_ROOT`
+(`collaboration-workflows`). The record explains coordination only; it does not subscribe to events,
+execute actions, grant agent or repository authority, or bypass runtime, secret, review, release, or
+deployment controls.
+
 ## Evidence-backed software adoption
 
 Authenticated collaborators use `/adoption-workspaces` or the web adoption workspace to ask whether
