@@ -4378,5 +4378,17 @@ Dependency resolution uses the exported immutable candidate repository: a succes
 as absence, while tree or blob read failure returns `conflict_dependency_revision_unavailable` without a checkpoint.
 
 `POST /workspaces/{workspace_id}/conflict-checkpoints/{checkpoint_id}/criteria/{criterion_id}/decision`
-accepts an affected owner's `accepted` or `rejected` decision and rationale at an exact ledger version.
-Stale criteria reject new decisions; prior decisions remain historical.
+accepts an affected owner's `accepted`, `rejected`, or `withdrawn` decision and rationale at an exact ledger
+version. Stale criteria reject new decisions; prior decisions remain historical and the latest decision governs.
+
+`POST /workspaces/{workspace_id}/conflict-checkpoints/{checkpoint_id}/publications` reserves a caller-stable
+publication before changing Git. Every criterion must still pass without invalidation and each affected owner's
+latest decision must be `accepted`. `source_branch` compare-and-swaps the original pull branch at its verified
+source revision; `resolution_pull` creates a new permitted branch and connected ordinary pull. The server rechecks
+the open pull and both live input tips, exports the accepted tree as a new two-parent commit, and retains applied
+resolution authors, exact commands, decisions, and both inputs in its message and publication ledger. It then
+synchronizes or creates the ordinary pull and runs the frozen affected required checks against the published commit
+in that pull's ordinary check scope. Revision-bound review and integration-queue rebuilding therefore apply as
+usual. Concurrent or superseded branch movement, input movement, withdrawn acceptance, or an occupied resolution
+branch retains `action_required` instead of overwriting either contribution. Current destination-repository
+membership is required; workspace access grants no publication authority.

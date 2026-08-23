@@ -260,6 +260,18 @@ func TestRecoveryIncludesTargetAndDeliveryProvenanceCannotBeReplaced(t *testing.
 	if stored.DeliveryTeamID != testID('3') || stored.DeliveryIntegrationID != testID('4') {
 		t.Fatalf("provenance changed: %#v", stored)
 	}
+	resolved := writeCommit(t, repository, tree, "published conflict resolution")
+	if err = repository.UpdateReferenceIfTarget(storage.Reference{Name: "refs/heads/delivery/topic", Target: string(resolved)}, string(head)); err != nil {
+		t.Fatal(err)
+	}
+	reused, err := store.FindOrCreateRecovery(repository.ID(), testID('2'), "Main", "Main review.", "delivery/topic", "main")
+	if err != nil || reused.ID != mainPull.ID || reused.SourceCommitID != string(head) {
+		t.Fatalf("reused recovery=%#v err=%v", reused, err)
+	}
+	reused, err = store.SynchronizeSourceAfter(repository.ID(), reused.ID, nil)
+	if err != nil || reused.SourceCommitID != string(resolved) {
+		t.Fatalf("synchronized recovery=%#v err=%v", reused, err)
+	}
 	closed, err := store.Close(repository.ID(), mainPull.ID, testID('2'))
 	if err != nil {
 		t.Fatal(err)

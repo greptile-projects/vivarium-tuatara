@@ -294,6 +294,57 @@ func TestConflictCheckpointRetainsExactEvidenceAndAffectedOwnerDecision(t *testi
 	}
 }
 
+func TestConflictPublicationRequiresCurrentCompleteAcceptanceAndReconcilesRetry(t *testing.T) {
+	store, _ := New(t.TempDir())
+	w, err := store.Create(Workspace{RepositoryID: "repo", CommitID: "target", CreatorID: "operator", ConflictContext: &ConflictContext{Source: ConflictRevision{CommitID: "source"}, Target: ConflictRevision{CommitID: "target"}}}, []byte("definition"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, _ = store.Complete(w.ID, nil, false)
+	w, _ = store.SetControl(w.ID, "operator", "human", "operator", "execute", []string{"commands"}, w.Control.Version, 300)
+	w, err = store.AddConflictCheckpoint(w.ID, 1, "operator", w.Control.Version, ConflictCheckpoint{CandidateCommitID: strings.Repeat("a", 40), CandidateTreeID: strings.Repeat("b", 40), SourceRevision: "source", TargetRevision: "target", Criteria: []ConflictCriterion{{Kind: "conflict_test", Name: "result", Origin: "both", Command: "test", ExactCriteria: []string{"passes"}, Coverage: []string{"file"}, OwnerIDs: []string{"owner"}, State: "passed"}}, CreatedBy: ConflictAuthorship{ActorID: "operator"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cp, criterion := w.ConflictContext.Checkpoints[0], w.ConflictContext.Checkpoints[0].Criteria[0]
+	request := ConflictPublicationRecord{ID: "stable-publication", CheckpointID: cp.ID, Mode: "resolution_pull", RepositoryID: "repo", Branch: "resolve/conflict", PublishedBy: ConflictAuthorship{ActorID: "operator"}}
+	if _, _, err = store.ReserveConflictPublication(w.ID, w.ConflictContext.Version, request); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("unaccepted publication error=%v", err)
+	}
+	w, err = store.DecideConflictCheckpoint(w.ID, cp.ID, criterion.ID, w.ConflictContext.Version, ConflictCheckpointDecision{OwnerID: "owner", Decision: "accepted", Rationale: "current result is correct"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err = store.DecideConflictCheckpoint(w.ID, cp.ID, criterion.ID, w.ConflictContext.Version, ConflictCheckpointDecision{OwnerID: "owner", Decision: "withdrawn", Rationale: "new concern needs resolution"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = store.ReserveConflictPublication(w.ID, w.ConflictContext.Version, request); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("withdrawn publication error=%v", err)
+	}
+	w, err = store.DecideConflictCheckpoint(w.ID, cp.ID, criterion.ID, w.ConflictContext.Version, ConflictCheckpointDecision{OwnerID: "owner", Decision: "accepted", Rationale: "concern resolved"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, reserved, err := store.ReserveConflictPublication(w.ID, w.ConflictContext.Version, request)
+	if err != nil || reserved.Status != "publishing" {
+		t.Fatalf("reserve=%#v err=%v", reserved, err)
+	}
+	_, retried, err := store.ReserveConflictPublication(w.ID, 0, request)
+	if err != nil || retried.ID != reserved.ID {
+		t.Fatalf("retry=%#v err=%v", retried, err)
+	}
+	called := false
+	w, err = store.PublishConflictBranch(w.ID, request.ID, strings.Repeat("c", 40), func() error { called = true; return nil })
+	if err != nil || !called || w.ConflictContext.Publications[0].Status != "branch_published" {
+		t.Fatalf("branch publication=%#v called=%v err=%v", w.ConflictContext.Publications, called, err)
+	}
+	w, err = store.CompleteConflictPublication(w.ID, request.ID, strings.Repeat("c", 40), "pull", "published", "")
+	if err != nil || w.ConflictContext.Publications[0].PullRequestID != "pull" {
+		t.Fatalf("complete=%#v err=%v", w.ConflictContext.Publications, err)
+	}
+}
+
 func TestConflictResolutionDoesNotFinalizeAfterLifecycleRevokesControl(t *testing.T) {
 	store, err := New(t.TempDir())
 	if err != nil {

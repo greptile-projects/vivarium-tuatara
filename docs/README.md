@@ -26,6 +26,14 @@ and appends staleness only to criteria that consumed a changed input. Historical
 visible, but stale criteria cannot receive a new owner decision. Candidates and checkpoints remain evidence:
 they grant no Git publication, review, merge, release, dependency, policy, workspace, or deployment authority.
 
+Once every current criterion passes and its affected owners' latest decisions accept it, a current destination
+repository participant can publish through a caller-stable reservation. Publication either compare-and-swaps the
+verified source branch or creates a connected resolution branch and ordinary pull. The published two-parent commit
+retains both inputs plus applied-resolution authorship, exact commands, and owner decisions; affected required checks
+run again on that published identity. Ordinary revision-bound review and integration-queue rebuilding then decide
+whether it lands. Withdrawn approval, moved inputs, concurrent branch updates, and occupied successor branches remain
+durable actionable states and never overwrite either contribution.
+
 ## Repository-reviewed collaboration workflows
 
 Authorized repository collaborators use `/repositories/{id}/collaboration-workflows/preview` or the

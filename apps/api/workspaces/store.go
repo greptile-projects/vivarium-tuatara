@@ -78,20 +78,40 @@ type Source struct {
 // when a reconciliation workspace was launched. It is context, not authority:
 // publication still passes through the named repository's normal controls.
 type ConflictContext struct {
-	Version           int                     `json:"version"`
-	PullRequestID     string                  `json:"pull_request_id"`
-	CandidateID       string                  `json:"candidate_id,omitempty"`
-	BaseCommitID      string                  `json:"base_commit_id"`
-	Source            ConflictRevision        `json:"source"`
-	Target            ConflictRevision        `json:"target"`
-	Files             []ConflictFileEvidence  `json:"files"`
-	AffectedChecks    []string                `json:"affected_checks"`
-	RequiredChecks    []ConflictRequiredCheck `json:"required_checks"`
-	Incomplete        []string                `json:"incomplete"`
-	PublicationTarget []ConflictPublication   `json:"publication_targets"`
-	Questions         []ConflictQuestion      `json:"questions"`
-	Resolutions       []ConflictResolution    `json:"resolutions"`
-	Checkpoints       []ConflictCheckpoint    `json:"checkpoints"`
+	Version           int                         `json:"version"`
+	PullRequestID     string                      `json:"pull_request_id"`
+	CandidateID       string                      `json:"candidate_id,omitempty"`
+	BaseCommitID      string                      `json:"base_commit_id"`
+	Source            ConflictRevision            `json:"source"`
+	Target            ConflictRevision            `json:"target"`
+	Files             []ConflictFileEvidence      `json:"files"`
+	AffectedChecks    []string                    `json:"affected_checks"`
+	RequiredChecks    []ConflictRequiredCheck     `json:"required_checks"`
+	Incomplete        []string                    `json:"incomplete"`
+	PublicationTarget []ConflictPublication       `json:"publication_targets"`
+	Questions         []ConflictQuestion          `json:"questions"`
+	Resolutions       []ConflictResolution        `json:"resolutions"`
+	Checkpoints       []ConflictCheckpoint        `json:"checkpoints"`
+	Publications      []ConflictPublicationRecord `json:"publications"`
+}
+
+// ConflictPublicationRecord is the durable bridge from workspace evidence to
+// ordinary contribution governance. It records what was published, but grants
+// no branch, pull-request, review, check, queue, or merge authority.
+type ConflictPublicationRecord struct {
+	ID                string             `json:"id"`
+	CheckpointID      string             `json:"checkpoint_id"`
+	Mode              string             `json:"mode"`
+	RepositoryID      string             `json:"repository_id"`
+	Branch            string             `json:"branch"`
+	ExpectedBranchTip string             `json:"expected_branch_tip,omitempty"`
+	PublishedCommitID string             `json:"published_commit_id,omitempty"`
+	PullRequestID     string             `json:"pull_request_id,omitempty"`
+	Status            string             `json:"status"`
+	ActionRequired    string             `json:"action_required,omitempty"`
+	PublishedBy       ConflictAuthorship `json:"published_by"`
+	CreatedAt         time.Time          `json:"created_at"`
+	UpdatedAt         time.Time          `json:"updated_at"`
 }
 type ConflictRequiredCheck struct {
 	Name       string               `json:"name"`
@@ -1131,9 +1151,13 @@ func (s *Store) DecideConflictCheckpoint(id, checkpointID, criterionID string, e
 			}
 		}
 		if found {
-			for _, old := range checkpoint.Decisions {
+			for i := len(checkpoint.Decisions) - 1; i >= 0; i-- {
+				old := checkpoint.Decisions[i]
 				if old.CriterionID == criterionID && old.OwnerID == decision.OwnerID {
-					return Workspace{}, ErrConflict
+					if old.Decision == decision.Decision {
+						return Workspace{}, ErrConflict
+					}
+					break
 				}
 			}
 			decision.CriterionID, decision.CreatedAt = criterionID, now
@@ -1146,6 +1170,160 @@ func (s *Store) DecideConflictCheckpoint(id, checkpointID, criterionID string, e
 	w.ConflictContext.Version++
 	w.UpdatedAt = now
 	w.Events = append(w.Events, Event{Kind: "conflict.checkpoint." + decision.Decision, ActorID: decision.OwnerID, Role: "decision", Detail: criterionID, CreatedAt: now})
+	return w, s.write(w)
+}
+
+// ReserveConflictPublication freezes an idempotent publication request before
+// Git or pull-request state is changed. Identical retries reconcile the same
+// record; changed reuse fails closed.
+func (s *Store) ReserveConflictPublication(id string, expected int, publication ConflictPublicationRecord) (Workspace, ConflictPublicationRecord, error) {
+	control := s.controlLock(id)
+	control.Lock()
+	defer control.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w, err := s.read(id)
+	if err != nil {
+		return Workspace{}, ConflictPublicationRecord{}, err
+	}
+	if w.ConflictContext == nil {
+		return Workspace{}, ConflictPublicationRecord{}, ErrInvalid
+	}
+	for _, existing := range w.ConflictContext.Publications {
+		if existing.ID != publication.ID {
+			continue
+		}
+		if existing.CheckpointID != publication.CheckpointID || existing.Mode != publication.Mode || existing.RepositoryID != publication.RepositoryID || existing.Branch != publication.Branch || existing.ExpectedBranchTip != publication.ExpectedBranchTip || existing.PublishedBy != publication.PublishedBy {
+			return Workspace{}, ConflictPublicationRecord{}, ErrConflict
+		}
+		return w, existing, nil
+	}
+	if w.ConflictContext.Version != expected {
+		return Workspace{}, ConflictPublicationRecord{}, ErrConflict
+	}
+	found := false
+	for _, checkpoint := range w.ConflictContext.Checkpoints {
+		if checkpoint.ID != publication.CheckpointID {
+			continue
+		}
+		found = true
+		for _, criterion := range checkpoint.Criteria {
+			if criterion.State != "passed" || len(criterion.InvalidatedBy) != 0 {
+				return Workspace{}, ConflictPublicationRecord{}, ErrInvalid
+			}
+			for _, owner := range criterion.OwnerIDs {
+				accepted := false
+				for _, decision := range checkpoint.Decisions {
+					if decision.CriterionID == criterion.ID && decision.OwnerID == owner {
+						accepted = decision.Decision == "accepted"
+					}
+				}
+				if !accepted {
+					return Workspace{}, ConflictPublicationRecord{}, ErrInvalid
+				}
+			}
+		}
+	}
+	if !found {
+		return Workspace{}, ConflictPublicationRecord{}, ErrInvalid
+	}
+	now := s.now()
+	publication.Status, publication.CreatedAt, publication.UpdatedAt = "publishing", now, now
+	w.ConflictContext.Publications = append(w.ConflictContext.Publications, publication)
+	w.ConflictContext.Version++
+	w.UpdatedAt = now
+	w.Events = append(w.Events, Event{ID: publication.ID, Kind: "conflict.publication.reserved", ActorID: publication.PublishedBy.ActorID, Role: "publication", Detail: publication.Branch, CreatedAt: now})
+	return w, publication, s.write(w)
+}
+
+func (s *Store) CompleteConflictPublication(id, publicationID, commitID, pullID, status, action string) (Workspace, error) {
+	control := s.controlLock(id)
+	control.Lock()
+	defer control.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w, err := s.read(id)
+	if err != nil {
+		return Workspace{}, err
+	}
+	for i := range w.ConflictContext.Publications {
+		p := &w.ConflictContext.Publications[i]
+		if p.ID != publicationID {
+			continue
+		}
+		if p.Status == "published" && p.PublishedCommitID == commitID && p.PullRequestID == pullID {
+			return w, nil
+		}
+		if p.Status != "publishing" && p.Status != "branch_published" {
+			return Workspace{}, ErrConflict
+		}
+		p.PublishedCommitID, p.PullRequestID, p.Status, p.ActionRequired, p.UpdatedAt = commitID, pullID, status, action, s.now()
+		w.ConflictContext.Version++
+		w.UpdatedAt = p.UpdatedAt
+		w.Events = append(w.Events, Event{ID: p.ID, Kind: "conflict.publication." + status, ActorID: p.PublishedBy.ActorID, Role: "publication", Detail: commitID, CreatedAt: p.UpdatedAt})
+		return w, s.write(w)
+	}
+	return Workspace{}, ErrNotFound
+}
+
+// PublishConflictBranch serializes the final approval recheck with the Git ref
+// compare-and-swap supplied by the route. Owners cannot withdraw while that
+// exact accepted publication is crossing the repository boundary.
+func (s *Store) PublishConflictBranch(id, publicationID, commitID string, publish func() error) (Workspace, error) {
+	control := s.controlLock(id)
+	control.Lock()
+	defer control.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w, err := s.read(id)
+	if err != nil {
+		return Workspace{}, err
+	}
+	var publication *ConflictPublicationRecord
+	for i := range w.ConflictContext.Publications {
+		if w.ConflictContext.Publications[i].ID == publicationID {
+			publication = &w.ConflictContext.Publications[i]
+			break
+		}
+	}
+	if publication == nil {
+		return Workspace{}, ErrNotFound
+	}
+	if publication.Status == "branch_published" && publication.PublishedCommitID == commitID {
+		return w, nil
+	}
+	if publication.Status != "publishing" {
+		return Workspace{}, ErrConflict
+	}
+	for _, checkpoint := range w.ConflictContext.Checkpoints {
+		if checkpoint.ID != publication.CheckpointID {
+			continue
+		}
+		for _, criterion := range checkpoint.Criteria {
+			if criterion.State != "passed" || len(criterion.InvalidatedBy) != 0 {
+				return Workspace{}, ErrInvalid
+			}
+			for _, owner := range criterion.OwnerIDs {
+				accepted := false
+				for _, decision := range checkpoint.Decisions {
+					if decision.CriterionID == criterion.ID && decision.OwnerID == owner {
+						accepted = decision.Decision == "accepted"
+					}
+				}
+				if !accepted {
+					return Workspace{}, ErrInvalid
+				}
+			}
+		}
+	}
+	if err = publish(); err != nil {
+		return Workspace{}, err
+	}
+	now := s.now()
+	publication.Status, publication.PublishedCommitID, publication.UpdatedAt = "branch_published", commitID, now
+	w.ConflictContext.Version++
+	w.UpdatedAt = now
+	w.Events = append(w.Events, Event{ID: publication.ID, Kind: "conflict.publication.branch_published", ActorID: publication.PublishedBy.ActorID, Role: "publication", Detail: commitID, CreatedAt: now})
 	return w, s.write(w)
 }
 
