@@ -1,5 +1,28 @@
 # HTTP API contract
 
+## Consequential workflow governance
+
+`GET` and owner-only `PUT /repositories/{id}/collaboration-workflow-governance` expose a
+compare-and-swap policy for workflow reviews, named simulation cases, resource-owner
+acknowledgements, separation of duties, approval lifetime, and the closed consequential action
+classes `merge`, `release`, `change_infrastructure`, `access_protected_evidence`, and
+`spend_funds`. Policies and their changes grant none of those underlying authorities.
+
+`POST /repositories/{id}/collaboration-workflow-governance/candidates` resolves the same exact
+Git source used by activation and freezes simulated event/effect cases, permissions added and
+removed from the current workflow revision, maximum action cost, policy diagnostics, and policy
+version. `POST .../candidates/{candidate_id}/decisions` appends an attributable `review`,
+`scenario_pass`, resource `owner_acknowledgement`, or owner-granted maximum-30-day `exception`.
+Activation and revision publication reject the exact source until its current candidate is ready;
+policy succession and exception expiry make it unready again without rewriting decisions.
+
+Owner-only `POST /repositories/{id}/collaboration-workflows/{workflow_id}/control` accepts
+`disable`, `anomaly_stop`, `authority_changed`, `enable`, or `rollback`. Stops block new executions
+and step claims. Rollback selects an existing immutable workflow revision; neither operation
+deletes revision or execution history. Runs expose time-bounded resource-owner approval requests
+and immutable completion-digest action receipts. Approval expiry and workflow control stop new
+effects while already completed attempts, outputs, costs, and receipts remain inspectable.
+
 ## Live collaboration workflow executions
 
 `GET /repositories/{id}/collaboration-workflows/{workflow_id}/executions` and its execution-detail

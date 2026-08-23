@@ -102,6 +102,21 @@ the old workflow revision when a consumer updates, retains, or replaces a compon
 defaults beneath `$WORKFLOW_COMPONENT_STORAGE_ROOT` (`workflow-components`) and grants no package,
 federation, Git, review, merge, repository, runtime, secret, or publisher authority.
 
+### Governing workflow change and consequential effects
+
+Repository owners can add a versioned workflow-governance baseline requiring independent reviews,
+named simulated event cases, resource-owner acknowledgements, separation of duties, and bounded
+approval windows for workflow definitions and merge, release, infrastructure, protected-evidence,
+or spending effects. Exact-source candidate records compare effective permissions, expected effects,
+action cost, and policy conflicts with the current workflow revision. Current attributable decisions
+must make that exact candidate ready before activation.
+
+Runs project expiring owner approval requests and immutable action receipts. An owner can disable a
+workflow, stop it for anomalous behavior or changed authority, or select a prior immutable revision.
+These controls prevent new starts and claims while preserving legitimate completed attempts, outputs,
+costs, receipts, interventions, executions, and workflow revisions. Governance records coordinate
+consent only and do not grant authority over the protected action itself.
+
 ## Evidence-backed software adoption
 
 Authenticated collaborators use `/adoption-workspaces` or the web adoption workspace to ask whether

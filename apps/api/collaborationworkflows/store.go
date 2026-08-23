@@ -129,6 +129,46 @@ type Workflow struct {
 	CreatedAt      time.Time  `json:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`
 }
+
+// Control stops future effects without deleting workflow revisions or runs.
+// Rollback selects an already-reviewed immutable revision; no history is rewritten.
+func (s *Store) Control(id, actor, kind string, rollbackVersion int) (Workflow, error) {
+	var out Workflow
+	err := s.lock(func() error {
+		w, err := s.read(id)
+		if err != nil {
+			return err
+		}
+		if actor == "" {
+			return ErrInvalid
+		}
+		switch kind {
+		case "disable", "anomaly_stop", "authority_changed":
+			w.Status = kind
+		case "enable":
+			w.Status = "active"
+		case "rollback":
+			if rollbackVersion < 1 || rollbackVersion >= w.CurrentVersion || rollbackVersion > len(w.Revisions) {
+				return ErrInvalid
+			}
+			selected := w.Revisions[rollbackVersion-1]
+			if err := s.requireApprovedCandidateUnlocked(w.RepositoryID, w.ID, selected.Source.SHA256, w.CurrentVersion); err != nil {
+				return err
+			}
+			w.CurrentVersion++
+			selected.Version, selected.ActivatedBy, selected.ActivatedAt = w.CurrentVersion, actor, s.now()
+			w.Revisions = append(w.Revisions, selected)
+			w.Status = "active"
+		default:
+			return ErrInvalid
+		}
+		w.UpdatedAt = s.now()
+		out = w
+		return s.write(w)
+	})
+	return out, err
+}
+
 type ResourceCheck func(Invocation) (bool, string)
 type Store struct {
 	root string
@@ -340,7 +380,7 @@ func (s *Store) List(repo string) ([]Workflow, error) {
 			return e
 		}
 		for _, x := range es {
-			if x.IsDir() || !strings.HasSuffix(x.Name(), ".json") || strings.HasPrefix(x.Name(), "execution-") {
+			if x.IsDir() || !strings.HasSuffix(x.Name(), ".json") || strings.HasPrefix(x.Name(), "execution-") || strings.HasPrefix(x.Name(), "governance-") || strings.HasPrefix(x.Name(), "candidate-") {
 				continue
 			}
 			w, e := s.read(strings.TrimSuffix(x.Name(), ".json"))

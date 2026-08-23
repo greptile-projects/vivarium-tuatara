@@ -142,6 +142,23 @@ type Execution = {
   }[];
   predicted_next_actions: string[];
   paused_by?: string;
+  approval_requests: {
+    step_id: string;
+    action_class: string;
+    owner_ids: string[];
+    requested_at: string;
+    expires_at: string;
+    approved_by?: string;
+  }[];
+  action_receipts: {
+    id: string;
+    step_id: string;
+    action_class: string;
+    actions: number;
+    cost_units: number;
+    completion_sha256: string;
+    created_at: string;
+  }[];
 };
 
 const short = (v: string) => v.slice(0, 8);
@@ -328,6 +345,30 @@ export function CollaborationWorkflowsWorkspace({
       setBusy(false);
     }
   }
+  async function control(kind: "disable" | "anomaly_stop" | "rollback") {
+    if (!token || !selected) return;
+    setBusy(true);
+    setError("");
+    try {
+      await api(
+        `/repositories/${repositoryID}/collaboration-workflows/${selected.id}/control`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            kind,
+            rollback_version:
+              kind === "rollback" ? selected.current_version - 1 : 0,
+          }),
+        },
+        token,
+      );
+      await load();
+    } catch (x) {
+      setError(x instanceof Error ? x.message : "Workflow control failed");
+    } finally {
+      setBusy(false);
+    }
+  }
   const revision = selected?.revisions.at(-1);
   const executionRevision =
     selectedExecution && selectedExecution.workflow_id === selected?.id
@@ -439,6 +480,22 @@ export function CollaborationWorkflowsWorkspace({
               ))}
             </div>
           </section>
+          <section className="grid gap-3 md:grid-cols-2">
+            <div className="rounded-lg border p-3 text-sm">
+              <h3 className="font-semibold">Simulated event cases</h3>
+              {preview.definition.triggers.map((trigger) => (
+                <p className="mt-2" key={trigger.id}>
+                  <strong>{trigger.kind}:{trigger.event}</strong> → {preview.definition.steps.map((step) => step.invocation.action ?? step.invocation.kind).join(" · ")}
+                </p>
+              ))}
+            </div>
+            <div className="rounded-lg border p-3 text-sm">
+              <h3 className="font-semibold">Candidate effect</h3>
+              <p className="mt-2">Maximum cost: {preview.definition.budget_actions} actions</p>
+              <p className="mt-1">Permissions: {preview.effective_authority.flatMap((authority) => authority.grants).join(", ")}</p>
+              <p className="mt-1">Policy conflicts: {preview.diagnostics.filter((diagnostic) => diagnostic.kind === "conflicting_policy").length}</p>
+            </div>
+          </section>
           {preview.diagnostics.length > 0 && (
             <section>
               <h3 className="font-semibold text-[var(--danger)]">
@@ -529,6 +586,11 @@ export function CollaborationWorkflowsWorkspace({
             <strong>Source:</strong> {revision.source.path} at{" "}
             {short(revision.source.revision)}
           </p>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Button type="button" disabled={busy} onClick={() => void control("disable")}>Emergency disable</Button>
+            <Button type="button" disabled={busy} onClick={() => void control("anomaly_stop")}>Stop anomalous effects</Button>
+            {selected && selected.current_version > 1 && <Button type="button" disabled={busy} onClick={() => void control("rollback")}>Roll back to v{selected.current_version - 1}</Button>}
+          </div>
         </Card>
       )}
       {revision && (
@@ -631,6 +693,14 @@ export function CollaborationWorkflowsWorkspace({
                   ))}
                 </ul>
               </section>
+              {(selectedExecution.approval_requests ?? []).length > 0 && <section>
+                <h4 className="font-semibold">Approval requests</h4>
+                <ul className="mt-2 space-y-2 text-sm">{selectedExecution.approval_requests.map((request) => <li className="rounded-lg border p-3" key={`${request.step_id}-${request.requested_at}`}><strong>{request.action_class}</strong> · {request.step_id}<span className="block text-xs text-[var(--muted)]">Owner {request.owner_ids.join(", ")} · expires {new Date(request.expires_at).toLocaleString()} {request.approved_by ? `· approved by ${request.approved_by}` : "· pending"}</span></li>)}</ul>
+              </section>}
+              {(selectedExecution.action_receipts ?? []).length > 0 && <section>
+                <h4 className="font-semibold">Immutable action receipts</h4>
+                <ul className="mt-2 space-y-2 text-sm">{selectedExecution.action_receipts.map((receipt) => <li className="rounded-lg border p-3" key={receipt.id}><strong>{receipt.action_class || "workflow action"}</strong> · {receipt.actions} actions · {receipt.cost_units} cost units<span className="block text-xs text-[var(--muted)]">Receipt {short(receipt.id)} · proof {short(receipt.completion_sha256)}</span></li>)}</ul>
+              </section>}
               <section>
                 <h4 className="font-semibold">Execution graph</h4>
                 {!executionRevision ? (

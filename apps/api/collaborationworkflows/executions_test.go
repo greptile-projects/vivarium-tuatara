@@ -47,12 +47,34 @@ func TestExecutionIsIdempotentRevisionBoundAndDependencyScheduled(t *testing.T) 
 		t.Fatal(err)
 	}
 	ex, err = s.CompleteStep(ex.ID, "notify", notify.Token, 1, nil, "")
-	if err != nil || ex.Status != "succeeded" {
+	if err != nil || ex.Status != "succeeded" || len(ex.ActionReceipts) != 2 || ex.ActionReceipts[0].CompletionSHA256 == "" {
 		t.Fatalf("execution=%#v %v", ex, err)
 	}
 	retry, err = s.CompleteStep(ex.ID, "notify", notify.Token, 1, nil, "")
 	if err != nil || retry.Version != ex.Version || retry.Status != "succeeded" {
 		t.Fatalf("completion retry=%#v %v", retry, err)
+	}
+}
+
+func TestApprovalRequestsAreOwnerBoundAndExpire(t *testing.T) {
+	s, _, event := executionFixture(t)
+	d := validDefinition()
+	d.Steps[0].Approval = "merge"
+	p := s.Preview("repo", d, Source{Revision: strings.Repeat("c", 40), SHA256: "approval"}, func(Invocation) (bool, string) { return true, "" })
+	w, _ := s.Create("repo", "owner", "approval", p)
+	now := time.Now().UTC()
+	s.now = func() time.Time { return now }
+	event.ID = "approval-event"
+	ex, err := s.StartExecution(w.ID, 1, event)
+	if err != nil || len(ex.ApprovalRequests) != 1 || ex.ApprovalRequests[0].ActionClass != "merge" {
+		t.Fatalf("request=%#v %v", ex, err)
+	}
+	if _, err = s.Intervene(ex.ID, "reviewer", "approve", "classify", "reviewed", "", nil, ex.Version); !errorsIs(err, ErrExecutionBlocked) {
+		t.Fatalf("non-owner approval=%v", err)
+	}
+	now = ex.ApprovalRequests[0].ExpiresAt.Add(time.Second)
+	if _, err = s.Intervene(ex.ID, "owner", "approve", "classify", "late", "", nil, ex.Version); !errorsIs(err, ErrExecutionBlocked) {
+		t.Fatalf("expired approval=%v", err)
 	}
 }
 
