@@ -727,12 +727,20 @@ func registerConflictWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, cat
 			writeAPIError(w, 403, "conflict_publication_forbidden", "workspace access does not grant publication-branch authority")
 			return
 		}
-		// Recheck both inputs after reserving and before importing or moving a ref.
+		// Recheck both inputs after reserving and before the first ref mutation.
+		// A retry after branch publication instead reconciles the frozen commit and
+		// continues ordinary pull/check publication.
 		targetRepo, openErr := git.Open(item.RepositoryID)
 		sourceRepo, sourceErr := git.Open(pull.SourceRepositoryID)
-		targetRef, targetErr := targetRepo.ReadReference("refs/heads/" + pull.TargetBranch)
-		sourceRef, sourceRefErr := sourceRepo.ReadReference("refs/heads/" + pull.SourceBranch)
-		if openErr != nil || sourceErr != nil || targetErr != nil || sourceRefErr != nil || targetRef.Target != checkpoint.TargetRevision || sourceRef.Target != checkpoint.SourceRevision || pull.Status != pullrequests.Open || pull.SourceCommitID != checkpoint.SourceRevision {
+		var targetRef, sourceRef storage.Reference
+		var targetErr, sourceRefErr error
+		if openErr == nil {
+			targetRef, targetErr = targetRepo.ReadReference("refs/heads/" + pull.TargetBranch)
+		}
+		if sourceErr == nil {
+			sourceRef, sourceRefErr = sourceRepo.ReadReference("refs/heads/" + pull.SourceBranch)
+		}
+		if reserved.Status == "publishing" && (openErr != nil || sourceErr != nil || targetErr != nil || sourceRefErr != nil || targetRef.Target != checkpoint.TargetRevision || sourceRef.Target != checkpoint.SourceRevision || pull.Status != pullrequests.Open || pull.SourceCommitID != checkpoint.SourceRevision) {
 			_, _ = workspaceStore.CompleteConflictPublication(item.ID, in.PublicationID, "", "", "action_required", "source, target, or pull snapshot moved; assemble and accept a successor checkpoint")
 			writeAPIError(w, 409, "conflict_publication_stale", "source, target, or pull snapshot changed after verification")
 			return
@@ -745,7 +753,8 @@ func registerConflictWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, cat
 		defer cleanup()
 		message := conflictPublicationMessage(item, *checkpoint, actor.UserID)
 		cmd := exec.Command("git", "--git-dir="+candidateRepoPath, "commit-tree", checkpoint.CandidateTreeID, "-p", checkpoint.SourceRevision, "-p", checkpoint.TargetRevision)
-		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME="+actor.UserID, "GIT_AUTHOR_EMAIL="+actor.UserID+"@vivarium.invalid", "GIT_COMMITTER_NAME=Vivarium conflict publication", "GIT_COMMITTER_EMAIL=conflicts@vivarium.invalid")
+		publicationTime := reserved.CreatedAt.Format(time.RFC3339)
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME="+actor.UserID, "GIT_AUTHOR_EMAIL="+actor.UserID+"@vivarium.invalid", "GIT_COMMITTER_NAME=Vivarium conflict publication", "GIT_COMMITTER_EMAIL=conflicts@vivarium.invalid", "GIT_AUTHOR_DATE="+publicationTime, "GIT_COMMITTER_DATE="+publicationTime)
 		cmd.Stdin = strings.NewReader(message)
 		publishedBytes, commitErr := cmd.Output()
 		publishedCommit := strings.TrimSpace(string(publishedBytes))
@@ -801,22 +810,33 @@ func registerConflictWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, cat
 				body = "Publishes accepted conflict checkpoint " + checkpoint.ID + " from workspace " + item.ID + "."
 			}
 			governedPull, err = pulls.FindOrCreateRecovery(item.RepositoryID, actor.UserID, title, body, in.Branch, pull.TargetBranch)
+			if err == nil {
+				governedPull, err = pulls.SynchronizeSourceAfter(item.RepositoryID, governedPull.ID, nil)
+				if err == nil && governedPull.SourceCommitID != publishedCommit {
+					err = pullrequests.ErrSourceChanged
+				}
+			}
 		}
 		if err != nil {
-			_, _ = workspaceStore.CompleteConflictPublication(item.ID, in.PublicationID, publishedCommit, "", "action_required", "branch published; reconcile the ordinary pull request")
-			writeAPIError(w, 409, "conflict_publication_pull_pending", "branch was published but ordinary pull reconciliation is required")
+			writeAPIError(w, 503, "conflict_publication_pull_pending", "branch is published; retry to reconcile the ordinary pull request")
 			return
 		}
-		if checkStore != nil && len(item.ConflictContext.RequiredChecks) > 0 {
+		if len(item.ConflictContext.RequiredChecks) > 0 {
+			if checkStore == nil {
+				writeAPIError(w, 503, "conflict_publication_checks_pending", "branch and pull are published; retry when required-check storage is available")
+				return
+			}
 			definitions := make([]checkruns.Definition, 0, len(item.ConflictContext.RequiredChecks))
 			for _, required := range item.ConflictContext.RequiredChecks {
 				definitions = append(definitions, required.Definition)
 			}
 			runs, runErr := checkStore.CreateRequested(item.RepositoryID, governedPull.ID, publishedCommit, definitions, actor.UserID)
-			if runErr == nil {
-				for _, run := range runs {
-					checkStore.Execute(run, destination.Path())
-				}
+			if runErr != nil {
+				writeAPIError(w, 503, "conflict_publication_checks_pending", "branch and pull are published; retry to reconcile required checks")
+				return
+			}
+			for _, run := range runs {
+				checkStore.Execute(run, destination.Path())
 			}
 		}
 		updated, finishErr := workspaceStore.CompleteConflictPublication(item.ID, in.PublicationID, publishedCommit, governedPull.ID, "published", "")
