@@ -560,24 +560,10 @@ func projectRegressionSearches(v regressioninvestigations.Investigation, gitPath
 		for ci := range s.Candidates {
 			c := &s.Candidates[ci]
 			c.Selected = false
-			c.AttemptIDs = []string{}
 			c.ChangedPaths = []string{}
 			c.OwnerIDs = []string{}
 			c.PullRequestIDs = []string{}
-			for _, a := range v.Attempts {
-				if a.State == "completed" && a.Revision == c.Revision {
-					c.AttemptIDs = append(c.AttemptIDs, a.ID)
-					if !c.Excluded {
-						if a.Classification == "passed" {
-							c.Classification = "working"
-						} else if a.Classification == "failed" {
-							c.Classification = "regressed"
-						} else if a.Classification == "flaky" {
-							c.Classification = "flaky"
-						}
-					}
-				}
-			}
+			projectRegressionCandidateAttempts(c, s.ScenarioID, v.Attempts)
 			if c.Kind == "commit" {
 				if exec.Command("git", "--git-dir="+gitPath, "cat-file", "-e", c.Revision+"^{commit}").Run() != nil {
 					c.Excluded, c.Exclusion = true, "revision no longer resolves in repository history"
@@ -620,7 +606,6 @@ func projectRegressionSearches(v regressioninvestigations.Investigation, gitPath
 
 func deriveCulpritRanges(candidates []regressioninvestigations.SearchCandidate) []regressioninvestigations.CulpritRange {
 	working, regressed := []int{}, []int{}
-	ambiguity := ""
 	for i, c := range candidates {
 		if c.Excluded {
 			continue
@@ -631,24 +616,52 @@ func deriveCulpritRanges(candidates []regressioninvestigations.SearchCandidate) 
 		if c.Classification == "regressed" {
 			regressed = append(regressed, i)
 		}
-		if c.Classification == "flaky" {
-			ambiguity = "flaky evidence prevents a single-commit verdict"
+	}
+	byRevision := map[string]int{}
+	for i, candidate := range candidates {
+		if candidate.Kind == "commit" {
+			byRevision[candidate.Revision] = i
 		}
-		if c.Merge && c.Classification == "regressed" {
-			ambiguity = "merge ancestry requires parent-specific evidence"
+	}
+	isAncestor := func(ancestor, descendant string) bool {
+		seen, pending := map[string]bool{}, []string{descendant}
+		for len(pending) > 0 {
+			current := pending[len(pending)-1]
+			pending = pending[:len(pending)-1]
+			if current == ancestor {
+				return true
+			}
+			if seen[current] {
+				continue
+			}
+			seen[current] = true
+			if index, ok := byRevision[current]; ok {
+				pending = append(pending, candidates[index].Parents...)
+			}
 		}
+		return false
 	}
 	ranges := []regressioninvestigations.CulpritRange{}
 	for _, w := range working {
 		for _, b := range regressed {
-			if w >= b {
+			if candidates[w].Kind != "commit" || candidates[b].Kind != "commit" || !isAncestor(candidates[w].Revision, candidates[b].Revision) {
 				continue
 			}
-			remaining := 0
-			for i := w + 1; i < b; i++ {
-				if !candidates[i].Excluded && candidates[i].Classification == "" {
+			remaining, ambiguity := 0, ""
+			for i := range candidates {
+				onPath := candidates[i].Kind == "commit" && isAncestor(candidates[w].Revision, candidates[i].Revision) && isAncestor(candidates[i].Revision, candidates[b].Revision)
+				if !onPath || candidates[i].Excluded {
+					continue
+				}
+				if candidates[i].Classification == "" && i != w && i != b {
 					remaining++
 				}
+				if candidates[i].Classification == "flaky" {
+					ambiguity = "flaky evidence prevents a single-commit verdict"
+				}
+			}
+			if candidates[b].Merge {
+				ambiguity = "merge ancestry requires parent-specific evidence"
 			}
 			confidence := 1.0 / float64(remaining+1)
 			if ambiguity != "" {
@@ -662,6 +675,27 @@ func deriveCulpritRanges(candidates []regressioninvestigations.SearchCandidate) 
 		return ranges[:8]
 	}
 	return ranges
+}
+
+func projectRegressionCandidateAttempts(candidate *regressioninvestigations.SearchCandidate, scenarioID string, attempts []regressioninvestigations.Attempt) {
+	candidate.AttemptIDs = []string{}
+	for _, attempt := range attempts {
+		if attempt.State != "completed" || attempt.ScenarioID != scenarioID || attempt.Revision != candidate.Revision {
+			continue
+		}
+		candidate.AttemptIDs = append(candidate.AttemptIDs, attempt.ID)
+		if candidate.Excluded {
+			continue
+		}
+		switch attempt.Classification {
+		case "passed":
+			candidate.Classification = "working"
+		case "failed":
+			candidate.Classification = "regressed"
+		case "flaky":
+			candidate.Classification = "flaky"
+		}
+	}
 }
 func uniqStrings(values []string) []string {
 	seen := map[string]bool{}

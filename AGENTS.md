@@ -31,7 +31,8 @@ failures, including a pre-run preinstalled-image inspection; command-controlled 
 alter a completed behavioral classification.
 Evidence-driven searches retain the complete ancestry-path commit graph, merge parents, selected readable
 dependency revisions, and caller-stable scheduling identity. Read projection joins completed scenario attempts
-to candidates and derives recommended trials, competing working-to-regressed ranges, confidence, direct diffs,
+from only the search's frozen scenario to candidates and derives recommended trials, ancestry-proven competing
+working-to-regressed ranges, confidence, direct diffs,
 commit authors, and linked pulls. Collaborator CAS guidance may classify, exclude, or restore trials with a
 reason; causal hypotheses must cite retained evidence or attempts and exact candidate revisions. Missing rewritten
 commits, flaky evidence, regressed merges, and multiple supported ranges remain explicit ambiguity and cannot

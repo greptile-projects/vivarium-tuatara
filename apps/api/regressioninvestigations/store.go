@@ -390,12 +390,13 @@ func (s *Store) GuideSearch(repo, wid, searchID, actor, kind, revision, classifi
 				return Investigation{}, ErrInvalid
 			}
 		}
-		validEvidence, validAttempts := map[string]bool{}, map[string]bool{}
+		validEvidence := map[string]bool{}
+		attemptsByID := map[string]Attempt{}
 		for _, evidence := range v.Evidence {
 			validEvidence[evidence.ID] = true
 		}
 		for _, attempt := range v.Attempts {
-			validAttempts[attempt.ID] = true
+			attemptsByID[attempt.ID] = attempt
 		}
 		for _, evidenceID := range evidenceIDs {
 			if !validEvidence[evidenceID] {
@@ -403,7 +404,8 @@ func (s *Store) GuideSearch(repo, wid, searchID, actor, kind, revision, classifi
 			}
 		}
 		for _, attemptID := range attemptIDs {
-			if !validAttempts[attemptID] {
+			attempt, ok := attemptsByID[attemptID]
+			if !ok || attempt.ScenarioID != search.ScenarioID || !attemptSupportsCandidate(attempt, candidateRevisions) {
 				return Investigation{}, ErrInvalid
 			}
 		}
@@ -417,6 +419,20 @@ func (s *Store) GuideSearch(repo, wid, searchID, actor, kind, revision, classifi
 	v.Version++
 	v.UpdatedAt = now
 	return v, s.write(v)
+}
+
+func attemptSupportsCandidate(attempt Attempt, candidateRevisions []string) bool {
+	for _, candidateRevision := range candidateRevisions {
+		if attempt.Revision == candidateRevision {
+			return true
+		}
+		for _, dependency := range attempt.Dependencies {
+			if dependency.Revision == candidateRevision {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Reconcile returns an already-published create before callers re-evaluate

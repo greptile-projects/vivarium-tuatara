@@ -57,15 +57,17 @@ grant no Git, package, network, environment, release, deployment, or general exe
 
 Once a scenario exists, collaborators schedule an evidence-driven search over the full ancestry path between
 the frozen good and bad commits. The durable candidate set preserves merge parents and may include explicitly
-selected readable cross-repository dependency revisions. Completed scenario attempts are projected onto that
-set; the server recommends an untested midpoint and derives all still-supported working-to-regressed ranges
+selected readable cross-repository dependency revisions. Completed attempts from only that search's frozen scenario
+are projected onto the set; the server recommends an untested midpoint and derives all still-supported,
+graph-ancestry-proven working-to-regressed ranges
 rather than publishing an opaque bisect answer. Each range reports its remaining candidates, confidence, and
 merge or flaky ambiguity. Candidate views include the direct changed paths, commit author, linked ordinary pull
 requests, and the exact attempts supporting their classification.
 
 CAS-versioned collaborator guidance records working, regressed, flaky, invalid, excluded, and restored trials
 with attribution and rationale. Rewritten or missing commits become explicit exclusions on reads. Causal
-hypotheses name exact candidates and must cite retained investigation evidence or historical attempts, keeping
+hypotheses name exact candidates and must cite retained investigation evidence or historical attempts from the
+same frozen scenario and selected revision, keeping
 agent explanations reviewable beside human decisions. Multiple ranges, interacting dependency changes, flaky
 midpoints, and regressed merges remain competing claims until additional evidence resolves them. Searches are
 evidence ledgers only and grant no Git, check execution, pull, package, agent, or repository authority.

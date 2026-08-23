@@ -51,9 +51,35 @@ func TestRegressionActiveRetryDoesNotBecomeFailure(t *testing.T) {
 }
 
 func TestCulpritRangesKeepFlakyAndMergeAmbiguityExplicit(t *testing.T) {
-	candidates := []regressioninvestigations.SearchCandidate{{Revision: "good", Classification: "working"}, {Revision: "flaky", Classification: "flaky"}, {Revision: "merge", Classification: "regressed", Merge: true}}
+	candidates := []regressioninvestigations.SearchCandidate{{Kind: "commit", Revision: "good", Classification: "working"}, {Kind: "commit", Revision: "flaky", Parents: []string{"good"}, Classification: "flaky"}, {Kind: "commit", Revision: "merge", Parents: []string{"flaky"}, Classification: "regressed", Merge: true}}
 	ranges := deriveCulpritRanges(candidates)
 	if len(ranges) != 1 || ranges[0].Ambiguity == "" || ranges[0].Confidence >= 1 {
 		t.Fatalf("ambiguous range collapsed: %#v", ranges)
+	}
+}
+
+func TestCulpritRangesRejectTopoOrderedMergeSiblings(t *testing.T) {
+	candidates := []regressioninvestigations.SearchCandidate{
+		{Kind: "commit", Revision: "base", Classification: "working"},
+		{Kind: "commit", Revision: "main", Parents: []string{"base"}, Classification: "working"},
+		{Kind: "commit", Revision: "feature", Parents: []string{"base"}, Classification: "regressed"},
+		{Kind: "commit", Revision: "merge", Parents: []string{"main", "feature"}, Merge: true},
+	}
+	for _, culprit := range deriveCulpritRanges(candidates) {
+		if culprit.WorkingRevision == "main" && culprit.RegressedRevision == "feature" {
+			t.Fatalf("non-ancestral siblings formed a range: %#v", culprit)
+		}
+	}
+}
+
+func TestSearchAttemptProjectionIsScopedToFrozenScenario(t *testing.T) {
+	candidate := regressioninvestigations.SearchCandidate{Revision: "revision"}
+	attempts := []regressioninvestigations.Attempt{
+		{ID: "other", ScenarioID: "scenario-a", Revision: "revision", State: "completed", Classification: "failed"},
+		{ID: "selected", ScenarioID: "scenario-b", Revision: "revision", State: "completed", Classification: "passed"},
+	}
+	projectRegressionCandidateAttempts(&candidate, "scenario-b", attempts)
+	if candidate.Classification != "working" || len(candidate.AttemptIDs) != 1 || candidate.AttemptIDs[0] != "selected" {
+		t.Fatalf("cross-scenario attempt projected: %#v", candidate)
 	}
 }

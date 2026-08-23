@@ -172,8 +172,15 @@ func TestScenarioRejectsUnboundedEnvironment(t *testing.T) {
 func TestSearchRetainsGuidanceAndRequiresCitedHypothesisEvidence(t *testing.T) {
 	s, _ := New(t.TempDir())
 	v, _ := s.Create(validInvestigation(), "actor-1")
-	v, _ = s.AddScenario(v.RepositoryID, v.ID, "owner-1", Scenario{Name: "Comparison", Environment: ScenarioEnvironment{Image: "alpine:3.22", WorkingDirectory: ".", Command: "./compare", TimeoutSeconds: 60, CPUs: 1, MemoryMB: 128, StorageMB: 32}}, v.Version)
-	search := Search{RequestID: "search-request-1", ScenarioID: v.Scenarios[0].ID, Candidates: []SearchCandidate{{Kind: "commit", RepositoryID: v.RepositoryID, Revision: commit, Classification: "working"}, {Kind: "commit", RepositoryID: v.RepositoryID, Revision: strings.Repeat("b", 40), Classification: "regressed"}}}
+	scenario := Scenario{Name: "Comparison", Environment: ScenarioEnvironment{Image: "alpine:3.22", WorkingDirectory: ".", Command: "./compare", TimeoutSeconds: 60, CPUs: 1, MemoryMB: 128, StorageMB: 32}}
+	v, _ = s.AddScenario(v.RepositoryID, v.ID, "owner-1", scenario, v.Version)
+	v, _ = s.AddScenario(v.RepositoryID, v.ID, "owner-1", Scenario{Name: "Other comparison", Environment: scenario.Environment}, v.Version)
+	selectedScenario, otherScenario := v.Scenarios[0].ID, v.Scenarios[1].ID
+	v, _ = s.RecordAttempt(v.RepositoryID, v.ID, "agent-1", Attempt{ScenarioID: otherScenario, Revision: strings.Repeat("b", 40), Classification: "failed"}, v.Version)
+	otherAttemptID := v.Attempts[len(v.Attempts)-1].ID
+	v, _ = s.RecordAttempt(v.RepositoryID, v.ID, "agent-1", Attempt{ScenarioID: selectedScenario, Revision: commit, Classification: "passed"}, v.Version)
+	alignedAttemptID := v.Attempts[len(v.Attempts)-1].ID
+	search := Search{RequestID: "search-request-1", ScenarioID: selectedScenario, Candidates: []SearchCandidate{{Kind: "commit", RepositoryID: v.RepositoryID, Revision: commit, Classification: "working"}, {Kind: "commit", RepositoryID: v.RepositoryID, Revision: strings.Repeat("b", 40), Classification: "regressed"}}}
 	v, err := s.CreateSearch(v.RepositoryID, v.ID, "agent-1", search, v.Version)
 	if err != nil || len(v.Searches) != 1 || v.Searches[0].CreatedBy != "agent-1" {
 		t.Fatalf("search = %#v, %v", v.Searches, err)
@@ -184,6 +191,16 @@ func TestSearchRetainsGuidanceAndRequiresCitedHypothesisEvidence(t *testing.T) {
 	}
 	if _, err = s.GuideSearch(v.RepositoryID, v.ID, v.Searches[0].ID, "agent-1", "hypothesis", "", "", "Candidate changes serialization.", "The retained attempt supports this claim.", "medium", nil, []string{"invented"}, []string{strings.Repeat("b", 40)}, v.Version, v.Searches[0].Version); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("invented citation accepted: %v", err)
+	}
+	if _, err = s.GuideSearch(v.RepositoryID, v.ID, v.Searches[0].ID, "agent-1", "hypothesis", "", "", "Candidate changes serialization.", "Cross-scenario evidence.", "medium", nil, []string{otherAttemptID}, []string{strings.Repeat("b", 40)}, v.Version, v.Searches[0].Version); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("cross-scenario citation accepted: %v", err)
+	}
+	if _, err = s.GuideSearch(v.RepositoryID, v.ID, v.Searches[0].ID, "agent-1", "hypothesis", "", "", "Candidate changes serialization.", "Wrong revision evidence.", "medium", nil, []string{alignedAttemptID}, []string{strings.Repeat("b", 40)}, v.Version, v.Searches[0].Version); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("cross-revision citation accepted: %v", err)
+	}
+	v, err = s.GuideSearch(v.RepositoryID, v.ID, v.Searches[0].ID, "agent-1", "hypothesis", "", "", "Candidate changes serialization.", "Aligned retained evidence.", "medium", nil, []string{alignedAttemptID}, []string{commit}, v.Version, v.Searches[0].Version)
+	if err != nil || len(v.Searches[0].Hypotheses) != 1 {
+		t.Fatalf("aligned citation rejected: %#v, %v", v.Searches[0].Hypotheses, err)
 	}
 }
 
