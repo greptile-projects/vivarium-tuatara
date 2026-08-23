@@ -34,6 +34,15 @@ run again on that published identity. Ordinary revision-bound review and integra
 whether it lands. Withdrawn approval, moved inputs, concurrent branch updates, and occupied successor branches remain
 durable actionable states and never overwrite either contribution.
 
+The connected `conflict-resolution-journey.spec.ts` regression proves the complete loop with the browser, public
+API, Docker-isolated verification, and stock Git. Two reviewed branches collide textually and on a changed declared
+symbol after queue movement; stale evidence and a second rejected queue admission remain visible. Both owners and a
+read-bounded approved agent enter the exact workspace, human review rejects uncertain agent advice, and a failed
+combined criterion precedes the accepted checkpoint. The published two-parent result receives a fresh review and
+required check, lands through the protected queue, and remains inspectable after one participant loses access.
+Checkpoint calls use the API directly because evaluating all six isolated evidence classes can outlast a frontend
+development proxy request without exceeding the API's own bounded execution contracts.
+
 ## Repository-reviewed collaboration workflows
 
 Authorized repository collaborators use `/repositories/{id}/collaboration-workflows/preview` or the

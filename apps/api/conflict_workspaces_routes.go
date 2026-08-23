@@ -904,9 +904,20 @@ func prepareConflictCheckRepository(catalog *repositories.Store, item workspaces
 		return "", func() {}, err
 	}
 	repositoryPath := filepath.Join(directory, "repository.git")
-	if output, cloneErr := exec.Command("git", "clone", "--bare", bundlePath, repositoryPath).CombinedOutput(); cloneErr != nil {
+	if output, initErr := exec.Command("git", "init", "--bare", repositoryPath).CombinedOutput(); initErr != nil {
 		cleanup()
-		return "", func() {}, fmt.Errorf("clone candidate bundle: %w: %s", cloneErr, strings.TrimSpace(string(output)))
+		return "", func() {}, fmt.Errorf("initialize candidate repository: %w: %s", initErr, strings.TrimSpace(string(output)))
+	}
+	// The checkpoint is intentionally exported under a private ref. A normal
+	// bare clone fetches heads and tags only and can silently produce an empty
+	// repository, so name the frozen ref explicitly and retain its object ID.
+	if output, fetchErr := exec.Command("git", "--git-dir="+repositoryPath, "fetch", "--no-tags", bundlePath, "refs/vivarium/checkpoint:refs/vivarium/checkpoint").CombinedOutput(); fetchErr != nil {
+		cleanup()
+		return "", func() {}, fmt.Errorf("fetch candidate bundle: %w: %s", fetchErr, strings.TrimSpace(string(output)))
+	}
+	if output, verifyErr := exec.Command("git", "--git-dir="+repositoryPath, "rev-parse", "--verify", candidate+"^{commit}").CombinedOutput(); verifyErr != nil || strings.TrimSpace(string(output)) != candidate {
+		cleanup()
+		return "", func() {}, errors.New("candidate bundle did not retain the frozen commit")
 	}
 	return repositoryPath, cleanup, nil
 }

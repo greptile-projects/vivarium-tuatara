@@ -2940,6 +2940,12 @@ whenever dependencies change or the web job fails before it starts.
   frozen affected required checks in the ordinary pull scope. Reviews remain revision-bound and protected queues
   rebuild against the current target. Moved inputs, concurrent or superseded branches, withdrawn approval, and an
   occupied resolution branch persist as actionable publication state without overwriting either contribution.
+  The connected `conflict-resolution-journey.spec.ts` browser/API/stock-Git journey carries two independently
+  reviewed changes through stale and repeated queue conflict evidence, revision-exact textual and semantic
+  explanation, affected-owner and bounded-agent participation, rejected agent advice, failed-first combined
+  verification, participant revocation, attributed two-parent publication, fresh review, queue rebuild, and final
+  merge. Keep checkpoint requests direct to the API because all six isolated criteria can exceed the frontend
+  development proxy timeout; the browser still inspects the retained workspace and ordinary pull result.
   Creators may invite affected current human participants, who explicitly consent, and
   organization-approved agents with separately bounded file/command/lifecycle control. Invitations,
   evidence, or workspace access grant no repository, branch, credential, review, check, merge, or
