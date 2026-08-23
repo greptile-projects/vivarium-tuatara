@@ -251,6 +251,16 @@ func registerIssueRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *rep
 		}
 		statusRevision := ""
 		if input.Status == "triaged" {
+			current, currentErr := store.Get(r.PathValue("id"), r.PathValue("issue_id"))
+			if currentErr == nil && current.Status == "triaged" && current.StatusRevision != "" {
+				acceptedBy := statusTransitionActor(current, "triaged")
+				if acceptedBy == "" || recordIssueAcceptedActivity(activity, repos, current, acceptedBy) != nil {
+					writeAPIError(w, 503, "issue_acceptance_delivery_unavailable", "issue acceptance is visible but its workflow delivery could not be reconciled")
+					return
+				}
+				writeJSON(w, 200, current)
+				return
+			}
 			statusRevision = workflowRepositoryHead(gitStore, r.PathValue("id"), repo.DefaultBranch)
 			if statusRevision == "" {
 				writeAPIError(w, 409, "issue_acceptance_revision_unavailable", "issue acceptance requires a commit on the repository default branch")
@@ -258,16 +268,6 @@ func registerIssueRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *rep
 			}
 		}
 		v, err := store.UpdateStatus(r.PathValue("id"), r.PathValue("issue_id"), actor.UserID, input.Status, input.ExpectedVersion, input.Message, repo.OwnerID == actor.UserID, statusRevision)
-		if errors.Is(err, issues.ErrConflict) && input.Status == "triaged" {
-			current, currentErr := store.Get(r.PathValue("id"), r.PathValue("issue_id"))
-			if currentErr == nil && current.Status == "triaged" && current.Version == input.ExpectedVersion+1 && current.StatusRevision != "" {
-				acceptedBy := statusTransitionActor(current, "triaged")
-				if acceptedBy != "" && recordIssueAcceptedActivity(activity, repos, current, acceptedBy) == nil {
-					writeJSON(w, 200, current)
-					return
-				}
-			}
-		}
 		if err != nil && !errors.Is(err, issues.ErrDurabilityUncertain) {
 			writeIssueError(w, err)
 			return
@@ -1243,7 +1243,11 @@ func registerIssueRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *rep
 }
 
 func recordIssueAcceptedActivity(activity *activities.Store, repos *repositories.Store, issue issues.Issue, actorID string) error {
-	return recordActivityOnce(activity, repos, fmt.Sprintf("issue.accepted:%s:%s:%d", issue.RepositoryID, issue.ID, issue.Version), activities.Event{Kind: "issue.accepted", ActorID: actorID, RepositoryID: issue.RepositoryID, ResourceType: "issue", ResourceID: issue.ID, ResourceTitle: issue.Title, ResourceRevision: issue.StatusRevision})
+	statusVersion := issue.StatusVersion
+	if statusVersion == 0 {
+		statusVersion = issue.Version
+	}
+	return recordActivityOnce(activity, repos, fmt.Sprintf("issue.accepted:%s:%s:%d", issue.RepositoryID, issue.ID, statusVersion), activities.Event{Kind: "issue.accepted", ActorID: actorID, RepositoryID: issue.RepositoryID, ResourceType: "issue", ResourceID: issue.ID, ResourceTitle: issue.Title, ResourceRevision: issue.StatusRevision})
 }
 
 func statusTransitionActor(issue issues.Issue, status string) string {

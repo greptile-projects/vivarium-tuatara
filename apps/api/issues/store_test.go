@@ -27,12 +27,12 @@ func TestCommittedWriteReportsDirectoryDurabilityUncertainty(t *testing.T) {
 	store.directorySync = func(string) error { return injected }
 	revision := strings.Repeat("a", 40)
 	triaged, err := store.UpdateStatus(created.RepositoryID, created.ID, "owner", "triaged", created.Version, "accepted", true, revision)
-	if !errors.Is(err, ErrDurabilityUncertain) || triaged.Status != "triaged" || triaged.StatusRevision != revision {
+	if !errors.Is(err, ErrDurabilityUncertain) || triaged.Status != "triaged" || triaged.StatusRevision != revision || triaged.StatusVersion != triaged.Version {
 		t.Fatalf("uncertain triage = %#v, %v", triaged, err)
 	}
 	store.directorySync = syncDirectory
 	reloaded, err = store.Get(created.RepositoryID, created.ID)
-	if err != nil || reloaded.Status != "triaged" || reloaded.StatusRevision != revision {
+	if err != nil || reloaded.Status != "triaged" || reloaded.StatusRevision != revision || reloaded.StatusVersion != reloaded.Version {
 		t.Fatalf("visible accepted revision = %#v, %v", reloaded, err)
 	}
 }

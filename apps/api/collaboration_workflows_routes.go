@@ -373,12 +373,7 @@ func registerCollaborationWorkflowRoutes(mux *http.ServeMux, git *storage.Store,
 			writeAPIError(w, 409, "stale_workflow_input", "workflow revision is no longer current")
 			return
 		}
-		repository, repositoryErr := catalog.GetByID(r.PathValue("id"))
-		if repositoryErr != nil {
-			writeAPIError(w, 404, "repository_not_found", "repository not found")
-			return
-		}
-		event, ok := workflowEventFromDelivery(git, pulls, issueStore, deliveries, r.PathValue("id"), repository.DefaultBranch, in.DeliveryID)
+		event, ok := workflowEventFromDelivery(git, pulls, issueStore, deliveries, r.PathValue("id"), in.DeliveryID)
 		if !ok {
 			writeAPIError(w, 409, "stale_workflow_input", "a trusted current repository event delivery is required")
 			return
@@ -547,7 +542,7 @@ func writeWorkflowGovernance(w http.ResponseWriter, out any, err error, status i
 	}
 }
 
-func workflowEventFromDelivery(git *storage.Store, pulls *pullrequests.Store, issueStore *issues.Store, deliveries *activities.Store, repo, defaultBranch, deliveryID string) (collaborationworkflows.TriggerEvent, bool) {
+func workflowEventFromDelivery(git *storage.Store, pulls *pullrequests.Store, issueStore *issues.Store, deliveries *activities.Store, repo, deliveryID string) (collaborationworkflows.TriggerEvent, bool) {
 	if deliveries == nil {
 		return collaborationworkflows.TriggerEvent{}, false
 	}
@@ -557,7 +552,7 @@ func workflowEventFromDelivery(git *storage.Store, pulls *pullrequests.Store, is
 	}
 	if delivery.ResourceType == "issue" && delivery.Kind == "issue.accepted" && issueStore != nil {
 		issue, issueErr := issueStore.Get(repo, delivery.ResourceID)
-		if issueErr != nil || issue.Status != "triaged" || !workflowCommitReachable(git, repo, delivery.ResourceRevision) || workflowRepositoryHead(git, repo, defaultBranch) != delivery.ResourceRevision {
+		if issueErr != nil || issue.Status != "triaged" || issue.StatusRevision != delivery.ResourceRevision || !workflowCommitReachable(git, repo, delivery.ResourceRevision) {
 			return collaborationworkflows.TriggerEvent{}, false
 		}
 		return collaborationworkflows.TriggerEvent{ID: delivery.ID, Kind: "repository_event", Name: "issue.accepted", ActorID: delivery.ActorID, OccurredAt: delivery.CreatedAt, Inputs: map[string]any{"issue_id": delivery.ResourceID}, ResourceRevisions: map[string]string{"issue_id": delivery.ResourceRevision}}, true

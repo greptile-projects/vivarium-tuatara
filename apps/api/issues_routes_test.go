@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/activities"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/issues"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
@@ -99,7 +100,8 @@ func TestIssueAcceptanceRequiresConfiguredDefaultBranchRevision(t *testing.T) {
 	credentials, _ := auth.New(t.TempDir())
 	catalog, _ := repositories.New(t.TempDir(), gitStore)
 	issueStore, _ := issues.New(t.TempDir())
-	server := httptest.NewServer(newPlatformHandlerWithChecks(gitStore, identities, credentials, catalog, nil, nil, nil, nil, nil, issueStore))
+	activityStore, _ := activities.New(t.TempDir())
+	server := httptest.NewServer(newPlatformHandlerWithChecks(gitStore, identities, credentials, catalog, nil, nil, activityStore, nil, nil, issueStore))
 	defer server.Close()
 	owner := createTestAccount(t, server.URL, "revisionless-triage-owner")
 	created := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"revisionless-triage"}`, owner.Credential.Token, http.StatusCreated)
@@ -126,6 +128,33 @@ func TestIssueAcceptanceRequiresConfiguredDefaultBranchRevision(t *testing.T) {
 		t.Fatalf("configured trunk head = %q, want %q", got, trunk)
 	}
 	authenticatedRequest(t, http.MethodPatch, server.URL+"/repositories/"+repo.ID+"/issues/"+issue.ID, `{"status":"triaged","expected_version":`+strconv.Itoa(issue.Version)+`}`, owner.Credential.Token, http.StatusConflict).Body.Close()
+	if err = bare.CreateReference(storage.Reference{Name: "refs/heads/" + repo.DefaultBranch, Target: string(trunk)}); err != nil {
+		t.Fatal(err)
+	}
+	acceptedResponse := authenticatedRequest(t, http.MethodPatch, server.URL+"/repositories/"+repo.ID+"/issues/"+issue.ID, `{"status":"triaged","expected_version":`+strconv.Itoa(issue.Version)+`}`, owner.Credential.Token, http.StatusOK)
+	decodeResponse(t, acceptedResponse, &issue)
+	commentResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/issues/"+issue.ID+"/comments", `{"body":"A later mutation must not prevent delivery reconciliation."}`, owner.Credential.Token, http.StatusCreated)
+	decodeResponse(t, commentResponse, &issue)
+	retryResponse := authenticatedRequest(t, http.MethodPatch, server.URL+"/repositories/"+repo.ID+"/issues/"+issue.ID, `{"status":"triaged","expected_version":`+strconv.Itoa(issue.Version)+`}`, owner.Credential.Token, http.StatusOK)
+	decodeResponse(t, retryResponse, &issue)
+	events, err := activityStore.List()
+	acceptedEvents := []activities.Event{}
+	for _, event := range events {
+		if event.Kind == "issue.accepted" {
+			acceptedEvents = append(acceptedEvents, event)
+		}
+	}
+	if err != nil || len(acceptedEvents) != 1 || acceptedEvents[0].ResourceRevision != string(trunk) {
+		t.Fatalf("reconciled acceptance events = %#v, %v", events, err)
+	}
+	advanced := writeCommit(t, bare, time.Now().Unix()+1, "advance main after acceptance")
+	if err = bare.UpdateReference(storage.Reference{Name: "refs/heads/" + repo.DefaultBranch, Target: string(advanced)}); err != nil {
+		t.Fatal(err)
+	}
+	workflowEvent, ok := workflowEventFromDelivery(gitStore, nil, issueStore, activityStore, repo.ID, acceptedEvents[0].ID)
+	if !ok || workflowEvent.ResourceRevisions["issue_id"] != string(trunk) {
+		t.Fatalf("acceptance snapshot after branch movement = %#v, %v", workflowEvent, ok)
+	}
 }
 
 func TestLatestReporterDecisionControlsDeliveryResolution(t *testing.T) {

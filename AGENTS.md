@@ -290,8 +290,10 @@ whenever dependencies change or the web job fails before it starts.
   record and rejects stale or unsupported deliveries. Participants cannot supply trigger metadata.
   Repository-owner issue triage idempotently emits `issue.accepted` at the then-current configured default-
   branch revision before returning even when the status commit reports uncertain durability; a repository
-  without that commit cannot enter triage. Dispatch rejects the delivery if the issue leaves triage or the
-  default branch moves before the run starts.
+  without that commit cannot enter triage. Any later retry reconciles the retained snapshot regardless of
+  subsequent issue versions. Dispatch rejects the delivery if the issue leaves triage, its snapshot and
+  activity disagree, or the exact commit becomes unreachable; ordinary default-branch movement does not
+  rewrite or strand an accepted event.
   Execution reads are public projections: capability and completion digests are never returned, and
   restricted artifact entries are omitted entirely. Each step retains append-only attempts with declared inputs,
   redacted outputs and logs, digest-addressed artifacts, agent-session references, costs, timing,

@@ -65,9 +65,10 @@ IDs, names, times, actors, inputs, revisions, cross-repository deliveries, unsup
 deliveries made stale by pull movement all fail closed.
 Repository-owner issue triage similarly emits an idempotency-keyed `issue.accepted` at the then-current
 configured default-branch revision before returning a committed-but-durability-uncertain status mutation.
-A repository without a default-branch commit cannot enter triage. Dispatch derives its issue, actor, time,
-and revision and rejects the delivery if the issue leaves triage or that branch moves, preventing acceptance
-from being replayed against different code.
+A repository without a default-branch commit cannot enter triage. Any later triage retry reconciles the
+retained snapshot even after other issue mutations. Dispatch derives its issue, actor, time, and revision and
+requires the activity to match that reachable snapshot; ordinary branch movement neither rewrites nor strands
+the accepted event, while a mismatched or unreachable revision fails closed.
 
 The workflow workspace and execution reads project a live dependency graph and preserve every attempt's
 timing, resolved inputs, declared redacted outputs, sanitized logs, artifact digest metadata, agent session,

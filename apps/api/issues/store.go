@@ -220,6 +220,7 @@ type Issue struct {
 	Visibility           string                `json:"visibility"`
 	Status               string                `json:"status"`
 	StatusRevision       string                `json:"status_revision,omitempty"`
+	StatusVersion        int                   `json:"status_version,omitempty"`
 	ReporterID           string                `json:"reporter_id"`
 	Attachments          []Attachment          `json:"attachments"`
 	Discussion           []Comment             `json:"discussion"`
@@ -463,6 +464,7 @@ func (s *Store) UpdateStatus(repositoryID, id, actor, status string, expected in
 	from := v.Status
 	v.Status = status
 	v.StatusRevision = statusRevision
+	v.StatusVersion = v.Version + 1
 	v.Version++
 	v.UpdatedAt = now
 	v.History = append(v.History, HistoryEntry{ID: newID(), Kind: "status_changed", ActorID: actor, From: from, To: status, Message: strings.TrimSpace(message), CreatedAt: now})
