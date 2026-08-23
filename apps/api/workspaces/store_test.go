@@ -193,6 +193,10 @@ func TestConflictMeaningLedgerRetainsCASAuthorshipAndUndo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	created, err = store.Complete(created.ID, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
 	resolution := created.ConflictContext.Resolutions[0]
 	inspect := func(Workspace, ConflictResolution) (string, string, error) {
 		return runtimeContent, digestContent(runtimeContent), nil
@@ -242,6 +246,49 @@ func TestConflictMeaningLedgerRetainsCASAuthorshipAndUndo(t *testing.T) {
 	}
 	if len(created.Changes) != 2 || created.Changes[0].SHA256 != digestContent("resolved") || created.Changes[1].SHA256 != digestContent("before") {
 		t.Fatalf("resolution provenance = %#v", created.Changes)
+	}
+}
+
+func TestConflictResolutionDoesNotFinalizeAfterLifecycleRevokesControl(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := store.Create(Workspace{RepositoryID: "repo", CommitID: "target", CreatorID: "operator", ConflictContext: &ConflictContext{PullRequestID: "pull", Files: []ConflictFileEvidence{{Path: "conflict.txt"}}}}, []byte("definition"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err = store.Complete(created.ID, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimeContent := "before"
+	created, err = store.AddConflictResolution(created.ID, 1, ConflictResolution{Path: "conflict.txt", Summary: "resolve", ProposedContent: "resolved", ExpectedSHA256: digestContent(runtimeContent), Authorship: ConflictAuthorship{ActorID: "operator"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolution := created.ConflictContext.Resolutions[0]
+	inspect := func(Workspace, ConflictResolution) (string, string, error) {
+		return runtimeContent, digestContent(runtimeContent), nil
+	}
+	mutate := func(_ Workspace, _ ConflictResolution, content, _ string) error {
+		runtimeContent = content
+		_, stopErr := store.Stop(created.ID, "owner", "revoked during edit", "stopped")
+		return stopErr
+	}
+	if _, err = store.ActConflictResolution(created.ID, resolution.ID, 2, true, "operator", ConflictAuthorship{ActorID: "operator"}, inspect, mutate); !errors.Is(err, ErrControl) {
+		t.Fatalf("revoked finalization = %v", err)
+	}
+	durable, err := store.Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if durable.State != "stopped" || durable.ConflictContext.Resolutions[0].State != "applying" || durable.ConflictContext.Resolutions[0].PendingAction.PrincipalID != "operator" || len(durable.Changes) != 0 || runtimeContent != "resolved" {
+		t.Fatalf("revoked action finalized: state=%s resolution=%s changes=%d runtime=%q", durable.State, durable.ConflictContext.Resolutions[0].State, len(durable.Changes), runtimeContent)
+	}
+	provenance, err := store.readProvenance(created.ID)
+	if err != nil || len(provenance.Changes) != 0 {
+		t.Fatalf("revoked provenance = %#v, %v", provenance.Changes, err)
 	}
 }
 

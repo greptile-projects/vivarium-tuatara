@@ -2914,7 +2914,9 @@ whenever dependencies change or the web job fails before it starts.
   Apply and undo first persist a recoverable intent, then hold the renewable file-control lease
   across runtime inspection, editing, and finalization. Interrupted retries reconcile whether the
   intended digest is already present before completing deduplicated provenance, keeping human
-  authors, agent identities, and human operators separately attributable.
+  authors, agent identities, and human operators separately attributable. Finalization rechecks
+  that the workspace is still running and the original principal still holds live file control;
+  lifecycle or lease revocation leaves the pending intent visible without claiming completion.
   Creators may invite affected current human participants, who explicitly consent, and
   organization-approved agents with separately bounded file/command/lifecycle control. Invitations,
   evidence, or workspace access grant no repository, branch, credential, review, check, merge, or

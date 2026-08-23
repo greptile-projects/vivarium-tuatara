@@ -147,6 +147,8 @@ type ConflictPendingAction struct {
 	IntendedSHA256 string             `json:"intended_sha256"`
 	Authorship     ConflictAuthorship `json:"authorship"`
 	StartedAt      time.Time          `json:"started_at"`
+	PrincipalID    string             `json:"principal_id"`
+	ControlVersion int                `json:"control_version"`
 }
 type ConflictRevision struct {
 	Branch   string   `json:"branch"`
@@ -1000,7 +1002,7 @@ func (s *Store) ActConflictResolution(id, resolutionID string, expected int, app
 		s.mu.Unlock()
 		return Workspace{}, err
 	}
-	if w.ConflictContext == nil || !w.CanControl(principal, "files", s.now()) {
+	if w.ConflictContext == nil || w.State != "running" || !w.CanControl(principal, "files", s.now()) {
 		s.mu.Unlock()
 		return Workspace{}, ErrControl
 	}
@@ -1019,6 +1021,7 @@ func (s *Store) ActConflictResolution(id, resolutionID string, expected int, app
 		return w, nil
 	}
 	pendingState := "applying"
+	startedIntent := false
 	if !applying {
 		pendingState = "undoing"
 	}
@@ -1050,9 +1053,10 @@ func (s *Store) ActConflictResolution(id, resolutionID string, expected int, app
 			if w.ConflictContext.Resolutions[i].ID == resolutionID {
 				r := &w.ConflictContext.Resolutions[i]
 				r.State = pendingState
-				r.PendingAction = &ConflictPendingAction{Kind: map[bool]string{true: "apply", false: "undo"}[applying], BeforeContent: beforeContent, BeforeSHA256: beforeDigest, IntendedSHA256: intendedDigest, Authorship: authorship, StartedAt: s.now()}
+				r.PendingAction = &ConflictPendingAction{Kind: map[bool]string{true: "apply", false: "undo"}[applying], BeforeContent: beforeContent, BeforeSHA256: beforeDigest, IntendedSHA256: intendedDigest, Authorship: authorship, StartedAt: s.now(), PrincipalID: principal, ControlVersion: w.Control.Version}
 			}
 		}
+		startedIntent = true
 		w.ConflictContext.Version++
 		w.UpdatedAt = s.now()
 		w.Events = append(w.Events, Event{Kind: "conflict.resolution." + pendingState, ActorID: authorship.ActorID, Role: "instruction", Detail: resolutionID, CreatedAt: w.UpdatedAt})
@@ -1100,6 +1104,9 @@ func (s *Store) ActConflictResolution(id, resolutionID string, expected int, app
 	w, err = s.read(id)
 	if err != nil {
 		return Workspace{}, err
+	}
+	if w.State != "running" || !w.CanControl(snapshot.PendingAction.PrincipalID, "files", s.now()) || (startedIntent && w.Control.Version != snapshot.PendingAction.ControlVersion) {
+		return Workspace{}, ErrControl
 	}
 	now := s.now()
 	for i := range w.ConflictContext.Resolutions {

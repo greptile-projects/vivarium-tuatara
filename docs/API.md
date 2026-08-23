@@ -4254,6 +4254,9 @@ Before touching runtime content, the server persists `applying` or `undoing` int
 before and intended digests, prior content needed for undo, original authorship, and start time. An
 identical retry reconciles an unchanged file by performing the edit or an already-edited file by
 finalizing deduplicated provenance. Any third digest fails closed instead of guessing.
+Immediately before final persistence, the server rechecks that the workspace remains `running` and
+the initiating principal still has a live file-control lease. Revocation leaves the intent pending
+and records neither completion nor change provenance.
 These endpoints grant no Git publication, branch, review, check, merge, secret, or environment
 authority.
 

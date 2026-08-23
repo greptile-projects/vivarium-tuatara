@@ -2812,6 +2812,9 @@ file-control lease and persist an intent before editing. If runtime execution or
 is interrupted, the visible `applying` or `undoing` state lets an identical retry compare the
 before and intended digests, finish only the missing work, and deduplicate change provenance.
 Human, agent, and operator attribution comes from the original retained intent.
+Finalization rechecks the running lifecycle and the original principal's live file-control lease;
+stop, suspension, expiry, takeover, release, or lease expiry leaves the action pending and appends
+no completion or change provenance.
 These records grant no merge, secret, environment, branch, review, check, or publication authority.
 
 An owner applies an accepted request through its merge endpoint. The operation
