@@ -3,6 +3,7 @@ package regressioninvestigations
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -53,6 +54,8 @@ type Entry struct {
 }
 type Investigation struct {
 	ID                 string     `json:"id"`
+	RequestID          string     `json:"request_id"`
+	RequestDigest      string     `json:"request_digest"`
 	RepositoryID       string     `json:"repository_id"`
 	Version            int        `json:"version"`
 	Title              string     `json:"title"`
@@ -75,9 +78,10 @@ type Investigation struct {
 	UpdatedAt          time.Time  `json:"updated_at"`
 }
 type Store struct {
-	root string
-	mu   sync.Mutex
-	now  func() time.Time
+	root          string
+	mu            sync.Mutex
+	now           func() time.Time
+	syncDirectory func(*os.File) error
 }
 
 func New(root string) (*Store, error) {
@@ -87,7 +91,7 @@ func New(root string) (*Store, error) {
 	if err := os.MkdirAll(root, 0700); err != nil {
 		return nil, err
 	}
-	return &Store{root: root, now: func() time.Time { return time.Now().UTC().Truncate(time.Microsecond) }}, nil
+	return &Store{root: root, now: func() time.Time { return time.Now().UTC().Truncate(time.Microsecond) }, syncDirectory: func(d *os.File) error { return d.Sync() }}, nil
 }
 func (s *Store) Create(v Investigation, actor string) (Investigation, error) {
 	s.mu.Lock()
@@ -100,8 +104,26 @@ func (s *Store) Create(v Investigation, actor string) (Investigation, error) {
 	if !valid(v, actor) {
 		return Investigation{}, ErrInvalid
 	}
+	digest, e := requestDigest(v, actor)
+	if e != nil {
+		return Investigation{}, e
+	}
+	existing, e := s.list(v.RepositoryID)
+	if e != nil {
+		return Investigation{}, e
+	}
+	for _, item := range existing {
+		if item.RequestID != v.RequestID {
+			continue
+		}
+		if item.RequestDigest != digest {
+			return Investigation{}, ErrConflict
+		}
+		return item, nil
+	}
 	now := s.now()
 	v.ID = id()
+	v.RequestDigest = digest
 	v.RepositoryID = strings.TrimSpace(v.RepositoryID)
 	v.Version = 1
 	v.Status = "open"
@@ -135,6 +157,9 @@ func (s *Store) List(repo string) ([]Investigation, error) {
 	if !token(repo) {
 		return nil, ErrInvalid
 	}
+	return s.list(repo)
+}
+func (s *Store) list(repo string) ([]Investigation, error) {
 	files, e := os.ReadDir(filepath.Join(s.root, repo))
 	if errors.Is(e, os.ErrNotExist) {
 		return []Investigation{}, nil
@@ -203,7 +228,33 @@ func (s *Store) Append(repo, wid, actor, kind, message, value string, expected i
 	return v, s.write(v)
 }
 func valid(v Investigation, actor string) bool {
-	return token(v.RepositoryID) && token(actor) && strings.TrimSpace(v.Title) != "" && len(v.Title) <= 200 && text(v.ExpectedBehavior) && text(v.RegressedBehavior) && boundary(v.KnownGood) && boundary(v.KnownBad) && len(v.Environments) > 0 && len(v.OwnerIDs) > 0 && len(v.AcceptanceCriteria) > 0 && (v.Severity == "low" || v.Severity == "medium" || v.Severity == "high" || v.Severity == "critical") && v.Source.ResourceID != ""
+	if !(token(v.RepositoryID) && token(v.RequestID) && token(actor) && strings.TrimSpace(v.Title) != "" && len(v.Title) <= 200 && text(v.ExpectedBehavior) && text(v.RegressedBehavior) && boundary(v.KnownGood) && boundary(v.KnownBad) && len(v.Environments) > 0 && len(v.OwnerIDs) > 0 && len(v.AcceptanceCriteria) > 0 && (v.Severity == "low" || v.Severity == "medium" || v.Severity == "high" || v.Severity == "critical") && v.Source.ResourceID != "") {
+		return false
+	}
+	for _, evidence := range v.Evidence {
+		if strings.TrimSpace(evidence.Kind) == "" || strings.TrimSpace(evidence.ResourceID) == "" || !text(evidence.Label) {
+			return false
+		}
+	}
+	return true
+}
+func requestDigest(v Investigation, actor string) (string, error) {
+	v.ID, v.RequestDigest, v.CreatedBy, v.Status = "", "", "", ""
+	v.Version, v.CreatedAt, v.UpdatedAt, v.History = 0, time.Time{}, time.Time{}, nil
+	v.Diagnostics, v.Comparable = nil, false
+	for i := range v.Evidence {
+		v.Evidence[i].ID = ""
+		v.Evidence[i].Available, v.Evidence[i].Stale, v.Evidence[i].Diagnostic = false, false, ""
+	}
+	b, e := json.Marshal(struct {
+		Actor         string        `json:"actor"`
+		Investigation Investigation `json:"investigation"`
+	}{actor, v})
+	if e != nil {
+		return "", e
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:]), nil
 }
 func boundary(v Boundary) bool {
 	return (v.Kind == "commit" || v.Kind == "release") && len(v.Revision) == 40 && v.Label != ""
@@ -276,7 +327,7 @@ func (s *Store) write(v Investigation) error {
 	if e != nil {
 		return e
 	}
-	e = d.Sync()
+	e = s.syncDirectory(d)
 	ce = d.Close()
 	if e == nil {
 		e = ce

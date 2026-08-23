@@ -88,6 +88,7 @@ func registerRegressionInvestigationRoutes(mux *http.ServeMux, git *storage.Stor
 		repoID := r.PathValue("id")
 		in.RepositoryID = repoID
 		in.Diagnostics = []string{}
+		in.Comparable = false
 		repository, catalogErr := catalog.GetByID(repoID)
 		if catalogErr != nil {
 			writeAPIError(w, 404, "repository_not_found", "repository not found")
@@ -129,13 +130,18 @@ func registerRegressionInvestigationRoutes(mux *http.ServeMux, git *storage.Stor
 		in.Comparable = true
 		for i := range in.Evidence {
 			ev := &in.Evidence[i]
-			ev.Available = ev.ResourceID != "" && (ev.Visibility == "repository" || ev.Visibility == "participants")
-			if ev.Revision != "" && exec.Command("git", "--git-dir="+gr.Path(), "cat-file", "-e", ev.Revision+"^{commit}").Run() != nil {
-				ev.Available = false
-				ev.Diagnostic = "referenced revision is missing"
+			ev.Available, ev.Stale, ev.Diagnostic = false, false, ""
+			if ev.Visibility != "repository" && ev.Visibility != "participants" {
+				ev.Diagnostic = "evidence visibility is not permitted"
+			} else if ev.Kind == "commit" {
+				ev.Available = ev.ResourceID == repoID && ev.Revision != "" && exec.Command("git", "--git-dir="+gr.Path(), "cat-file", "-e", ev.Revision+"^{commit}").Run() == nil
+			} else {
+				ev.Available = validRegressionSource(regressioninvestigations.Reference{Kind: ev.Kind, ResourceID: ev.ResourceID, Revision: ev.Revision, Label: ev.Label}, repoID, issueStore, supportStore, checkStore, releaseStore, deploymentStore, debugStore)
 			}
 			if !ev.Available && ev.Diagnostic == "" {
-				ev.Diagnostic = "evidence is missing or not permitted"
+				ev.Diagnostic = "evidence does not resolve in this repository"
+			}
+			if !ev.Available {
 				in.Diagnostics = append(in.Diagnostics, ev.Label+": "+ev.Diagnostic)
 			}
 		}

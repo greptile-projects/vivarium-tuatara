@@ -8,7 +8,9 @@ release, deployment, or demonstrated reproduction into a durable shared search b
 `$REGRESSION_INVESTIGATION_STORAGE_ROOT` (`regression-investigations`). Creation freezes expected and
 regressed behavior, exact known-good and known-bad commits or releases, affected environments,
 severity, current owners, acceptance criteria, and permitted evidence. Both commits must exist and
-known-good must be an ancestor of known-bad; missing or stale evidence remains explicit. CAS history
+known-good must be an ancestor of known-bad; evidence availability is server-resolved and missing or
+stale evidence remains explicit. Caller-stable request identities reconcile ambiguous post-publication
+create retries and reject changed reuse. CAS history
 retains attributed discussion, hypotheses, scope changes, and status without granting Git, testing,
 workspace, environment, deployment, evidence, or debugging authority.
 

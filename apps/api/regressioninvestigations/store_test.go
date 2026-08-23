@@ -2,13 +2,14 @@ package regressioninvestigations
 
 import (
 	"errors"
+	"os"
 	"testing"
 )
 
 const commit = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 func validInvestigation() Investigation {
-	return Investigation{RepositoryID: "repo-1", Title: "Checkout regression", Source: Reference{Kind: "issue", ResourceID: "issue-1", Label: "Reported checkout failure"}, ExpectedBehavior: "Checkout completes once.", RegressedBehavior: "Checkout submits twice.", KnownGood: Boundary{Kind: "commit", Revision: commit, Label: "last known good"}, KnownBad: Boundary{Kind: "commit", Revision: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Label: "first known bad"}, Environments: []string{"staging"}, Severity: "high", OwnerIDs: []string{"owner-1"}, AcceptanceCriteria: []string{"The boundary reproduces the behavior difference."}, Comparable: true, Evidence: []Evidence{{Kind: "issue", ResourceID: "issue-1", Label: "report", Visibility: "repository", Available: true}}}
+	return Investigation{RequestID: "request-1", RepositoryID: "repo-1", Title: "Checkout regression", Source: Reference{Kind: "issue", ResourceID: "issue-1", Label: "Reported checkout failure"}, ExpectedBehavior: "Checkout completes once.", RegressedBehavior: "Checkout submits twice.", KnownGood: Boundary{Kind: "commit", Revision: commit, Label: "last known good"}, KnownBad: Boundary{Kind: "commit", Revision: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Label: "first known bad"}, Environments: []string{"staging"}, Severity: "high", OwnerIDs: []string{"owner-1"}, AcceptanceCriteria: []string{"The boundary reproduces the behavior difference."}, Comparable: true, Evidence: []Evidence{{Kind: "issue", ResourceID: "issue-1", Label: "report", Visibility: "repository", Available: true}}}
 }
 
 func TestStoreRetainsAttributedCASHistory(t *testing.T) {
@@ -65,5 +66,42 @@ func TestStoreRejectsIncompleteOrCredentialShapedContext(t *testing.T) {
 	v.ExpectedBehavior = "token=do-not-retain"
 	if _, err := s.Create(v, "actor-1"); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("want invalid sensitive context, got %v", err)
+	}
+}
+
+func TestCreateRetryReconcilesPublishedRecordAfterDirectorySyncFailure(t *testing.T) {
+	s, _ := New(t.TempDir())
+	in := validInvestigation()
+	s.syncDirectory = func(*os.File) error { return errors.New("injected directory sync failure") }
+	published, err := s.Create(in, "actor-1")
+	if err == nil || published.ID == "" {
+		t.Fatalf("want published record and durability error, got %#v, %v", published, err)
+	}
+	if _, err = s.Get(in.RepositoryID, published.ID); err != nil {
+		t.Fatalf("published record is not readable: %v", err)
+	}
+	s.syncDirectory = func(d *os.File) error { return d.Sync() }
+	reconciled, err := s.Create(in, "actor-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reconciled.ID != published.ID {
+		t.Fatalf("retry duplicated create: %s != %s", reconciled.ID, published.ID)
+	}
+	items, err := s.List(in.RepositoryID)
+	if err != nil || len(items) != 1 {
+		t.Fatalf("want one retained investigation, got %#v, %v", items, err)
+	}
+}
+
+func TestCreateRejectsChangedRequestIdentityReuse(t *testing.T) {
+	s, _ := New(t.TempDir())
+	in := validInvestigation()
+	if _, err := s.Create(in, "actor-1"); err != nil {
+		t.Fatal(err)
+	}
+	in.Title = "Different boundary"
+	if _, err := s.Create(in, "actor-1"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("want conflict, got %v", err)
 	}
 }
