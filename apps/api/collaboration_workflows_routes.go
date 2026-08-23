@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/activities"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/agentprojects"
@@ -76,7 +77,7 @@ func registerCollaborationWorkflowRoutes(mux *http.ServeMux, git *storage.Store,
 				case "manual":
 					return true, ""
 				case "platform_action":
-					if !stringIn(inv.Action, "create_issue", "comment", "request_review", "dispatch_check", "update_project", "notify") {
+					if !stringIn(inv.Action, "create_issue", "comment", "request_review", "dispatch_check", "update_project", "notify", "merge", "release", "change_infrastructure", "access_protected_evidence", "spend_funds") {
 						return false, "platform action is not in the permitted workflow action set"
 					}
 				case "component":
@@ -129,6 +130,16 @@ func registerCollaborationWorkflowRoutes(mux *http.ServeMux, git *storage.Store,
 				writeJSON(w, 200, preview)
 				return
 			}
+			candidateWorkflowID := ""
+			candidateVersion := 0
+			if revise {
+				candidateWorkflowID = r.PathValue("workflow_id")
+				candidateVersion = in.ExpectedVersion
+			}
+			if err = workflows.RequireApprovedCandidate(r.PathValue("id"), candidateWorkflowID, preview.Source.SHA256, candidateVersion); err != nil {
+				writeAPIError(w, 409, "workflow_governance_blocked", "the exact workflow candidate lacks current review, scenarios, owner acknowledgement, separation, or approval")
+				return
+			}
 			owners := append([]string{}, definition.OwnerIDs...)
 			for _, step := range definition.Steps {
 				owners = append(owners, step.OwnerIDs...)
@@ -152,6 +163,191 @@ func registerCollaborationWorkflowRoutes(mux *http.ServeMux, git *storage.Store,
 	mux.HandleFunc("POST /repositories/{id}/collaboration-workflows/preview", handle(false, false))
 	mux.HandleFunc("POST /repositories/{id}/collaboration-workflows", handle(true, false))
 	mux.HandleFunc("POST /repositories/{id}/collaboration-workflows/{workflow_id}/revisions", handle(true, true))
+
+	type governancePolicyInput struct {
+		ExpectedVersion int `json:"expected_version"`
+		collaborationworkflows.GovernancePolicy
+	}
+	mux.HandleFunc("GET /repositories/{id}/collaboration-workflow-governance", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id")); !ok {
+			return
+		}
+		out, err := workflows.GetGovernancePolicy(r.PathValue("id"))
+		if errors.Is(err, collaborationworkflows.ErrNotFound) {
+			writeJSON(w, 200, map[string]any{"policy": nil})
+			return
+		}
+		if err != nil {
+			writeAPIError(w, 500, "workflow_governance_unavailable", "workflow governance could not be read")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"policy": out})
+	})
+	mux.HandleFunc("PUT /repositories/{id}/collaboration-workflow-governance", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		repo, lookupErr := catalog.Get(actor.UserID, r.PathValue("id"))
+		if lookupErr != nil {
+			writeAPIError(w, 404, "repository_not_found", "repository not found")
+			return
+		}
+		if repo.OwnerID != actor.UserID {
+			writeAPIError(w, 403, "repository_owner_required", "only the repository owner can change workflow governance")
+			return
+		}
+		var in governancePolicyInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "a versioned workflow governance policy is required")
+			return
+		}
+		out := collaborationworkflows.GovernancePolicy{}
+		err := catalog.WithCurrentParticipants(in.ResourceOwnerIDs, repo.ID, func() error {
+			var setErr error
+			out, setErr = workflows.SetGovernancePolicy(repo.ID, actor.UserID, in.ExpectedVersion, in.GovernancePolicy)
+			return setErr
+		})
+		writeWorkflowGovernance(w, out, err, 200)
+	})
+	type candidateInput struct {
+		WorkflowID              string `json:"workflow_id"`
+		ExpectedWorkflowVersion int    `json:"expected_workflow_version"`
+		Revision                string `json:"revision"`
+		Path                    string `json:"path"`
+	}
+	mux.HandleFunc("POST /repositories/{id}/collaboration-workflow-governance/candidates", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var in candidateInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "an exact workflow candidate is required")
+			return
+		}
+		definition, source, err := readWorkflowDefinition(git, r.PathValue("id"), in.Revision, in.Path)
+		if err != nil {
+			writeAPIError(w, 400, "invalid_workflow_source", err.Error())
+			return
+		}
+		preview := workflows.Preview(r.PathValue("id"), definition, source, func(inv collaborationworkflows.Invocation) (bool, string) {
+			switch inv.Kind {
+			case "manual":
+				return true, ""
+			case "platform_action":
+				if !stringIn(inv.Action, "create_issue", "comment", "request_review", "dispatch_check", "update_project", "notify", "merge", "release", "change_infrastructure", "access_protected_evidence", "spend_funds") {
+					return false, "platform action is not in the permitted workflow action set"
+				}
+			case "component":
+				if components == nil {
+					return false, "reusable component resolver is unavailable"
+				}
+				component, installation, resolved := components.Resolve(r.PathValue("id"), inv.Component)
+				if !resolved {
+					return false, "component must be an exact installed version reviewed in this repository"
+				}
+				grants := map[string]bool{}
+				for _, mapping := range installation.Revisions[len(installation.Revisions)-1].Mappings {
+					grants[mapping.LocalPermission] = true
+				}
+				for _, requested := range inv.Authority {
+					if !grants[requested] {
+						return false, "component authority must use an explicitly mapped local permission"
+					}
+				}
+				if component.Definition.Compatibility.WorkflowFormat != 1 || !workflowComponentCurrentlyTrusted(catalog, packageStore, peers, component) {
+					return false, "component publisher, package, compatibility, or federation trust is no longer current"
+				}
+			case "agent":
+				if agents == nil {
+					return false, "approved agent project resolver is unavailable"
+				}
+				project, projectErr := agents.Get(inv.AgentID)
+				if projectErr != nil || project.RepositoryID != r.PathValue("id") || len(project.Revisions) == 0 || len(project.Diagnostics) > 0 {
+					return false, "agent must resolve to a gap-free reviewed project in this repository"
+				}
+			case "workflow":
+				target, targetErr := workflows.Get(inv.WorkflowID)
+				if targetErr != nil || target.RepositoryID != r.PathValue("id") || target.Status != "active" {
+					return false, "reusable workflow is not an active readable workflow in this repository"
+				}
+				if in.WorkflowID != "" && (inv.WorkflowID == in.WorkflowID || workflowReaches(workflows, inv.WorkflowID, in.WorkflowID, map[string]bool{})) {
+					return false, "trigger loop: workflow invocation would create a recursive dependency"
+				}
+			}
+			return true, ""
+		})
+		out, err := workflows.EvaluateCandidate(r.PathValue("id"), in.WorkflowID, actor.UserID, in.ExpectedWorkflowVersion, preview)
+		writeWorkflowGovernance(w, out, err, 201)
+	})
+	mux.HandleFunc("GET /repositories/{id}/collaboration-workflow-governance/candidates/{candidate_id}", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id")); !ok {
+			return
+		}
+		out, err := workflows.GetCandidate(r.PathValue("candidate_id"))
+		if err != nil || out.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "workflow_candidate_not_found", "workflow candidate not found")
+			return
+		}
+		writeJSON(w, 200, out)
+	})
+	type decisionInput struct {
+		Kind       string     `json:"kind"`
+		OwnerID    string     `json:"owner_id"`
+		ScenarioID string     `json:"scenario_id"`
+		Reason     string     `json:"reason"`
+		ExpiresAt  *time.Time `json:"expires_at"`
+	}
+	mux.HandleFunc("POST /repositories/{id}/collaboration-workflow-governance/candidates/{candidate_id}/decisions", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var in decisionInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "an attributable candidate decision is required")
+			return
+		}
+		current, err := workflows.GetCandidate(r.PathValue("candidate_id"))
+		if err != nil || current.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "workflow_candidate_not_found", "workflow candidate not found")
+			return
+		}
+		out, err := workflows.DecideCandidate(current.ID, actor.UserID, in.Kind, in.OwnerID, in.ScenarioID, in.Reason, in.ExpiresAt)
+		writeWorkflowGovernance(w, out, err, 200)
+	})
+	type controlInput struct {
+		Kind            string `json:"kind"`
+		RollbackVersion int    `json:"rollback_version"`
+	}
+	mux.HandleFunc("POST /repositories/{id}/collaboration-workflows/{workflow_id}/control", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		repo, lookupErr := catalog.Get(actor.UserID, r.PathValue("id"))
+		if lookupErr != nil {
+			writeAPIError(w, 404, "repository_not_found", "repository not found")
+			return
+		}
+		if repo.OwnerID != actor.UserID {
+			writeAPIError(w, 403, "repository_owner_required", "only the repository owner can stop or roll back automation")
+			return
+		}
+		current, currentErr := workflows.Get(r.PathValue("workflow_id"))
+		if currentErr != nil || current.RepositoryID != repo.ID {
+			writeAPIError(w, 404, "collaboration_workflow_not_found", "collaboration workflow not found")
+			return
+		}
+		var in controlInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "a workflow control action is required")
+			return
+		}
+		out, err := workflows.Control(current.ID, actor.UserID, in.Kind, in.RollbackVersion)
+		writeCollaborationWorkflow(w, out, err, true)
+	})
 
 	type startInput struct {
 		DeliveryID      string `json:"delivery_id"`
@@ -326,6 +522,23 @@ func registerCollaborationWorkflowRoutes(mux *http.ServeMux, git *storage.Store,
 		out, err := workflows.Intervene(ex.ID, actor.UserID, "cancel", "", in.Code, "", nil, ex.Version)
 		writeWorkflowExecution(w, out, err, 200)
 	})
+}
+
+func writeWorkflowGovernance(w http.ResponseWriter, out any, err error, status int) {
+	switch {
+	case err == nil:
+		writeJSON(w, status, out)
+	case errors.Is(err, collaborationworkflows.ErrInvalid):
+		writeAPIError(w, 400, "invalid_workflow_governance", "workflow governance data is invalid")
+	case errors.Is(err, collaborationworkflows.ErrNotFound):
+		writeAPIError(w, 404, "workflow_governance_not_found", "workflow governance record not found")
+	case errors.Is(err, collaborationworkflows.ErrConflict):
+		writeAPIError(w, 409, "workflow_governance_conflict", "workflow governance changed or the decision is duplicated")
+	case errors.Is(err, collaborationworkflows.ErrGovernanceBlocked):
+		writeAPIError(w, 409, "workflow_governance_blocked", "current policy, ownership, separation, or expiry blocks this decision")
+	default:
+		writeAPIError(w, 500, "workflow_governance_unavailable", "workflow governance could not be persisted")
+	}
 }
 
 func workflowEventFromDelivery(git *storage.Store, pulls *pullrequests.Store, deliveries *activities.Store, repo, deliveryID string) (collaborationworkflows.TriggerEvent, bool) {

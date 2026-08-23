@@ -94,26 +94,49 @@ type Intervention struct {
 	Version   int       `json:"version"`
 }
 
+type ApprovalRequest struct {
+	StepID      string     `json:"step_id"`
+	ActionClass string     `json:"action_class"`
+	OwnerIDs    []string   `json:"owner_ids"`
+	RequestedAt time.Time  `json:"requested_at"`
+	ExpiresAt   time.Time  `json:"expires_at"`
+	ApprovedBy  string     `json:"approved_by,omitempty"`
+	ApprovedAt  *time.Time `json:"approved_at,omitempty"`
+}
+
+type ActionReceipt struct {
+	ID               string    `json:"id"`
+	StepID           string    `json:"step_id"`
+	ActionClass      string    `json:"action_class"`
+	Actions          int       `json:"actions"`
+	CostUnits        float64   `json:"cost_units"`
+	CompletionSHA256 string    `json:"completion_sha256"`
+	CreatedAt        time.Time `json:"created_at"`
+}
+
 type Execution struct {
-	ID                   string         `json:"id"`
-	RepositoryID         string         `json:"repository_id"`
-	WorkflowID           string         `json:"workflow_id"`
-	WorkflowVersion      int            `json:"workflow_version"`
-	WorkflowSource       Source         `json:"workflow_source"`
-	Trigger              TriggerEvent   `json:"trigger"`
-	Status               string         `json:"status"`
-	Version              int            `json:"version"`
-	BudgetActions        int            `json:"budget_actions"`
-	ActionsUsed          int            `json:"actions_used"`
-	CostUnits            float64        `json:"cost_units"`
-	Steps                []StepRun      `json:"steps"`
-	CreatedAt            time.Time      `json:"created_at"`
-	UpdatedAt            time.Time      `json:"updated_at"`
-	FinishedAt           *time.Time     `json:"finished_at,omitempty"`
-	CancellationCode     string         `json:"cancellation_code,omitempty"`
-	Interventions        []Intervention `json:"interventions"`
-	PredictedNextActions []string       `json:"predicted_next_actions"`
-	PausedBy             string         `json:"paused_by,omitempty"`
+	ID                      string            `json:"id"`
+	RepositoryID            string            `json:"repository_id"`
+	WorkflowID              string            `json:"workflow_id"`
+	WorkflowVersion         int               `json:"workflow_version"`
+	WorkflowSource          Source            `json:"workflow_source"`
+	GovernancePolicyVersion int               `json:"governance_policy_version,omitempty"`
+	Trigger                 TriggerEvent      `json:"trigger"`
+	Status                  string            `json:"status"`
+	Version                 int               `json:"version"`
+	BudgetActions           int               `json:"budget_actions"`
+	ActionsUsed             int               `json:"actions_used"`
+	CostUnits               float64           `json:"cost_units"`
+	Steps                   []StepRun         `json:"steps"`
+	CreatedAt               time.Time         `json:"created_at"`
+	UpdatedAt               time.Time         `json:"updated_at"`
+	FinishedAt              *time.Time        `json:"finished_at,omitempty"`
+	CancellationCode        string            `json:"cancellation_code,omitempty"`
+	Interventions           []Intervention    `json:"interventions"`
+	PredictedNextActions    []string          `json:"predicted_next_actions"`
+	PausedBy                string            `json:"paused_by,omitempty"`
+	ApprovalRequests        []ApprovalRequest `json:"approval_requests"`
+	ActionReceipts          []ActionReceipt   `json:"action_receipts"`
 }
 
 type StepLease struct {
@@ -135,6 +158,12 @@ func (s *Store) StartExecution(workflowID string, workflowVersion int, event Tri
 			return ErrExecutionBlocked
 		}
 		rev := w.Revisions[workflowVersion-1]
+		governanceVersion, approvalTTL := 0, 0
+		if policy, policyErr := s.readGovernancePolicy(w.RepositoryID); policyErr == nil {
+			governanceVersion, approvalTTL = policy.Version, policy.ApprovalTTLSeconds
+		} else if !errors.Is(policyErr, ErrNotFound) {
+			return policyErr
+		}
 		if event.ID == "" || event.ActorID == "" || event.OccurredAt.IsZero() || !triggerMatches(rev.Definition.Triggers, event) {
 			return ErrInvalid
 		}
@@ -186,10 +215,16 @@ func (s *Store) StartExecution(workflowID string, workflowVersion int, event Tri
 			return ErrExecutionBlocked
 		}
 		steps := make([]StepRun, 0, len(rev.Definition.Steps))
+		approvals := []ApprovalRequest{}
 		for _, st := range rev.Definition.Steps {
 			status := "pending"
 			if st.Approval != "" {
 				status = "waiting_approval"
+				ttl := st.TimeoutSeconds
+				if approvalTTL > 0 && approvalTTL < ttl {
+					ttl = approvalTTL
+				}
+				approvals = append(approvals, ApprovalRequest{StepID: st.ID, ActionClass: st.Approval, OwnerIDs: append([]string{}, st.OwnerIDs...), RequestedAt: now, ExpiresAt: now.Add(time.Duration(ttl) * time.Second)})
 			} else if len(st.RequestedInputs) > 0 {
 				status = "waiting_input"
 			} else if st.Manual {
@@ -197,7 +232,7 @@ func (s *Store) StartExecution(workflowID string, workflowVersion int, event Tri
 			}
 			steps = append(steps, StepRun{StepID: st.ID, Status: status, Outputs: map[string]any{}, Attempts: []StepAttempt{}, ProvidedInputs: map[string]any{}})
 		}
-		out = Execution{ID: id, RepositoryID: w.RepositoryID, WorkflowID: w.ID, WorkflowVersion: workflowVersion, WorkflowSource: rev.Source, Trigger: event, Status: "running", Version: 1, BudgetActions: rev.Definition.BudgetActions, Steps: steps, Interventions: []Intervention{}, CreatedAt: now, UpdatedAt: now}
+		out = Execution{ID: id, RepositoryID: w.RepositoryID, WorkflowID: w.ID, WorkflowVersion: workflowVersion, WorkflowSource: rev.Source, GovernancePolicyVersion: governanceVersion, Trigger: event, Status: "running", Version: 1, BudgetActions: rev.Definition.BudgetActions, Steps: steps, Interventions: []Intervention{}, ApprovalRequests: approvals, ActionReceipts: []ActionReceipt{}, CreatedAt: now, UpdatedAt: now}
 		deriveNextActions(&out, rev.Definition)
 		return s.writeExecution(out)
 	})
@@ -217,6 +252,15 @@ func (s *Store) ClaimStep(executionID, stepID string, expectedVersion int, actor
 		w, err := s.read(ex.WorkflowID)
 		if err != nil {
 			return err
+		}
+		if w.Status != "active" || w.CurrentVersion != ex.WorkflowVersion {
+			return ErrExecutionBlocked
+		}
+		if ex.GovernancePolicyVersion > 0 {
+			policy, policyErr := s.readGovernancePolicy(ex.RepositoryID)
+			if policyErr != nil || policy.Version != ex.GovernancePolicyVersion {
+				return ErrExecutionBlocked
+			}
 		}
 		def := w.Revisions[ex.WorkflowVersion-1].Definition
 		st, ok := definitionStep(def, stepID)
@@ -348,6 +392,9 @@ func (s *Store) CompleteStepEvidence(executionID, stepID, token string, actions 
 		sr.CredentialExpiresAt = nil
 		sr.FinishedAt = &now
 		sr.CompletionSHA256 = completion
+		if failure == "" && (actions > 0 || st.Invocation.Action != "") {
+			ex.ActionReceipts = append(ex.ActionReceipts, ActionReceipt{ID: receiptID(ex.ID, stepID, completion), StepID: stepID, ActionClass: st.Invocation.Action, Actions: actions, CostUnits: cost, CompletionSHA256: completion, CreatedAt: now})
+		}
 		if len(sr.Attempts) == 0 {
 			return ErrExecutionConflict
 		}
@@ -372,6 +419,11 @@ func (s *Store) CompleteStepEvidence(executionID, stepID, token string, actions 
 		return s.writeExecution(ex)
 	})
 	return ex, err
+}
+
+func receiptID(execution, step, completion string) string {
+	sum := sha256.Sum256([]byte(execution + "\x00" + step + "\x00" + completion))
+	return hex.EncodeToString(sum[:16])
 }
 
 func (s *Store) Intervene(id, actor, kind, stepID, reason, inputName string, value any, expected int) (Execution, error) {
@@ -469,6 +521,16 @@ func (s *Store) Intervene(id, actor, kind, stepID, reason, inputName string, val
 			if !hasStep || sr == nil || st.Approval == "" || sr.Status != "waiting_approval" {
 				return ErrExecutionBlocked
 			}
+			approved := false
+			for i := range ex.ApprovalRequests {
+				req := &ex.ApprovalRequests[i]
+				if req.StepID == stepID && req.ApprovedAt == nil && req.ExpiresAt.After(now) && contains(req.OwnerIDs, actor) {
+					req.ApprovedBy, req.ApprovedAt, approved = actor, &now, true
+				}
+			}
+			if !approved {
+				return ErrExecutionBlocked
+			}
 			sr.Status = "pending"
 		case "take_over":
 			if !hasStep || sr == nil || !st.Manual || !oneOf(sr.Status, "waiting_manual", "pending") {
@@ -501,6 +563,8 @@ func PublicExecution(ex Execution) Execution {
 			ex.Steps[i].Attempts[j].Artifacts = visible
 		}
 	}
+	// Receipt completion digests are intentional public integrity anchors; they
+	// cannot recreate the one-time step credential.
 	return ex
 }
 

@@ -296,6 +296,13 @@ whenever dependencies change or the web job fails before it starts.
   approve, provide non-secret input, skip only reviewed optional steps, or take over only declared manual
   steps; every accepted change retains actor, reason, step, time, and resulting version. Private terminal
   input and credential-shaped content are rejected, and these controls grant no underlying action authority.
+  Repository workflow governance adds versioned requirements for independent review, named simulation
+  cases, resource-owner acknowledgement, separation of duties, bounded approval, and the closed merge,
+  release, infrastructure-change, protected-evidence, and spending action classes. Exact-source candidates
+  retain expected event effects, permission differences, cost, conflicts, decisions, and expiring exceptions;
+  policy drift blocks activation. Runs expose expiring owner approval requests and immutable action receipts.
+  Owner disablement, anomaly/authority stops, and selection of a prior immutable revision block new starts
+  and claims without deleting completed effects, attempts, executions, receipts, or revision history.
 
 - **Attested workflow components** — `/workflow-components`, repository
   `/workflow-component-installations`, and the `/repositories/{id}/workflows` workspace expose
