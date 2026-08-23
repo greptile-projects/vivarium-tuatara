@@ -381,12 +381,12 @@ func (s *Store) GuideSearch(repo, wid, searchID, actor, kind, revision, classifi
 		if !text(claim) || (confidence != "low" && confidence != "medium" && confidence != "high") || len(candidateRevisions) == 0 || len(evidenceIDs)+len(attemptIDs) == 0 {
 			return Investigation{}, ErrInvalid
 		}
-		known := map[string]bool{}
+		candidatesByRevision := map[string][]SearchCandidate{}
 		for _, c := range search.Candidates {
-			known[c.Revision] = true
+			candidatesByRevision[c.Revision] = append(candidatesByRevision[c.Revision], c)
 		}
 		for _, revision := range candidateRevisions {
-			if !known[revision] {
+			if len(candidatesByRevision[revision]) != 1 {
 				return Investigation{}, ErrInvalid
 			}
 		}
@@ -405,7 +405,7 @@ func (s *Store) GuideSearch(repo, wid, searchID, actor, kind, revision, classifi
 		}
 		for _, attemptID := range attemptIDs {
 			attempt, ok := attemptsByID[attemptID]
-			if !ok || attempt.ScenarioID != search.ScenarioID || !attemptSupportsCandidate(attempt, candidateRevisions) {
+			if !ok || attempt.ScenarioID != search.ScenarioID || !attemptSupportsCandidate(attempt, candidatesByRevision, candidateRevisions) {
 				return Investigation{}, ErrInvalid
 			}
 		}
@@ -421,14 +421,21 @@ func (s *Store) GuideSearch(repo, wid, searchID, actor, kind, revision, classifi
 	return v, s.write(v)
 }
 
-func attemptSupportsCandidate(attempt Attempt, candidateRevisions []string) bool {
+func attemptSupportsCandidate(attempt Attempt, candidatesByRevision map[string][]SearchCandidate, candidateRevisions []string) bool {
 	for _, candidateRevision := range candidateRevisions {
-		if attempt.Revision == candidateRevision {
+		candidates := candidatesByRevision[candidateRevision]
+		if len(candidates) != 1 {
+			continue
+		}
+		candidate := candidates[0]
+		if candidate.Kind == "commit" && attempt.Revision == candidate.Revision {
 			return true
 		}
-		for _, dependency := range attempt.Dependencies {
-			if dependency.Revision == candidateRevision {
-				return true
+		if candidate.Kind == "dependency" {
+			for _, dependency := range attempt.Dependencies {
+				if dependency.RepositoryID == candidate.RepositoryID && dependency.Revision == candidate.Revision {
+					return true
+				}
 			}
 		}
 	}

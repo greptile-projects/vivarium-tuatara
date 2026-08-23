@@ -39,6 +39,9 @@ commits, flaky evidence, regressed merges, and multiple supported ranges remain 
 produce an unsupported single-commit verdict. Search records grant no Git, pull, execution, package, or agent authority.
 Dependency attempt projection matches both the selected repository and revision; equal commit hashes in another
 dependency repository are not evidence for that candidate.
+Hypothesis citations resolve each selected revision to one unambiguous search candidate and apply the same repository
+identity check. Multiple completed outcomes aggregate independently of storage order; pass/fail disagreement or any
+flaky attempt projects as flaky rather than a definitive working or regressed result.
 
 Conflict reconciliation resolution checkpoints in the workspace ledger assemble an immutable unreferenced
 two-parent candidate and retain all affected required checks, reproductions, contract/schema scenarios,

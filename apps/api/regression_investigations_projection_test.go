@@ -97,3 +97,20 @@ func TestSearchAttemptProjectionIncludesExactDependencyCandidate(t *testing.T) {
 		t.Fatalf("exact dependency attempt omitted: %#v", candidate)
 	}
 }
+
+func TestSearchAttemptProjectionKeepsConflictingEvidenceFlakyRegardlessOfOrder(t *testing.T) {
+	passed := regressioninvestigations.Attempt{ID: "passed", ScenarioID: "scenario", Revision: "revision", State: "completed", Classification: "passed"}
+	failed := regressioninvestigations.Attempt{ID: "failed", ScenarioID: "scenario", Revision: "revision", State: "completed", Classification: "failed"}
+	for _, attempts := range [][]regressioninvestigations.Attempt{{passed, failed}, {failed, passed}} {
+		candidate := regressioninvestigations.SearchCandidate{Kind: "commit", Revision: "revision"}
+		projectRegressionCandidateAttempts(&candidate, "scenario", attempts)
+		if candidate.Classification != "flaky" || len(candidate.AttemptIDs) != 2 {
+			t.Fatalf("conflicting evidence collapsed by order: %#v", candidate)
+		}
+	}
+	boundary := regressioninvestigations.SearchCandidate{Kind: "commit", Revision: "revision", Classification: "working"}
+	projectRegressionCandidateAttempts(&boundary, "scenario", []regressioninvestigations.Attempt{failed})
+	if boundary.Classification != "flaky" {
+		t.Fatalf("attempt contradiction erased retained guidance: %#v", boundary)
+	}
+}

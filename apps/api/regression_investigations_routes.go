@@ -679,6 +679,17 @@ func deriveCulpritRanges(candidates []regressioninvestigations.SearchCandidate) 
 
 func projectRegressionCandidateAttempts(candidate *regressioninvestigations.SearchCandidate, scenarioID string, attempts []regressioninvestigations.Attempt) {
 	candidate.AttemptIDs = []string{}
+	passed, failed, flaky := false, false, false
+	if !candidate.Excluded {
+		switch candidate.Classification {
+		case "working":
+			passed = true
+		case "regressed":
+			failed = true
+		case "flaky":
+			flaky = true
+		}
+	}
 	for _, attempt := range attempts {
 		if attempt.State != "completed" || attempt.ScenarioID != scenarioID || !attemptMatchesRegressionCandidate(attempt, *candidate) {
 			continue
@@ -689,12 +700,23 @@ func projectRegressionCandidateAttempts(candidate *regressioninvestigations.Sear
 		}
 		switch attempt.Classification {
 		case "passed":
-			candidate.Classification = "working"
+			passed = true
 		case "failed":
-			candidate.Classification = "regressed"
+			failed = true
 		case "flaky":
-			candidate.Classification = "flaky"
+			flaky = true
 		}
+	}
+	if candidate.Excluded {
+		return
+	}
+	switch {
+	case flaky || passed && failed:
+		candidate.Classification = "flaky"
+	case passed:
+		candidate.Classification = "working"
+	case failed:
+		candidate.Classification = "regressed"
 	}
 }
 

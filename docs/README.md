@@ -65,6 +65,9 @@ merge or flaky ambiguity. Candidate views include the direct changed paths, comm
 requests, and the exact attempts supporting their classification.
 Dependency evidence joins on both repository identity and revision, preventing an equal hash from a different
 repository from supplying or hiding a candidate outcome.
+Hypothesis attempt citations use that same exact identity and reject revision selectors that identify more than one
+search candidate. Candidate outcomes aggregate across all matching completed attempts without storage-order
+precedence: mixed pass/fail or any flaky result remains explicitly flaky.
 
 CAS-versioned collaborator guidance records working, regressed, flaky, invalid, excluded, and restored trials
 with attribution and rationale. Rewritten or missing commits become explicit exclusions on reads. Causal
