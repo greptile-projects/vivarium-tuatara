@@ -6,7 +6,7 @@
 variant return the revision/event-bound graph, current step states, append-only attempts, sanitized logs,
 artifact metadata, agent sessions, action and cost use, timing, failures, provenance, waiting reasons,
 predicted next actions, and attributed intervention history. Public projections omit step capability and
-completion digests and replace restricted artifact names with an opaque label.
+completion digests and omit restricted artifact entries entirely.
 
 `POST .../executions/{execution_id}/interventions` compare-and-swaps `expected_version` and accepts
 `pause`, `resume`, `cancel`, `retry`, `approve`, `provide_input`, `skip`, or `take_over` with a reason and,

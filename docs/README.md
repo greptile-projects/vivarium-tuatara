@@ -67,7 +67,7 @@ deliveries made stale by pull movement all fail closed.
 The workflow workspace and execution reads project a live dependency graph and preserve every attempt's
 timing, resolved inputs, declared redacted outputs, sanitized logs, artifact digest metadata, agent session,
 cost, failure, and source/event provenance after the run finishes. Capability and completion digests never
-leave the store, and restricted artifacts have opaque names. Waiting approval, requested-input, manual,
+leave the store, and restricted artifacts are omitted. Waiting approval, requested-input, manual,
 dependency, retry, and optional states feed predicted next actions. Current write collaborators use a single
 CAS intervention route to pause, resume, cancel, retry, approve, provide a named non-secret input, skip a
 reviewed optional step, or take over a declared manual step. The immutable intervention trail attributes the

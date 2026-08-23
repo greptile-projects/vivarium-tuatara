@@ -186,11 +186,50 @@ func TestExecutionEvidenceProjectionAndAttributedInterventions(t *testing.T) {
 		t.Fatalf("takeover=%#v %v", ex, err)
 	}
 	public := PublicExecution(ex)
-	if public.Steps[0].CredentialSHA256 != "" || public.Steps[0].CompletionSHA256 != "" || public.Steps[0].Attempts[0].Artifacts[0].Name != "Restricted artifact" {
+	if public.Steps[0].CredentialSHA256 != "" || public.Steps[0].CompletionSHA256 != "" || len(public.Steps[0].Attempts[0].Artifacts) != 0 {
 		t.Fatalf("projection=%#v", public.Steps[0])
 	}
 	if _, err = s.Intervene(ex.ID, "collaborator", "provide_input", "notify", "unsafe", "value", "password=abcdefghijklmnop", ex.Version); !errorsIs(err, ErrInvalid) {
 		t.Fatalf("secret intervention=%v", err)
+	}
+}
+
+func TestProvidedInputIsFrozenAcrossRetriedAttempts(t *testing.T) {
+	s, _ := New(t.TempDir())
+	d := validDefinition()
+	d.Steps[0].RequestedInputs = []string{"decision"}
+	p := s.Preview("repo", d, Source{Revision: strings.Repeat("a", 40)}, func(Invocation) (bool, string) { return true, "" })
+	w, err := s.Create("repo", "owner", "frozen-input", p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event := TriggerEvent{ID: "input-event", Kind: "repository_event", Name: "pull.opened", ActorID: "owner", OccurredAt: time.Now().UTC(), Inputs: map[string]any{"pull_id": "pull-1"}, ResourceRevisions: map[string]string{"pull_id": strings.Repeat("b", 40)}}
+	ex, err := s.StartExecution(w.ID, 1, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ex, err = s.Intervene(ex.ID, "owner", "provide_input", "classify", "supply reviewed decision", "decision", "approved", ex.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, err := s.ClaimStep(ex.ID, "classify", ex.Version, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ex, err = s.CompleteStep(ex.ID, "classify", lease.Token, 1, nil, "transient")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ex, err = s.Intervene(ex.ID, "owner", "retry", "classify", "retry the same reviewed input", "", nil, ex.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Intervene(ex.ID, "owner", "provide_input", "classify", "replace prior input", "decision", "rejected", ex.Version); !errorsIs(err, ErrExecutionBlocked) {
+		t.Fatalf("replacement input=%v", err)
+	}
+	retry, err := s.ClaimStep(ex.ID, "classify", ex.Version, true)
+	if err != nil || retry.Inputs["decision"] != "approved" {
+		t.Fatalf("retry inputs=%#v %v", retry.Inputs, err)
 	}
 }
 

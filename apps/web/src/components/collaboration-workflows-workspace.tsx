@@ -322,6 +322,11 @@ export function CollaborationWorkflowsWorkspace({
     }
   }
   const revision = selected?.revisions.at(-1);
+  const executionRevision = selectedExecution
+    ? selected?.revisions.find(
+        (candidate) => candidate.version === selectedExecution.workflow_version,
+      )
+    : undefined;
   return (
     <main className="mx-auto max-w-6xl space-y-6 p-6">
       <header>
@@ -574,7 +579,7 @@ export function CollaborationWorkflowsWorkspace({
                       ? "success"
                       : selectedExecution.status === "failed"
                         ? "danger"
-                : "neutral"
+                        : "neutral"
                   }
                 >
                   {selectedExecution.status}
@@ -619,176 +624,196 @@ export function CollaborationWorkflowsWorkspace({
               </section>
               <section>
                 <h4 className="font-semibold">Execution graph</h4>
-                <div className="mt-2 grid gap-3 md:grid-cols-2">
-                  {revision.definition.steps.map((def) => {
-                    const run = selectedExecution.steps.find(
-                      (s) => s.step_id === def.id,
-                    )!;
-                    return (
-                      <article key={def.id} className="rounded-lg border p-4">
-                        <div className="flex justify-between gap-2">
-                          <div>
-                            <h5 className="font-medium">{def.name}</h5>
-                            <p className="text-xs text-[var(--muted)]">
-                              Needs {def.needs?.join(", ") || "nothing"} · owner{" "}
-                              {def.owner_ids.join(", ")}
-                            </p>
+                {!executionRevision ? (
+                  <p role="alert" className="mt-2 text-sm text-[var(--danger)]">
+                    Workflow version {selectedExecution.workflow_version} is
+                    unavailable, so this retained graph cannot be rendered
+                    safely. The run summary and intervention history remain
+                    visible.
+                  </p>
+                ) : (
+                  <div className="mt-2 grid gap-3 md:grid-cols-2">
+                    {executionRevision.definition.steps.map((def) => {
+                      const run = selectedExecution.steps.find(
+                        (s) => s.step_id === def.id,
+                      );
+                      if (!run)
+                        return (
+                          <article
+                            key={def.id}
+                            className="rounded-lg border p-4 text-sm text-[var(--danger)]"
+                          >
+                            Retained status for {def.name} is unavailable.
+                          </article>
+                        );
+                      return (
+                        <article key={def.id} className="rounded-lg border p-4">
+                          <div className="flex justify-between gap-2">
+                            <div>
+                              <h5 className="font-medium">{def.name}</h5>
+                              <p className="text-xs text-[var(--muted)]">
+                                Needs {def.needs?.join(", ") || "nothing"} ·
+                                owner {def.owner_ids.join(", ")}
+                              </p>
+                            </div>
+                            <Badge>{run.status}</Badge>
                           </div>
-                          <Badge>{run.status}</Badge>
-                        </div>
-                        <p className="mt-2 text-xs">
-                          {run.failure_code &&
-                            `Failure: ${run.failure_code} · `}
-                          {run.actions_used} actions
-                          {run.taken_over_by &&
-                            ` · taken over by ${run.taken_over_by}`}
-                        </p>
-                        <div className="mt-3 flex flex-wrap gap-2">
-                          {["interrupted", "failed"].includes(run.status) && (
-                            <Button
-                              type="button"
-                              disabled={busy}
-                              onClick={() => void intervene("retry", def.id)}
-                            >
-                              Retry
-                            </Button>
-                          )}
-                          {def.optional &&
-                            !["succeeded", "skipped", "cancelled"].includes(
-                              run.status,
-                            ) && (
+                          <p className="mt-2 text-xs">
+                            {run.failure_code &&
+                              `Failure: ${run.failure_code} · `}
+                            {run.actions_used} actions
+                            {run.taken_over_by &&
+                              ` · taken over by ${run.taken_over_by}`}
+                          </p>
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            {["interrupted", "failed"].includes(run.status) && (
                               <Button
                                 type="button"
                                 disabled={busy}
-                                onClick={() => void intervene("skip", def.id)}
+                                onClick={() => void intervene("retry", def.id)}
                               >
-                                Skip optional
+                                Retry
                               </Button>
                             )}
-                          {def.manual &&
-                            ["waiting_manual", "pending"].includes(
-                              run.status,
-                            ) && (
+                            {def.optional &&
+                              !["succeeded", "skipped", "cancelled"].includes(
+                                run.status,
+                              ) && (
+                                <Button
+                                  type="button"
+                                  disabled={busy}
+                                  onClick={() => void intervene("skip", def.id)}
+                                >
+                                  Skip optional
+                                </Button>
+                              )}
+                            {def.manual &&
+                              ["waiting_manual", "pending"].includes(
+                                run.status,
+                              ) && (
+                                <Button
+                                  type="button"
+                                  disabled={busy}
+                                  onClick={() =>
+                                    void intervene("take_over", def.id)
+                                  }
+                                >
+                                  Take over
+                                </Button>
+                              )}
+                            {run.status === "waiting_approval" && (
                               <Button
                                 type="button"
                                 disabled={busy}
                                 onClick={() =>
-                                  void intervene("take_over", def.id)
+                                  void intervene("approve", def.id)
                                 }
                               >
-                                Take over
+                                Approve
                               </Button>
                             )}
-                          {run.status === "waiting_approval" && (
-                            <Button
-                              type="button"
-                              disabled={busy}
-                              onClick={() => void intervene("approve", def.id)}
-                            >
-                              Approve
-                            </Button>
-                          )}
-                        </div>
-                        {run.status === "waiting_input" && (
-                          <form
-                            className="mt-3 grid gap-2"
-                            onSubmit={(e) => {
-                              e.preventDefault();
-                              void intervene("provide_input", def.id, {
-                                input_name: input.name,
-                                value: input.value,
-                              });
-                            }}
-                          >
-                            <select
-                              required
-                              value={input.step === def.id ? input.name : ""}
-                              onChange={(e) =>
-                                setInput({
-                                  step: def.id,
-                                  name: e.target.value,
+                          </div>
+                          {run.status === "waiting_input" && (
+                            <form
+                              className="mt-3 grid gap-2"
+                              onSubmit={(e) => {
+                                e.preventDefault();
+                                void intervene("provide_input", def.id, {
+                                  input_name: input.name,
                                   value: input.value,
-                                })
-                              }
-                              className="rounded border bg-transparent p-2 text-sm"
+                                });
+                              }}
                             >
-                              <option value="">Requested input…</option>
-                              {def.requested_inputs?.map((x) => (
-                                <option key={x}>{x}</option>
-                              ))}
-                            </select>
-                            <input
-                              required
-                              type="text"
-                              value={input.step === def.id ? input.value : ""}
-                              onChange={(e) =>
-                                setInput({
-                                  step: def.id,
-                                  name: input.name,
-                                  value: e.target.value,
-                                })
-                              }
-                              className="rounded border bg-transparent p-2 text-sm"
-                              placeholder="Non-secret value (terminal input is never accepted)"
-                            />
-                            <Button disabled={busy}>Provide input</Button>
-                          </form>
-                        )}
-                    {(run.attempts ?? []).map((a) => (
-                          <details
-                            key={a.number}
-                            className="mt-3 rounded border p-2 text-xs"
-                          >
-                            <summary>
-                              Attempt {a.number} · {a.status} · {a.cost_units}{" "}
-                              cost units
-                            </summary>
-                            <p className="mt-2">
-                              {new Date(a.started_at).toLocaleString()}
-                              {a.finished_at &&
-                                ` → ${new Date(a.finished_at).toLocaleString()}`}
-                            </p>
-                            {a.agent_session && (
+                              <select
+                                required
+                                value={input.step === def.id ? input.name : ""}
+                                onChange={(e) =>
+                                  setInput({
+                                    step: def.id,
+                                    name: e.target.value,
+                                    value: input.value,
+                                  })
+                                }
+                                className="rounded border bg-transparent p-2 text-sm"
+                              >
+                                <option value="">Requested input…</option>
+                                {def.requested_inputs?.map((x) => (
+                                  <option key={x}>{x}</option>
+                                ))}
+                              </select>
+                              <input
+                                required
+                                type="text"
+                                value={input.step === def.id ? input.value : ""}
+                                onChange={(e) =>
+                                  setInput({
+                                    step: def.id,
+                                    name: input.name,
+                                    value: e.target.value,
+                                  })
+                                }
+                                className="rounded border bg-transparent p-2 text-sm"
+                                placeholder="Non-secret value (terminal input is never accepted)"
+                              />
+                              <Button disabled={busy}>Provide input</Button>
+                            </form>
+                          )}
+                          {(run.attempts ?? []).map((a) => (
+                            <details
+                              key={a.number}
+                              className="mt-3 rounded border p-2 text-xs"
+                            >
+                              <summary>
+                                Attempt {a.number} · {a.status} · {a.cost_units}{" "}
+                                cost units
+                              </summary>
+                              <p className="mt-2">
+                                {new Date(a.started_at).toLocaleString()}
+                                {a.finished_at &&
+                                  ` → ${new Date(a.finished_at).toLocaleString()}`}
+                              </p>
+                              {a.agent_session && (
+                                <p>
+                                  Agent session {a.agent_session.id} ·{" "}
+                                  {a.agent_session.status}
+                                </p>
+                              )}
+                              <p>Inputs: {JSON.stringify(a.inputs)}</p>
                               <p>
-                                Agent session {a.agent_session.id} ·{" "}
-                                {a.agent_session.status}
+                                Redacted outputs:{" "}
+                                {JSON.stringify(a.outputs ?? {})}
                               </p>
-                            )}
-                            <p>Inputs: {JSON.stringify(a.inputs)}</p>
-                            <p>
-                              Redacted outputs:{" "}
-                              {JSON.stringify(a.outputs ?? {})}
-                            </p>
-                            {a.logs.map((l, i) => (
-                              <p key={i} className="mt-1 font-mono">
-                                [{l.level}] {l.message}
+                              {(a.logs ?? []).map((l, i) => (
+                                <p key={i} className="mt-1 font-mono">
+                                  [{l.level}] {l.message}
+                                </p>
+                              ))}
+                              {(a.artifacts ?? []).map((x) => (
+                                <p key={x.sha256}>
+                                  Artifact: {x.name} · {x.kind} · {x.size} bytes
+                                  · {short(x.sha256)}
+                                </p>
+                              ))}
+                              <p className="mt-1 text-[var(--muted)]">
+                                Provenance: {(a.provenance ?? []).join(" · ")}
                               </p>
-                            ))}
-                            {a.artifacts.map((x) => (
-                              <p key={x.sha256}>
-                                Artifact: {x.name} · {x.kind} · {x.size} bytes ·{" "}
-                                {short(x.sha256)}
-                              </p>
-                            ))}
-                            <p className="mt-1 text-[var(--muted)]">
-                              Provenance: {a.provenance.join(" · ")}
-                            </p>
-                          </details>
-                        ))}
-                      </article>
-                    );
-                  })}
-                </div>
+                            </details>
+                          ))}
+                        </article>
+                      );
+                    })}
+                  </div>
+                )}
               </section>
               <section>
                 <h4 className="font-semibold">Attributable interventions</h4>
-              {(selectedExecution.interventions ?? []).length === 0 ? (
+                {(selectedExecution.interventions ?? []).length === 0 ? (
                   <p className="mt-1 text-sm text-[var(--muted)]">
                     No collaborator has changed this run.
                   </p>
                 ) : (
                   <ol className="mt-2 space-y-1 text-sm">
-                  {(selectedExecution.interventions ?? []).map((x) => (
+                    {(selectedExecution.interventions ?? []).map((x) => (
                       <li key={x.id}>
                         {x.kind.replace("_", " ")} by {x.actor_id}
                         {x.step_id && ` on ${x.step_id}`} · {x.reason} ·{" "}

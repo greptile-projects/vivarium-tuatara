@@ -449,7 +449,7 @@ func (s *Store) Intervene(id, actor, kind, stepID, reason, inputName string, val
 			sr.Status, sr.FinishedAt = "skipped", &now
 			finishExecution(&ex, now)
 		case "provide_input":
-			if !hasStep || sr == nil || !contains(st.RequestedInputs, inputName) || inputName == "" {
+			if !hasStep || sr == nil || sr.Status != "waiting_input" || !contains(st.RequestedInputs, inputName) || inputName == "" {
 				return ErrExecutionBlocked
 			}
 			if sr.ProvidedInputs == nil {
@@ -492,11 +492,13 @@ func PublicExecution(ex Execution) Execution {
 		ex.Steps[i].CredentialSHA256 = ""
 		ex.Steps[i].CompletionSHA256 = ""
 		for j := range ex.Steps[i].Attempts {
-			for k := range ex.Steps[i].Attempts[j].Artifacts {
-				if ex.Steps[i].Attempts[j].Artifacts[k].Restricted {
-					ex.Steps[i].Attempts[j].Artifacts[k].Name = "Restricted artifact"
+			visible := make([]StepArtifact, 0, len(ex.Steps[i].Attempts[j].Artifacts))
+			for _, artifact := range ex.Steps[i].Attempts[j].Artifacts {
+				if !artifact.Restricted {
+					visible = append(visible, artifact)
 				}
 			}
+			ex.Steps[i].Attempts[j].Artifacts = visible
 		}
 	}
 	return ex

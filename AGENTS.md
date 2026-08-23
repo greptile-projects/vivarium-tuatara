@@ -289,7 +289,7 @@ whenever dependencies change or the web job fails before it starts.
   runtime derives trigger kind/name, occurrence time, actor, pull input, and revision from that server
   record and rejects stale or unsupported deliveries. Participants cannot supply trigger metadata.
   Execution reads are public projections: capability and completion digests are never returned, and
-  restricted artifact names remain opaque. Each step retains append-only attempts with declared inputs,
+  restricted artifact entries are omitted entirely. Each step retains append-only attempts with declared inputs,
   redacted outputs and logs, digest-addressed artifacts, agent-session references, costs, timing,
   failures, and provenance. Derived next actions explain dependency, approval, requested-input, manual,
   retry, and optional-work waits. Versioned collaborator interventions pause, resume, cancel, retry,
