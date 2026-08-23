@@ -326,7 +326,7 @@ func (s *Store) List(repo string) ([]Workflow, error) {
 			return e
 		}
 		for _, x := range es {
-			if x.IsDir() || !strings.HasSuffix(x.Name(), ".json") {
+			if x.IsDir() || !strings.HasSuffix(x.Name(), ".json") || strings.HasPrefix(x.Name(), "execution-") {
 				continue
 			}
 			w, e := s.read(strings.TrimSuffix(x.Name(), ".json"))

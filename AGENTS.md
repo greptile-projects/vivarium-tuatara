@@ -271,6 +271,15 @@ whenever dependencies change or the web job fails before it starts.
   `$COLLABORATION_WORKFLOW_STORAGE_ROOT` (`collaboration-workflows`); records explain coordination but
   grant no repository, event, action, agent, component, runtime, secret, review, release, deployment,
   or linked-workflow authority.
+  Runtime `/executions` bind a caller-stable event ID to one workflow revision, source, authenticated
+  trigger actor, exact reachable resource revisions, and declared non-secret inputs. The durable run
+  schedules only dependency-ready owner steps; a claim mints a random, single-step, timeout-bounded
+  capability carrying only reviewed authority and resolved declared inputs. Completion accepts only
+  declared non-credential outputs and accounts both step and run action budgets. One active run per
+  workflow, a 60-start hourly ceiling, CAS claims, retry limits, token expiry, cancellation, and
+  deterministic duplicate-event reconciliation bound retries and outage recovery. Runs and token
+  digests persist in the workflow store; plaintext step tokens are returned only on claim. Execution
+  does not confer underlying action authority, and resource/participant access is rechecked at runtime.
 
 - **Collaborative software adoption** — `/adoption-workspaces` and the web `/adoption`
   workspace retain shared software-fit evaluations beneath `$ADOPTION_WORKSPACE_STORAGE_ROOT`

@@ -33,6 +33,24 @@ subscriptions, stages, authority preview, actor, and time beneath `$COLLABORATIO
 execute actions, grant agent or repository authority, or bypass runtime, secret, review, release, or
 deployment controls.
 
+Authorized repository event dispatchers create durable runs at
+`/{workflow_id}/executions` with a caller-stable event ID, the selected immutable workflow version,
+authenticated actor, occurrence time, declared trigger inputs, and exact resource commits that still
+resolve from ordinary branches. Identical delivery retries reconcile to the same run; changed reuse is
+a conflict. A workflow admits one active run and at most 60 starts per hour. Execution records freeze the
+reviewed source, action budget, step attempts, output provenance, interruption or cancellation reason,
+and terminal state.
+
+Current step owners claim only dependency-ready work with the execution CAS version. A claim returns a
+random, one-step capability that expires at the reviewed timeout and contains only that invocation's
+declared authority plus event or successful predecessor outputs named by the step input mapping. The
+ledger persists only its digest. Completion requires that capability, accounts actions against both
+step and workflow ceilings, rejects undeclared or credential-shaped outputs, and never forwards hidden
+event context. Failed or expired attempts remain visible and may be reclaimed only within the reviewed
+retry bound; cancellation revokes outstanding capabilities deterministically. The capability authorizes
+workflow bookkeeping only: invoked platform, repository, organization, agent, embargo, environment,
+approval, review, release, and deployment operations still apply their own current policy.
+
 ## Evidence-backed software adoption
 
 Authenticated collaborators use `/adoption-workspaces` or the web adoption workspace to ask whether
