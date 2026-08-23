@@ -262,6 +262,78 @@ func TestDeliveryRequiresCompleteAttestationsAndSafeRestore(t *testing.T) {
 	}
 }
 
+func TestRedactedFindingRequiresProviderConsentBeforeUpstreamWork(t *testing.T) {
+	s, _ := New(t.TempDir())
+	x, _ := s.Create(fixture(), "owner", []Invitation{{PrincipalType: "human", PrincipalID: "maintainer", Role: "provider_maintainer"}, {PrincipalType: "human", PrincipalID: "user", Role: "affected_user"}})
+	x, _ = s.Consent(x.ID, x.Invitations[0].ID, "maintainer", "accepted", x.Version)
+	x, _ = s.Consent(x.ID, x.Invitations[1].ID, "user", "accepted", x.Version)
+	v := Viewer{PrincipalType: "human", PrincipalID: "owner"}
+	trial := TrialDefinition{CandidateID: x.Candidates[0].ID, Source: TrialSource{Kind: "exact_revision", ResourceID: "0123456789012345678901234567890123456789", Revision: "0123456789012345678901234567890123456789", Resolution: "resolved"}, DataKind: "synthetic", DataDescription: "fixture", Journeys: []string{"publish and replay"}, Policies: []string{"retention"}, Setup: []string{"setup"}, Configuration: []string{"config"}, Commands: []string{"check"}, IntegrationChanges: []string{"adapter"}}
+	x, _ = s.CreateTrial(x.ID, trial, v, x.Version)
+	x, _ = s.RecordTrialAttempt(x.ID, x.Trials[0].ID, TrialAttempt{Status: "failed", Reproducible: true, Findings: []string{"duplicate delivery"}}, v, x.Version)
+	finding := SharedFinding{Kind: "reproduction", TrialID: x.Trials[0].ID, AttemptID: x.Trials[0].Attempts[0].ID, Summary: "Reconnect duplicates one synthetic event", Reproduction: []string{"disconnect after acknowledgement"}, Evidence: []string{"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, Redactions: []string{"removed account and payload fields"}, Visibility: "participants", State: "pending_consent"}
+	x, err := s.ShareFinding(x.ID, finding, v, x.Version)
+	if err != nil || x.SharedFindings[0].ProviderStatus != "awaiting_consent" {
+		t.Fatalf("finding was not retained for consent: %+v, %v", x.SharedFindings, err)
+	}
+	participant, _ := s.Get(x.ID, Viewer{PrincipalType: "human", PrincipalID: "user"})
+	if len(participant.SharedFindings) != 0 {
+		t.Fatalf("unconsented finding metadata leaked: %+v", participant.SharedFindings)
+	}
+	contribution := UpstreamContribution{FindingID: x.SharedFindings[0].ID, Kind: "fork_pull", TargetRepositoryID: "provider", SourceRepositoryID: "fork", ResourceID: "pull", Revision: "1111111111111111111111111111111111111111", Status: "open", Resolution: "ordinary maintainer review"}
+	if _, err = s.RecordContribution(x.ID, contribution, v, x.Version); !errorsIs(err, ErrInvalid) {
+		t.Fatalf("unconsented upstream contribution accepted: %v", err)
+	}
+	x, err = s.ConsentFinding(x.ID, x.SharedFindings[0].ID, "maintainer", "accepted", x.Version)
+	if err != nil || x.SharedFindings[0].State != "shared" || x.SharedFindings[0].ConsentedBy != "maintainer" {
+		t.Fatalf("provider consent not retained: %+v, %v", x.SharedFindings, err)
+	}
+	x, err = s.RecordContribution(x.ID, contribution, v, x.Version)
+	if err != nil || x.Contributions[0].Authority != "no_authority_granted" || x.Contributions[0].AuthoredBy != "owner" {
+		t.Fatalf("ordinary upstream contribution not linked safely: %+v, %v", x.Contributions, err)
+	}
+}
+
+func TestEmbargoAndRejectionRetainLocalPatchAndVerifiedReplacement(t *testing.T) {
+	s, _ := New(t.TempDir())
+	x, _ := s.Create(fixture(), "owner", []Invitation{{PrincipalType: "human", PrincipalID: "maintainer", Role: "provider_maintainer"}})
+	x, _ = s.Consent(x.ID, x.Invitations[0].ID, "maintainer", "accepted", x.Version)
+	v := Viewer{PrincipalType: "human", PrincipalID: "owner"}
+	trial := TrialDefinition{CandidateID: x.Candidates[0].ID, Source: TrialSource{Kind: "exact_revision", ResourceID: "0123456789012345678901234567890123456789", Revision: "0123456789012345678901234567890123456789", Resolution: "resolved"}, DataKind: "synthetic", DataDescription: "fixture", Journeys: []string{"publish and replay"}, Policies: []string{"retention"}, Setup: []string{"setup"}, Configuration: []string{"config"}, Commands: []string{"check"}, IntegrationChanges: []string{"adapter"}}
+	x, _ = s.CreateTrial(x.ID, trial, v, x.Version)
+	x, _ = s.ShareFinding(x.ID, SharedFinding{Kind: "compatibility_evidence", TrialID: x.Trials[0].ID, Summary: "Private compatibility gap", Redactions: []string{"consumer identity removed"}, Visibility: "provider", State: "embargoed"}, v, x.Version)
+	local := UpstreamContribution{FindingID: x.SharedFindings[0].ID, Kind: "local_pull", TargetRepositoryID: "consumer", SourceRepositoryID: "consumer", ResourceID: "local-pull", Revision: "1111111111111111111111111111111111111111", Status: "local_only", Resolution: "provider unavailable; retain consumer patch"}
+	x, err := s.RecordContribution(x.ID, local, v, x.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstream := UpstreamContribution{FindingID: x.SharedFindings[0].ID, Kind: "fork_pull", TargetRepositoryID: "provider", SourceRepositoryID: "fork", ResourceID: "upstream-pull", Revision: "2222222222222222222222222222222222222222", Status: "merged", Resolution: "accepted through ordinary review", AuthoredBy: "owner", AuthoredByType: "human"}
+	// A later explicit share is modeled independently; the embargo remains immutable.
+	x, err = s.ShareFinding(x.ID, SharedFinding{Kind: "compatibility_evidence", TrialID: x.Trials[0].ID, Summary: "Public synthetic compatibility gap", Redactions: []string{"consumer identity removed"}, Visibility: "public", State: "pending_consent"}, v, x.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.RecordContribution(x.ID, upstream, v, x.Version); !errorsIs(err, ErrInvalid) {
+		t.Fatalf("unconsented replacement accepted: %v", err)
+	}
+	sharedFindingID := x.SharedFindings[1].ID
+	x, err = s.ConsentFinding(x.ID, sharedFindingID, "maintainer", "accepted", x.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstream.FindingID = sharedFindingID
+	x, err = s.RecordContribution(x.ID, upstream, v, x.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstream = x.Contributions[1]
+	update := VerifiedUpdate{ContributionID: upstream.ID, ProviderRepositoryID: "provider", ProviderReleaseID: "provider-release", ProviderReleaseRevision: "3333333333333333333333333333333333333333", ConsumerRepositoryID: "consumer", ConsumerPullRequestID: "update-pull", ConsumerPullRevision: "4444444444444444444444444444444444444444", ConsumerReleaseID: "consumer-release", ConsumerReleaseRevision: "5555555555555555555555555555555555555555", ConsumerDeploymentID: "deployment", ReplacesContributionID: x.Contributions[0].ID, Outcome: "provider release replaced the local patch", CheckRunIDs: []string{"check"}, State: "verified"}
+	x, err = s.RecordVerifiedUpdate(x.ID, update, v, x.Version)
+	if err != nil || x.VerifiedUpdates[0].Authority != "no_authority_granted" {
+		t.Fatalf("verified patch replacement not retained: %+v, %v", x.VerifiedUpdates, err)
+	}
+}
+
 func validAdoptionPlan(x Workspace) AdoptionPlan {
 	return AdoptionPlan{CandidateID: x.Candidates[0].ID, TrialID: x.Trials[0].ID, SelectedVersion: "2.0.0", IntegrationArchitecture: "Consumer adapter calls the provider API", ConfigurationOwnership: []DecisionOwner{{Decision: "Consumer retry policy", OwnerID: "owner", Party: "adopter"}}, UpdatePolicy: "Monthly review; security updates within seven days", SupportPolicy: "Provider triages protocol defects; adopter owns local operations", ServiceBoundaries: []string{"Provider ends at the public API"}, DataBoundaries: []string{"No payload retention"}, RequiredExceptions: []string{"Temporary retry-policy exception tracked by consumer"}, ExitStrategy: "Remove the adapter and replay queued events", UnresolvedFitGaps: []string{"Windows remains unverified"}, CompatibilityPromises: []string{"Provider supports events/v2 through 2027"}, RecurringCostCents: 2500, Currency: "USD", Work: []AdoptionWork{{Position: 1, Kind: "consumer_repository", Title: "Implement adapter", RepositoryID: "consumer", Paths: []string{"src/adapter"}, OwnerType: "human", OwnerID: "owner", OwnerStatus: "current", AcceptanceCriteria: []string{"Journey passes"}, EffectiveAccess: "owner"}, {Position: 2, Kind: "documentation", Title: "Document support boundary", RepositoryID: "consumer", Paths: []string{"docs/relay.md"}, OwnerType: "human", OwnerID: "owner", OwnerStatus: "current", AcceptanceCriteria: []string{"Owners approve"}, EffectiveAccess: "owner"}}}
 }

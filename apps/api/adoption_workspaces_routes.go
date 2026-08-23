@@ -15,6 +15,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/deployments"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/federation"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/incubators"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/issues"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
 	packageversions "github.com/greptile-projects/vivarium-tuatara/apps/api/packages"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
@@ -49,6 +50,22 @@ type adoptionDeliveryInput struct {
 	adoptionworkspaces.AdoptionDelivery
 	ExpectedVersion int `json:"expected_version"`
 }
+type adoptionFindingInput struct {
+	adoptionworkspaces.SharedFinding
+	ExpectedVersion int `json:"expected_version"`
+}
+type adoptionFindingConsentInput struct {
+	Decision        string `json:"decision"`
+	ExpectedVersion int    `json:"expected_version"`
+}
+type adoptionContributionInput struct {
+	adoptionworkspaces.UpstreamContribution
+	ExpectedVersion int `json:"expected_version"`
+}
+type adoptionUpdateInput struct {
+	adoptionworkspaces.VerifiedUpdate
+	ExpectedVersion int `json:"expected_version"`
+}
 
 func storeCanReadRepository(catalog *repositories.Store, viewer adoptionworkspaces.Viewer, id string) bool {
 	repository, err := catalog.GetByID(id)
@@ -68,7 +85,7 @@ func storeCanReadRepository(catalog *repositories.Store, viewer adoptionworkspac
 	return ok
 }
 
-func registerAdoptionWorkspaceRoutes(mux *http.ServeMux, credentials *auth.Store, identities *users.Store, catalog *repositories.Store, orgs *organizations.Store, incubatorStore *incubators.Store, federationStore *federation.Store, roadmapStore *roadmaps.Store, supportStore *supportthreads.Store, decisionStore *decisions.Store, packageStore *packageversions.Store, apiStore *apicontracts.Store, releaseStore *releases.Store, buildStore *checkruns.Store, pullStore *pullrequests.Store, deploymentStore *deployments.Store, store *adoptionworkspaces.Store) {
+func registerAdoptionWorkspaceRoutes(mux *http.ServeMux, credentials *auth.Store, identities *users.Store, catalog *repositories.Store, orgs *organizations.Store, incubatorStore *incubators.Store, federationStore *federation.Store, roadmapStore *roadmaps.Store, supportStore *supportthreads.Store, decisionStore *decisions.Store, packageStore *packageversions.Store, apiStore *apicontracts.Store, releaseStore *releases.Store, buildStore *checkruns.Store, pullStore *pullrequests.Store, issueStore *issues.Store, deploymentStore *deployments.Store, store *adoptionworkspaces.Store) {
 	authn := func(w http.ResponseWriter, r *http.Request) (auth.Credential, bool) {
 		a, ok := authenticateRequest(w, r, credentials, "repositories:read", false)
 		if !ok {
@@ -611,6 +628,182 @@ func registerAdoptionWorkspaceRoutes(mux *http.ServeMux, credentials *auth.Store
 			return
 		}
 		out, createErr := store.CreateDelivery(r.PathValue("workspace_id"), in.AdoptionDelivery, viewer(actor), in.ExpectedVersion)
+		writeAdoptionWorkspace(w, out, createErr, 201)
+	})
+	mux.HandleFunc("POST /adoption-workspaces/{workspace_id}/shared-findings", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authn(w, r)
+		if !ok {
+			return
+		}
+		var in adoptionFindingInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_shared_finding", "redacted finding evidence and expected version are required")
+			return
+		}
+		out, err := store.ShareFinding(r.PathValue("workspace_id"), in.SharedFinding, viewer(actor), in.ExpectedVersion)
+		writeAdoptionWorkspace(w, out, err, 201)
+	})
+	mux.HandleFunc("POST /adoption-workspaces/{workspace_id}/shared-findings/{finding_id}/consent", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authn(w, r)
+		if !ok {
+			return
+		}
+		if actor.AgentID != "" {
+			writeAPIError(w, 403, "human_provider_consent_required", "a consented human provider maintainer must decide disclosure")
+			return
+		}
+		var in adoptionFindingConsentInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_finding_consent", "decision and expected version are required")
+			return
+		}
+		out, err := store.ConsentFinding(r.PathValue("workspace_id"), r.PathValue("finding_id"), actor.UserID, in.Decision, in.ExpectedVersion)
+		writeAdoptionWorkspace(w, out, err, 200)
+	})
+	mux.HandleFunc("POST /adoption-workspaces/{workspace_id}/upstream-contributions", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authn(w, r)
+		if !ok {
+			return
+		}
+		var in adoptionContributionInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_upstream_contribution", "an ordinary issue or pull and expected version are required")
+			return
+		}
+		principal := actor.UserID
+		if actor.AgentID != "" {
+			principal = actor.AgentID
+		}
+		workspace, err := store.Get(r.PathValue("workspace_id"), viewer(actor))
+		if err != nil {
+			writeAdoptionWorkspace(w, adoptionworkspaces.Workspace{}, err, 200)
+			return
+		}
+		var finding *adoptionworkspaces.SharedFinding
+		for i := range workspace.SharedFindings {
+			if workspace.SharedFindings[i].ID == in.FindingID {
+				finding = &workspace.SharedFindings[i]
+			}
+		}
+		if finding == nil {
+			writeAPIError(w, 422, "invalid_upstream_contribution", "the shared finding must resolve in this workspace")
+			return
+		}
+		providerRepositoryID := ""
+		for _, trial := range workspace.Trials {
+			if trial.ID == finding.TrialID {
+				providerRepositoryID = trial.Source.RepositoryID
+			}
+		}
+		for _, delivery := range workspace.Deliveries {
+			if delivery.ID == finding.DeliveryID {
+				providerRepositoryID = delivery.ProviderRepositoryID
+			}
+		}
+		localTarget := false
+		for _, delivery := range workspace.Deliveries {
+			localTarget = localTarget || delivery.ConsumerRepositoryID == in.TargetRepositoryID
+		}
+		for _, plan := range workspace.Plans {
+			for _, work := range plan.Work {
+				localTarget = localTarget || work.RepositoryID == in.TargetRepositoryID && work.Kind != "upstream_fork"
+			}
+		}
+		if !canReadRepository(actor, in.TargetRepositoryID) || in.Kind == "local_pull" && !localTarget || in.Kind != "local_pull" && in.TargetRepositoryID != providerRepositoryID {
+			writeAPIError(w, 422, "invalid_contribution_target", "the contribution target must resolve to this finding's provider or planned consumer boundary")
+			return
+		}
+		if in.Kind == "issue" {
+			if issueStore == nil {
+				writeAPIError(w, 503, "issues_unavailable", "ordinary issues could not be resolved")
+				return
+			}
+			issue, issueErr := issueStore.Get(in.TargetRepositoryID, in.ResourceID)
+			if issueErr != nil || issue.ReporterID != principal {
+				writeAPIError(w, 422, "invalid_upstream_issue", "the ordinary issue must exist and retain authenticated authorship")
+				return
+			}
+			in.Status, in.Revision, in.SourceRepositoryID = "open", "", ""
+			if issue.Status != "open" {
+				in.Status = "closed"
+			}
+		} else {
+			if pullStore == nil {
+				writeAPIError(w, 503, "pulls_unavailable", "ordinary pulls could not be resolved")
+				return
+			}
+			pull, pullErr := pullStore.Get(in.TargetRepositoryID, in.ResourceID)
+			if pullErr != nil || pull.AuthorID != actor.UserID {
+				writeAPIError(w, 422, "invalid_upstream_pull", "the ordinary pull must exist and retain authenticated authorship")
+				return
+			}
+			source, sourceErr := catalog.GetByID(pull.SourceRepositoryID)
+			if sourceErr != nil || in.Kind == "fork_pull" && source.UpstreamRepositoryID != pull.RepositoryID || in.Kind == "local_pull" && pull.SourceRepositoryID != pull.RepositoryID || in.Kind == "federated_pull" && pull.FederatedContributionID == "" {
+				writeAPIError(w, 422, "invalid_upstream_pull", "pull topology does not match its declared local, fork, or federated kind")
+				return
+			}
+			in.SourceRepositoryID, in.Revision, in.Status = pull.SourceRepositoryID, pull.SourceCommitID, pull.Status
+			if in.Kind == "local_pull" {
+				in.Status = "local_only"
+			}
+		}
+		in.AuthoredBy, in.AuthoredByType, in.Authority = "", "", ""
+		out, createErr := store.RecordContribution(r.PathValue("workspace_id"), in.UpstreamContribution, viewer(actor), in.ExpectedVersion)
+		writeAdoptionWorkspace(w, out, createErr, 201)
+	})
+	mux.HandleFunc("POST /adoption-workspaces/{workspace_id}/verified-updates", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authn(w, r)
+		if !ok {
+			return
+		}
+		if actor.AgentID != "" {
+			writeAPIError(w, 403, "human_update_verification_required", "a human adopter must verify replacement of a consumer patch")
+			return
+		}
+		var in adoptionUpdateInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_verified_update", "exact provider and consumer delivery records are required")
+			return
+		}
+		if releaseStore == nil || pullStore == nil || buildStore == nil || deploymentStore == nil {
+			writeAPIError(w, 503, "adoption_update_evidence_unavailable", "ordinary release, pull, check, and deployment records are required")
+			return
+		}
+		providerRelease, pe := releaseStore.Get(in.ProviderRepositoryID, in.ProviderReleaseID)
+		consumerPull, ce := pullStore.Get(in.ConsumerRepositoryID, in.ConsumerPullRequestID)
+		consumerRelease, re := releaseStore.Get(in.ConsumerRepositoryID, in.ConsumerReleaseID)
+		promotion, de := deploymentStore.GetPromotion(in.ConsumerRepositoryID, in.ConsumerDeploymentID)
+		providerIncludes, consumerIncludes := false, false
+		workspace, we := store.Get(r.PathValue("workspace_id"), viewer(actor))
+		contributionResource, contributionRevision := "", ""
+		if we == nil {
+			for _, c := range workspace.Contributions {
+				if c.ID == in.ContributionID && c.Status == "merged" && c.TargetRepositoryID == in.ProviderRepositoryID {
+					contributionResource, contributionRevision = c.ResourceID, c.Revision
+				}
+			}
+		}
+		for _, evidence := range providerRelease.Inclusions.PullEvidence {
+			providerIncludes = providerIncludes || evidence.PullRequestID == contributionResource && evidence.SourceCommitID == contributionRevision
+		}
+		for _, evidence := range consumerRelease.Inclusions.PullEvidence {
+			consumerIncludes = consumerIncludes || evidence.PullRequestID == consumerPull.ID && evidence.SourceCommitID == consumerPull.SourceCommitID
+		}
+		runs, be := buildStore.List(in.ConsumerRepositoryID, in.ConsumerPullRequestID)
+		checkIDs, passed := []string{}, be == nil
+		for _, run := range runs {
+			if run.CommitID == consumerPull.SourceCommitID {
+				checkIDs = append(checkIDs, run.ID)
+				passed = passed && run.State == "succeeded"
+			}
+		}
+		consumer, catalogErr := catalog.GetByID(in.ConsumerRepositoryID)
+		if pe != nil || ce != nil || re != nil || de != nil || we != nil || catalogErr != nil || !consumer.HasParticipant(actor.UserID) || consumerPull.Status != pullrequests.Merged || consumerPull.MergeCommitID == nil || !providerIncludes || !consumerIncludes || promotion.State != "succeeded" || promotion.ReleaseID != consumerRelease.ID || promotion.CommitID != consumerRelease.CommitID || !passed || len(checkIDs) == 0 {
+			writeAPIError(w, 422, "unverified_adoption_update", "accepted provider release and exact checked consumer rollout must resolve through ordinary records")
+			return
+		}
+		in.ProviderReleaseRevision, in.ConsumerPullRevision, in.ConsumerReleaseRevision, in.CheckRunIDs, in.State = providerRelease.CommitID, consumerPull.SourceCommitID, consumerRelease.CommitID, checkIDs, "verified"
+		out, createErr := store.RecordVerifiedUpdate(r.PathValue("workspace_id"), in.VerifiedUpdate, viewer(actor), in.ExpectedVersion)
 		writeAdoptionWorkspace(w, out, createErr, 201)
 	})
 }

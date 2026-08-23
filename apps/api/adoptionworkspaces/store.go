@@ -198,27 +198,84 @@ type AdoptionDelivery struct {
 	RecordedBy             string                `json:"recorded_by"`
 	RecordedAt             time.Time             `json:"recorded_at"`
 }
+type SharedFinding struct {
+	ID             string     `json:"id"`
+	Kind           string     `json:"kind"`
+	TrialID        string     `json:"trial_id,omitempty"`
+	AttemptID      string     `json:"attempt_id,omitempty"`
+	DeliveryID     string     `json:"delivery_id,omitempty"`
+	Summary        string     `json:"summary"`
+	Reproduction   []string   `json:"reproduction,omitempty"`
+	Evidence       []string   `json:"evidence,omitempty"`
+	Redactions     []string   `json:"redactions"`
+	Visibility     string     `json:"visibility"`
+	State          string     `json:"state"`
+	ProviderStatus string     `json:"provider_status"`
+	SharedBy       string     `json:"shared_by"`
+	SharedByType   string     `json:"shared_by_type"`
+	ConsentedBy    string     `json:"consented_by,omitempty"`
+	ConsentedAt    *time.Time `json:"consented_at,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+}
+type UpstreamContribution struct {
+	ID                 string    `json:"id"`
+	FindingID          string    `json:"finding_id"`
+	Kind               string    `json:"kind"`
+	TargetRepositoryID string    `json:"target_repository_id"`
+	SourceRepositoryID string    `json:"source_repository_id,omitempty"`
+	ResourceID         string    `json:"resource_id"`
+	Revision           string    `json:"revision,omitempty"`
+	Status             string    `json:"status"`
+	Resolution         string    `json:"resolution"`
+	AuthoredBy         string    `json:"authored_by"`
+	AuthoredByType     string    `json:"authored_by_type"`
+	Authority          string    `json:"authority"`
+	CreatedAt          time.Time `json:"created_at"`
+}
+type VerifiedUpdate struct {
+	ID                      string    `json:"id"`
+	ContributionID          string    `json:"contribution_id"`
+	ProviderRepositoryID    string    `json:"provider_repository_id"`
+	ProviderReleaseID       string    `json:"provider_release_id"`
+	ProviderReleaseRevision string    `json:"provider_release_revision"`
+	ConsumerRepositoryID    string    `json:"consumer_repository_id"`
+	ConsumerPullRequestID   string    `json:"consumer_pull_request_id"`
+	ConsumerPullRevision    string    `json:"consumer_pull_revision"`
+	ConsumerReleaseID       string    `json:"consumer_release_id"`
+	ConsumerReleaseRevision string    `json:"consumer_release_revision"`
+	ConsumerDeploymentID    string    `json:"consumer_deployment_id"`
+	ReplacesContributionID  string    `json:"replaces_contribution_id,omitempty"`
+	Outcome                 string    `json:"outcome"`
+	CheckRunIDs             []string  `json:"check_run_ids"`
+	State                   string    `json:"state"`
+	Authority               string    `json:"authority"`
+	RecordedBy              string    `json:"recorded_by"`
+	RecordedAt              time.Time `json:"recorded_at"`
+}
 type Workspace struct {
-	ID               string             `json:"id"`
-	Version          int                `json:"version"`
-	Title            string             `json:"title"`
-	Outcome          string             `json:"outcome"`
-	Source           Source             `json:"source"`
-	RequiredJourneys []string           `json:"required_journeys"`
-	Environments     []string           `json:"environments"`
-	Constraints      []string           `json:"constraints"`
-	BudgetCents      int64              `json:"budget_cents"`
-	Currency         string             `json:"currency"`
-	Owners           []Owner            `json:"owners"`
-	Criteria         []Criterion        `json:"evaluation_criteria"`
-	Candidates       []Candidate        `json:"candidates"`
-	Invitations      []Invitation       `json:"invitations"`
-	Trials           []TrialDefinition  `json:"trials"`
-	Plans            []AdoptionPlan     `json:"plans"`
-	Deliveries       []AdoptionDelivery `json:"deliveries"`
-	CreatedBy        string             `json:"created_by"`
-	CreatedAt        time.Time          `json:"created_at"`
-	UpdatedAt        time.Time          `json:"updated_at"`
+	ID               string                 `json:"id"`
+	Version          int                    `json:"version"`
+	Title            string                 `json:"title"`
+	Outcome          string                 `json:"outcome"`
+	Source           Source                 `json:"source"`
+	RequiredJourneys []string               `json:"required_journeys"`
+	Environments     []string               `json:"environments"`
+	Constraints      []string               `json:"constraints"`
+	BudgetCents      int64                  `json:"budget_cents"`
+	Currency         string                 `json:"currency"`
+	Owners           []Owner                `json:"owners"`
+	Criteria         []Criterion            `json:"evaluation_criteria"`
+	Candidates       []Candidate            `json:"candidates"`
+	Invitations      []Invitation           `json:"invitations"`
+	Trials           []TrialDefinition      `json:"trials"`
+	Plans            []AdoptionPlan         `json:"plans"`
+	Deliveries       []AdoptionDelivery     `json:"deliveries"`
+	SharedFindings   []SharedFinding        `json:"shared_findings"`
+	Contributions    []UpstreamContribution `json:"upstream_contributions"`
+	VerifiedUpdates  []VerifiedUpdate       `json:"verified_updates"`
+	CreatedBy        string                 `json:"created_by"`
+	CreatedAt        time.Time              `json:"created_at"`
+	UpdatedAt        time.Time              `json:"updated_at"`
 }
 
 type Viewer struct {
@@ -525,6 +582,31 @@ func (s *Store) project(x Workspace, viewer Viewer) Workspace {
 	for i := range x.Deliveries {
 		x.Deliveries[i] = s.projectDelivery(viewer, x.Deliveries[i])
 	}
+	findings := x.SharedFindings[:0]
+	for _, finding := range x.SharedFindings {
+		provider := providerParticipant(x, viewer)
+		allowed := finding.SharedBy == viewer.PrincipalID || provider || finding.State == "shared" && (finding.Visibility == "public" || finding.Visibility == "participants" && visible(x, viewer))
+		if finding.State == "embargoed" && finding.SharedBy != viewer.PrincipalID || !allowed {
+			continue
+		}
+		findings = append(findings, finding)
+	}
+	x.SharedFindings = findings
+	for i := range x.Contributions {
+		if !s.canReadRepository(viewer, x.Contributions[i].TargetRepositoryID) || x.Contributions[i].SourceRepositoryID != "" && !s.canReadRepository(viewer, x.Contributions[i].SourceRepositoryID) {
+			x.Contributions[i].TargetRepositoryID, x.Contributions[i].SourceRepositoryID, x.Contributions[i].ResourceID, x.Contributions[i].Revision = "restricted", "", "", ""
+			x.Contributions[i].Status = "access_revoked"
+		}
+		x.Contributions[i].Authority = "no_authority_granted"
+	}
+	for i := range x.VerifiedUpdates {
+		if !s.canReadRepository(viewer, x.VerifiedUpdates[i].ProviderRepositoryID) || !s.canReadRepository(viewer, x.VerifiedUpdates[i].ConsumerRepositoryID) {
+			x.VerifiedUpdates[i].ProviderRepositoryID, x.VerifiedUpdates[i].ProviderReleaseID, x.VerifiedUpdates[i].ProviderReleaseRevision = "restricted", "", ""
+			x.VerifiedUpdates[i].ConsumerRepositoryID, x.VerifiedUpdates[i].ConsumerPullRequestID, x.VerifiedUpdates[i].ConsumerPullRevision, x.VerifiedUpdates[i].ConsumerReleaseID, x.VerifiedUpdates[i].ConsumerReleaseRevision, x.VerifiedUpdates[i].ConsumerDeploymentID = "restricted", "", "", "", "", ""
+			x.VerifiedUpdates[i].CheckRunIDs, x.VerifiedUpdates[i].State = nil, "access_revoked"
+		}
+		x.VerifiedUpdates[i].Authority = "no_authority_granted"
+	}
 	return x
 }
 func (s *Store) Get(v string, viewer Viewer) (Workspace, error) {
@@ -639,6 +721,204 @@ func planningParticipant(x Workspace, viewer Viewer) bool {
 		}
 	}
 	return false
+}
+
+func providerParticipant(x Workspace, viewer Viewer) bool {
+	if viewer.PrincipalType != "human" {
+		return false
+	}
+	for _, invitation := range x.Invitations {
+		if invitation.PrincipalType == "human" && invitation.PrincipalID == viewer.PrincipalID && invitation.Role == "provider_maintainer" && invitation.Status == "accepted" {
+			return true
+		}
+	}
+	return false
+}
+
+// ShareFinding retains only adopter-selected, redacted knowledge. Provider
+// consent controls wider disclosure; embargoed records remain local.
+func (s *Store) ShareFinding(workspace string, in SharedFinding, viewer Viewer, expected int) (Workspace, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, e := s.lock()
+	if e != nil {
+		return Workspace{}, e
+	}
+	defer f.Close()
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	x, e := s.read(workspace)
+	if e != nil {
+		return Workspace{}, ErrNotFound
+	}
+	if !participant(x, viewer) {
+		return Workspace{}, ErrForbidden
+	}
+	if x.Version != expected {
+		return Workspace{}, ErrConflict
+	}
+	if !map[string]bool{"trial_finding": true, "reproduction": true, "support_question": true, "compatibility_evidence": true, "documentation_feedback": true, "usage_outcome": true}[in.Kind] || !safeText(in.Summary, 10000) || !map[string]bool{"provider": true, "participants": true, "public": true}[in.Visibility] || !map[string]bool{"pending_consent": true, "embargoed": true}[in.State] || len(in.Redactions) == 0 || len(in.Redactions) > 50 || len(in.Reproduction) > 50 || len(in.Evidence) > 50 {
+		return Workspace{}, ErrInvalid
+	}
+	for _, values := range [][]string{in.Redactions, in.Reproduction, in.Evidence} {
+		for _, value := range values {
+			if !safeText(value, 5000) {
+				return Workspace{}, ErrInvalid
+			}
+		}
+	}
+	if in.TrialID == "" && in.DeliveryID == "" {
+		return Workspace{}, ErrInvalid
+	}
+	trialFound, attemptFound, deliveryFound := false, in.AttemptID == "", false
+	for _, trial := range x.Trials {
+		if trial.ID != in.TrialID {
+			continue
+		}
+		trialFound = true
+		for _, attempt := range trial.Attempts {
+			attemptFound = attemptFound || attempt.ID == in.AttemptID
+		}
+	}
+	for _, delivery := range x.Deliveries {
+		deliveryFound = deliveryFound || delivery.ID == in.DeliveryID
+	}
+	if in.TrialID != "" && (!trialFound || !attemptFound) || in.DeliveryID != "" && !deliveryFound {
+		return Workspace{}, ErrInvalid
+	}
+	now := s.now().UTC().Truncate(time.Microsecond)
+	in.ID, in.SharedBy, in.SharedByType, in.CreatedAt = id(), viewer.PrincipalID, viewer.PrincipalType, now
+	in.ProviderStatus = map[bool]string{true: "not_requested", false: "awaiting_consent"}[in.State == "embargoed"]
+	in.ConsentedBy, in.ConsentedAt = "", nil
+	x.SharedFindings = append(x.SharedFindings, in)
+	x.Version++
+	x.UpdatedAt = now
+	e = s.write(x)
+	return s.project(x, viewer), e
+}
+
+func (s *Store) ConsentFinding(workspace, findingID, actor, decision string, expected int) (Workspace, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, e := s.lock()
+	if e != nil {
+		return Workspace{}, e
+	}
+	defer f.Close()
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	x, e := s.read(workspace)
+	if e != nil {
+		return Workspace{}, ErrNotFound
+	}
+	v := Viewer{PrincipalType: "human", PrincipalID: actor}
+	if !providerParticipant(x, v) {
+		return Workspace{}, ErrForbidden
+	}
+	if x.Version != expected {
+		return Workspace{}, ErrConflict
+	}
+	if decision != "accepted" && decision != "rejected" {
+		return Workspace{}, ErrInvalid
+	}
+	now := s.now().UTC().Truncate(time.Microsecond)
+	for i := range x.SharedFindings {
+		finding := &x.SharedFindings[i]
+		if finding.ID != findingID || finding.State != "pending_consent" {
+			continue
+		}
+		finding.ConsentedBy, finding.ConsentedAt = actor, &now
+		if decision == "accepted" {
+			finding.State, finding.ProviderStatus = "shared", "accepted"
+		} else {
+			finding.State, finding.ProviderStatus = "local_only", "rejected"
+		}
+		x.Version++
+		x.UpdatedAt = now
+		e = s.write(x)
+		return s.project(x, v), e
+	}
+	return Workspace{}, ErrInvalid
+}
+
+func (s *Store) RecordContribution(workspace string, in UpstreamContribution, viewer Viewer, expected int) (Workspace, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, e := s.lock()
+	if e != nil {
+		return Workspace{}, e
+	}
+	defer f.Close()
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	x, e := s.read(workspace)
+	if e != nil {
+		return Workspace{}, ErrNotFound
+	}
+	if !participant(x, viewer) {
+		return Workspace{}, ErrForbidden
+	}
+	if x.Version != expected {
+		return Workspace{}, ErrConflict
+	}
+	var finding *SharedFinding
+	for i := range x.SharedFindings {
+		if x.SharedFindings[i].ID == in.FindingID {
+			finding = &x.SharedFindings[i]
+		}
+	}
+	if finding == nil || !map[string]bool{"issue": true, "local_pull": true, "fork_pull": true, "federated_pull": true}[in.Kind] || !text(in.TargetRepositoryID, 100) || !text(in.ResourceID, 100) || !map[string]bool{"open": true, "closed": true, "merged": true, "local_only": true, "unavailable": true}[in.Status] || !safeText(in.Resolution, 5000) {
+		return Workspace{}, ErrInvalid
+	}
+	if in.Kind != "local_pull" && finding.State != "shared" {
+		return Workspace{}, ErrInvalid
+	}
+	if in.Kind != "issue" && !revision(in.Revision) {
+		return Workspace{}, ErrInvalid
+	}
+	now := s.now().UTC().Truncate(time.Microsecond)
+	in.ID, in.AuthoredBy, in.AuthoredByType, in.Authority, in.CreatedAt = id(), viewer.PrincipalID, viewer.PrincipalType, "no_authority_granted", now
+	x.Contributions = append(x.Contributions, in)
+	x.Version++
+	x.UpdatedAt = now
+	e = s.write(x)
+	return s.project(x, viewer), e
+}
+
+func (s *Store) RecordVerifiedUpdate(workspace string, in VerifiedUpdate, viewer Viewer, expected int) (Workspace, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, e := s.lock()
+	if e != nil {
+		return Workspace{}, e
+	}
+	defer f.Close()
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	x, e := s.read(workspace)
+	if e != nil {
+		return Workspace{}, ErrNotFound
+	}
+	if !planningParticipant(x, viewer) {
+		return Workspace{}, ErrForbidden
+	}
+	if x.Version != expected {
+		return Workspace{}, ErrConflict
+	}
+	contributionFound := false
+	for _, contribution := range x.Contributions {
+		contributionFound = contributionFound || contribution.ID == in.ContributionID && contribution.Status == "merged"
+	}
+	replacedFound := in.ReplacesContributionID == ""
+	for _, contribution := range x.Contributions {
+		replacedFound = replacedFound || contribution.ID == in.ReplacesContributionID && contribution.Kind == "local_pull"
+	}
+	if !contributionFound || !replacedFound || !revision(in.ProviderReleaseRevision) || !revision(in.ConsumerPullRevision) || !revision(in.ConsumerReleaseRevision) || !text(in.ProviderRepositoryID, 100) || !text(in.ProviderReleaseID, 100) || !text(in.ConsumerRepositoryID, 100) || !text(in.ConsumerPullRequestID, 100) || !text(in.ConsumerReleaseID, 100) || !text(in.ConsumerDeploymentID, 100) || !list(in.CheckRunIDs, 100) || !safeText(in.Outcome, 5000) || in.State != "verified" {
+		return Workspace{}, ErrInvalid
+	}
+	now := s.now().UTC().Truncate(time.Microsecond)
+	in.ID, in.RecordedBy, in.RecordedAt, in.Authority = id(), viewer.PrincipalID, now, "no_authority_granted"
+	x.VerifiedUpdates = append(x.VerifiedUpdates, in)
+	x.Version++
+	x.UpdatedAt = now
+	e = s.write(x)
+	return s.project(x, viewer), e
 }
 
 // CreatePlan turns demonstrated fit into an explicit, ordered adoption agreement.
