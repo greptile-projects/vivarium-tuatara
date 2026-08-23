@@ -3704,6 +3704,47 @@ export type MergeReadiness = {
   };
   can_enqueue: boolean;
 };
+export type ConflictAnalysis = {
+  repository_id: string;
+  base_commit_id: string;
+  candidate_id?: string;
+  status: "current" | "stale" | "incomplete";
+  stale_reasons: string[];
+  incomplete: string[];
+  source: ConflictAnalysisSide;
+  target: ConflictAnalysisSide;
+  files: {
+    path: string;
+    kinds: ("textual" | "structural" | "semantic")[];
+    source_change: string;
+    target_change: string;
+    symbols: string[];
+    schema_or_interface: boolean;
+  }[];
+  semantic_incompatibilities: {
+    path: string;
+    symbol: string;
+    detector: string;
+    explanation: string;
+  }[];
+  affected_checks: { name: string; status: string; commit_id?: string; run_id?: string }[];
+};
+export type ConflictAnalysisSide = {
+  branch: string;
+  commit_id: string;
+  current_commit_id?: string;
+  owner_ids: string[];
+  pull_requests: {
+    id: string;
+    title: string;
+    author_id: string;
+    task_id?: string;
+    proposal_id?: string;
+    discussion_ids: string[];
+    decision_ids: string[];
+    acceptance_criteria: string[];
+  }[];
+};
 export type CheckAttempt = {
   number: number;
   state: string;

@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -76,6 +77,100 @@ func (q queueRequirements) RequiredChecks(string, string) ([]string, error) {
 func (q queueRequirements) LockRequiredChecks() (func(), error) { return func() {}, nil }
 func (q queueRequirements) IntegrationQueuePolicy(string, string) (repositories.IntegrationQueuePolicy, error) {
 	return q.policy, nil
+}
+
+func TestConflictAnalysisExplainsExactTextualStructuralAndSemanticCollision(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	repository, _ := gitStore.Create(testID('1'))
+	writeFileTree := func(content string) storage.ObjectID {
+		blob, err := repository.WriteObject(storage.BlobObject, []byte(content))
+		if err != nil {
+			t.Fatal(err)
+		}
+		entry, _ := hex.DecodeString(string(blob))
+		tree, err := repository.WriteObject(storage.TreeObject, append(append([]byte("100644 schema.go\x00"), entry...), []byte{}...))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tree
+	}
+	baseTree := writeFileTree("type Contract interface {\n\tApply(string) error\n}\n")
+	sourceTree := writeFileTree("type Contract interface {\n\tApply(string, bool) error\n}\n")
+	targetTree := writeFileTree("type Contract interface {\n\tApply([]byte) error\n}\n")
+	base := writeCommit(t, repository, baseTree, "base")
+	source := writeCommitWithParents(t, repository, sourceTree, []storage.ObjectID{base}, "source")
+	target := writeCommitWithParents(t, repository, targetTree, []storage.ObjectID{base}, "target")
+	_ = repository.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(target)})
+	_ = repository.CreateReference(storage.Reference{Name: "refs/heads/topic", Target: string(source)})
+	store, _ := New(t.TempDir(), gitStore)
+	store.ConfigureRequiredChecks(queueRequirements{policy: repositories.IntegrationQueuePolicy{RequiredChecks: []string{"contract"}}}, nil)
+	pull, err := store.Create(repository.ID(), testID('2'), "Change contract", "Preserve typed clients.", "topic", "main", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	analysis, err := store.AnalyzePullConflict(repository.ID(), pull.ID, "", testID('3'))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if analysis.Status != "current" || analysis.BaseCommitID != string(base) || len(analysis.Files) != 1 || strings.Join(analysis.Files[0].Kinds, ",") != "semantic,structural,textual" || len(analysis.Semantic) != 1 || analysis.Semantic[0].Symbol != "Apply" || len(analysis.AffectedChecks) != 1 || analysis.AffectedChecks[0].Name != "contract" {
+		t.Fatalf("analysis = %#v", analysis)
+	}
+	if declaredSymbol("name = sourceValue") != "" || declaredSymbol("    Apply(input)") != "" || declaredSymbol("func (service *Worker) Work(input string) error {") != "Work" {
+		t.Fatalf("semantic declaration detection accepted assignment or lost receiver method")
+	}
+	interfaceSymbols := declaredSymbols("type Contract interface {\n    Apply(string) error\n}\n")
+	if interfaceSymbols["Apply"] != "Apply(string) error" {
+		t.Fatalf("interface symbols = %#v", interfaceSymbols)
+	}
+	splitInterfaceSymbols := declaredSymbols("type Contract interface\n{\n    Apply(string) error\n}\n")
+	if splitInterfaceSymbols["Apply"] != "Apply(string) error" {
+		t.Fatalf("split-line interface symbols = %#v", splitInterfaceSymbols)
+	}
+	callEntry := func(content string) snapshotEntry {
+		id, writeErr := repository.WriteObject(storage.BlobObject, []byte(content))
+		if writeErr != nil {
+			t.Fatal(writeErr)
+		}
+		return snapshotEntry{id: id, mode: "100644"}
+	}
+	callSymbols := sharedChangedSymbols(repository, callEntry("func run() {\n    Apply(base)\n}\n"), callEntry("func run() {\n    Apply(source)\n}\n"), callEntry("func run() {\n    Apply(target)\n}\n"))
+	if len(callSymbols) != 0 {
+		t.Fatalf("call-site edits reported declarations: %v", callSymbols)
+	}
+	splitSymbols := sharedChangedSymbols(repository, callEntry("type Contract interface\n{\n    Apply(string) error\n}\n"), callEntry("type Contract interface\n{\n    Apply(string, bool) error\n}\n"), callEntry("type Contract interface\n{\n    Apply([]byte) error\n}\n"))
+	if !slices.Equal(splitSymbols, []string{"Apply"}) {
+		t.Fatalf("split-line interface overlap = %v", splitSymbols)
+	}
+	if err := os.WriteFile(store.commentsPath(repository.ID(), pull.ID), []byte("invalid"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.reviewsPath(repository.ID(), pull.ID), []byte("invalid"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	analysis, err = store.AnalyzePullConflict(repository.ID(), pull.ID, "", testID('3'))
+	if err != nil || analysis.Status != "incomplete" || len(analysis.Incomplete) != 2 {
+		t.Fatalf("unavailable collaboration evidence = %#v, %v", analysis, err)
+	}
+	if err := os.Remove(store.commentsPath(repository.ID(), pull.ID)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(store.reviewsPath(repository.ID(), pull.ID)); err != nil {
+		t.Fatal(err)
+	}
+	advancedTree := writeFileTree("type Contract interface {\n\tApply(int) error\n}\n")
+	advanced := writeCommitWithParents(t, repository, advancedTree, []storage.ObjectID{source}, "advanced")
+	_ = repository.UpdateReference(storage.Reference{Name: "refs/heads/topic", Target: string(advanced)})
+	analysis, err = store.AnalyzePullConflict(repository.ID(), pull.ID, "", testID('3'))
+	if err != nil || analysis.Status != "stale" || len(analysis.StaleReasons) != 1 {
+		t.Fatalf("stale analysis = %#v, %v", analysis, err)
+	}
+	if err := repository.DeleteReference("refs/heads/main"); err != nil {
+		t.Fatal(err)
+	}
+	analysis, err = store.AnalyzePullConflict(repository.ID(), pull.ID, "", testID('3'))
+	if err != nil || analysis.Status != "incomplete" || analysis.Target.CommitID != string(target) || !slices.Contains(analysis.Incomplete, "target branch is unavailable") {
+		t.Fatalf("retained target analysis = %#v, %v", analysis, err)
+	}
 }
 
 func TestCreateSnapshotsBranchesAndListsByRepository(t *testing.T) {

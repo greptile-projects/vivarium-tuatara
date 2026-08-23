@@ -2772,6 +2772,19 @@ verified again, and lands next. The journey inspects durable candidate, review,
 run, activity, queue-action, and merge attribution before pulling the final
 branch state.
 
+Conflict analysis is available before anyone edits conflict markers. `GET
+/repositories/{id}/pulls/{pull_id}/conflict-analysis` compares the pull's exact
+adopted source with its retained target snapshot, or a retained queue attempt when
+`candidate_id` is supplied. `GET /repositories/{id}/conflict-analysis` compares
+the current tips named by `source_branch` and `target_branch`. Both use a
+read-only three-way index rooted at the exact merge base and return textual,
+structural, schema/interface, and independently detected same-symbol semantic
+overlap. The evidence connects each side to matching pull requests, authors,
+tasks, proposals, discussion, review decisions, acceptance criteria, ownership,
+and affected required checks. Live movement never rewrites an earlier candidate
+analysis: the response reports stale or incomplete inputs and leaves both Git
+references unchanged.
+
 An owner applies an accepted request through its merge endpoint. The operation
 rechecks readiness, materializes a two-parent merge commit through the storage
 boundary, and compare-and-swaps the live target reference. The durable pull

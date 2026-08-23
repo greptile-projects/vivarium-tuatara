@@ -1838,6 +1838,16 @@ whenever dependencies change or the web job fails before it starts.
   passing candidate that conflicts after an earlier merge is superseded and
   removed while the compatible agent change rebuilds and lands. Keep its public
   API, browser queue, stock Git, evidence, and attribution assertions connected.
+  Read-only conflict evidence at pull `.../conflict-analysis` and repository
+  `/conflict-analysis?source_branch=...&target_branch=...` surfaces the exact
+  merge base and sides without updating either reference. Pull analysis may pin
+  a retained `candidate_id`; moved live branches make that evidence explicitly
+  stale. The projection identifies overlapping files, schema/interface paths,
+  declared symbols changed independently on both sides, Git textual conflicts,
+  structural collisions, affected required checks, and linked pull/task/proposal/
+  discussion/review/acceptance context with repository and change authors as
+  participants. Keep semantic findings labeled as detector evidence rather than
+  treating them as proof that Git cannot merge the text.
   The authenticated `/activity` workspace shows newest-first attributable
   proposal, pull request, review, merge, mention, and access changes across
   repositories the actor currently collaborates on; every event remains

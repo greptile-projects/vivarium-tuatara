@@ -2804,6 +2804,39 @@ func registerPullRequestRoutes(mux *http.ServeMux, gitStore *storage.Store, repo
 		}
 		writeJSON(w, http.StatusOK, report)
 	})
+	mux.HandleFunc("GET /repositories/{id}/pulls/{pull_id}/conflict-analysis", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := authorizeRepositoryRead(w, r, repositoriesStore, authStore, r.PathValue("id")); !ok {
+			return
+		}
+		target, err := repositoriesStore.GetByID(r.PathValue("id"))
+		if writeRepositoryError(w, err) {
+			return
+		}
+		analysis, err := store.AnalyzePullConflict(r.PathValue("id"), r.PathValue("pull_id"), r.URL.Query().Get("candidate_id"), target.OwnerID)
+		if writePullRequestError(w, err) {
+			return
+		}
+		writeJSON(w, http.StatusOK, analysis)
+	})
+	mux.HandleFunc("GET /repositories/{id}/conflict-analysis", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := authorizeRepositoryRead(w, r, repositoriesStore, authStore, r.PathValue("id")); !ok {
+			return
+		}
+		target, err := repositoriesStore.GetByID(r.PathValue("id"))
+		if writeRepositoryError(w, err) {
+			return
+		}
+		sourceBranch, targetBranch := r.URL.Query().Get("source_branch"), r.URL.Query().Get("target_branch")
+		if sourceBranch == "" || targetBranch == "" {
+			writeAPIError(w, http.StatusBadRequest, "invalid_conflict_analysis", "source_branch and target_branch are required")
+			return
+		}
+		analysis, err := store.AnalyzeBranches(r.PathValue("id"), sourceBranch, targetBranch, target.OwnerID)
+		if writePullRequestError(w, err) {
+			return
+		}
+		writeJSON(w, http.StatusOK, analysis)
+	})
 	mux.HandleFunc("POST /repositories/{id}/pulls/{pull_id}/merge", func(w http.ResponseWriter, r *http.Request) {
 		actor, owner, ok := authorizeRepositoryParticipant(w, r, repositoriesStore, authStore, r.PathValue("id"), "repositories:write")
 		if !ok {
