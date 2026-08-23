@@ -47,6 +47,7 @@ test("conflicting human and agent intent becomes one verified queued result", as
   await run("docker", ["image", "inspect", "alpine:3.22"]).catch(() => run("docker", ["pull", "alpine:3.22"]));
   await run("docker", ["image", "inspect", "docker:28-cli"]).catch(() => run("docker", ["pull", "docker:28-cli"]));
   const copies: string[] = [];
+  const credentials: Array<{ page: Page; headers: Record<string, string>; id: string }> = [];
   try {
     const suffix = Date.now().toString(36);
     const ownerPage = await (await browser.newContext()).newPage();
@@ -75,9 +76,11 @@ test("conflicting human and agent intent becomes one verified queued result", as
     org = await json(ownerPage, "post", `/organizations/${organization.id}/access-requests/${requestState.access_requests.at(-1).id}/decision`, owner.headers, { decision: "approve" });
     const grant = org.access_grants.at(-1);
     const agentCredential = await json(ownerPage, "post", `/organizations/${organization.id}/access-grants/${grant.id}/credentials`, owner.headers, { agent_id: agent.id, repository_id: repository.id, expires_in: 3600, purpose: "api_read" });
+    credentials.push({ page: ownerPage, headers: owner.headers, id: agentCredential.id });
     const agentHeaders = { Authorization: `Bearer ${agentCredential.token}` };
 
     const ownerGit = await json(ownerPage, "post", "/auth/credentials", owner.headers, { kind: "git", name: "conflict journey", scopes: ["git:read", "git:write"], expires_in: 3600 });
+    credentials.push({ page: ownerPage, headers: owner.headers, id: ownerGit.id });
     const copy = await mkdtemp(join(tmpdir(), "vivarium-conflict-owner-")); copies.push(copy);
     await git(tmpdir(), "clone", `http://git:${ownerGit.token}@localhost:3000/git/${repository.id}.git`, copy);
     await git(copy, "config", "user.name", "Conflict Maintainer"); await git(copy, "config", "user.email", "maintainer@example.test");
@@ -92,6 +95,10 @@ test("conflicting human and agent intent becomes one verified queued result", as
 
     const behaviorGit = await json(behaviorPage, "post", "/auth/credentials", behavior.headers, { kind: "git", name: "behavior work", scopes: ["git:read", "git:write"], expires_in: 3600 });
     const reliabilityGit = await json(reliabilityPage, "post", "/auth/credentials", reliability.headers, { kind: "git", name: "reliability work", scopes: ["git:read", "git:write"], expires_in: 3600 });
+    credentials.push(
+      { page: behaviorPage, headers: behavior.headers, id: behaviorGit.id },
+      { page: reliabilityPage, headers: reliability.headers, id: reliabilityGit.id },
+    );
     async function contribution(prefix: string, token: string, branch: string, contents: string, author: string) {
       const path = await mkdtemp(join(tmpdir(), prefix)); copies.push(path);
       await git(tmpdir(), "clone", `http://git:${token}@localhost:3000/git/${repository.id}.git`, path);
@@ -203,6 +210,22 @@ test("conflicting human and agent intent becomes one verified queued result", as
     await json(ownerPage, "delete", `/repositories/${repository.id}/collaborators/${behavior.user.id}`, owner.headers);
     await rejected(behaviorPage, "get", `/workspaces/${workspace.id}`, behavior.headers, undefined, 404, "workspace_not_found");
   } finally {
-    await Promise.all(copies.map((path) => rm(path, { recursive: true, force: true })));
+    const failures: string[] = [];
+    await Promise.all(credentials.map(async (credential) => {
+      try {
+        const response = await credential.page.request.delete(`/api/auth/credentials/${credential.id}`, { headers: credential.headers });
+        if (response.status() !== 204) failures.push(`credential ${credential.id}: HTTP ${response.status()} ${await response.text()}`);
+      } catch (error) {
+        failures.push(`credential ${credential.id}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }));
+    await Promise.all(copies.map(async (path) => {
+      try {
+        await rm(path, { recursive: true, force: true });
+      } catch (error) {
+        failures.push(`clone ${path}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }));
+    if (failures.length > 0) throw new Error(`Conflict journey cleanup failed:\n${failures.join("\n")}`);
   }
 });
