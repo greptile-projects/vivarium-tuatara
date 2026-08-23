@@ -18,6 +18,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/workflowcomponents"
 )
 
 type collaborationWorkflowSourceInput struct {
@@ -29,7 +30,7 @@ type collaborationWorkflowSourceInput struct {
 
 var exactCommit = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
-func registerCollaborationWorkflowRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, workflows *collaborationworkflows.Store, agents *agentprojects.Store, pulls *pullrequests.Store, deliveries *activities.Store) {
+func registerCollaborationWorkflowRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, workflows *collaborationworkflows.Store, components *workflowcomponents.Store, agents *agentprojects.Store, pulls *pullrequests.Store, deliveries *activities.Store) {
 	mux.HandleFunc("GET /repositories/{id}/collaboration-workflows", func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id")); !ok {
 			return
@@ -77,8 +78,24 @@ func registerCollaborationWorkflowRoutes(mux *http.ServeMux, git *storage.Store,
 						return false, "platform action is not in the permitted workflow action set"
 					}
 				case "component":
-					if !stringIn(inv.Component, "repository-checks", "review-gates", "release-readiness", "project-notifications") {
-						return false, "reusable component is not available to repository workflows"
+					if components == nil {
+						return false, "reusable component resolver is unavailable"
+					}
+					component, installation, ok := components.Resolve(r.PathValue("id"), inv.Component)
+					if !ok {
+						return false, "component must be an exact installed version reviewed in this repository"
+					}
+					grants := map[string]bool{}
+					for _, mapping := range installation.Revisions[len(installation.Revisions)-1].Mappings {
+						grants[mapping.LocalPermission] = true
+					}
+					for _, requested := range inv.Authority {
+						if !grants[requested] {
+							return false, "component authority must use an explicitly mapped local permission"
+						}
+					}
+					if component.Definition.Compatibility.WorkflowFormat != 1 {
+						return false, "component is incompatible with this workflow format"
 					}
 				case "agent":
 					if agents == nil {

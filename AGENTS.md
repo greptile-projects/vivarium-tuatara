@@ -297,6 +297,25 @@ whenever dependencies change or the web job fails before it starts.
   steps; every accepted change retains actor, reason, step, time, and resulting version. Private terminal
   input and credential-shaped content are rejected, and these controls grant no underlying action authority.
 
+- **Attested workflow components** — `/workflow-components`, repository
+  `/workflow-component-installations`, and the `/repositories/{id}/workflows` workspace expose
+  immutable reusable automation contracts beneath `$WORKFLOW_COMPONENT_STORAGE_ROOT`
+  (`workflow-components`). An owner publishes one semantic version from an exact JSON blob at a
+  visible 40-character commit and an active package built from that same commit. The attestation
+  freezes typed inputs/outputs, requested capabilities, data classification/purpose/retention/
+  destinations, compatibility and breaking-migration terms, passing test digests, support policy,
+  package digest, publisher, and optional currently trusted federation peer. Catalog reads recheck
+  repository visibility, publisher ownership, package lifecycle and identity, and peer trust, keeping
+  changed, revoked, unreachable, quarantined, and breaking-version diagnostics visible.
+  A consumer pins or updates an exact component version only through a current ordinary open pull.
+  Every requested capability must map once to a named local permission, every data-use term must be
+  accepted exactly, and bounded configuration rejects credential-shaped content. Installation
+  successors retain earlier pins and pull revisions, so component replacement does not rewrite
+  workflow execution history. Workflow activation resolves `local-name@semantic-version` only from
+  the repository's current installation and admits only its mapped local permissions. Components and
+  installations grant no source, package, federation, Git, review, merge, workflow, runtime, secret,
+  repository, or publisher authority.
+
 - **Collaborative software adoption** — `/adoption-workspaces` and the web `/adoption`
   workspace retain shared software-fit evaluations beneath `$ADOPTION_WORKSPACE_STORAGE_ROOT`
   (`adoption-workspaces`). A human collaborator starts from a roadmap outcome, support gap,
