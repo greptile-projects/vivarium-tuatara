@@ -16,6 +16,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/debugworkspaces"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/deployments"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/issues"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/regressioninvestigations"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
@@ -24,7 +25,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/supportthreads"
 )
 
-func registerRegressionInvestigationRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, investigations *regressioninvestigations.Store, issueStore *issues.Store, supportStore *supportthreads.Store, checkStore *checkruns.Store, releaseStore *releases.Store, deploymentStore *deployments.Store, debugStore *debugworkspaces.Store, pullStore *pullrequests.Store) {
+func registerRegressionInvestigationRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, investigations *regressioninvestigations.Store, issueStore *issues.Store, supportStore *supportthreads.Store, checkStore *checkruns.Store, releaseStore *releases.Store, deploymentStore *deployments.Store, debugStore *debugworkspaces.Store, pullStore *pullrequests.Store, proposalStore *proposals.Store) {
 	actor := func(c auth.Credential) string {
 		if c.AgentID != "" {
 			return c.AgentID
@@ -37,6 +38,9 @@ func registerRegressionInvestigationRoutes(mux *http.ServeMux, git *storage.Stor
 		}
 		if v.Diagnostics == nil {
 			v.Diagnostics = []string{}
+		}
+		if v.Responses == nil {
+			v.Responses = []regressioninvestigations.Response{}
 		}
 		r, err := git.Open(v.RepositoryID)
 		if err != nil {
@@ -546,6 +550,144 @@ func registerRegressionInvestigationRoutes(mux *http.ServeMux, git *storage.Stor
 			return
 		}
 		out, e := investigations.GuideSearch(r.PathValue("id"), r.PathValue("investigation_id"), r.PathValue("search_id"), actor(c), in.Kind, in.Revision, in.Classification, in.Reason, in.Claim, in.Confidence, in.EvidenceIDs, in.AttemptIDs, in.CandidateRevisions, in.ExpectedVersion, in.ExpectedSearchVersion)
+		writeRegressionInvestigation(w, project(out), e, 201)
+	})
+	mux.HandleFunc("POST /repositories/{id}/regression-investigations/{investigation_id}/responses", func(w http.ResponseWriter, r *http.Request) {
+		c, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var in struct {
+			ExpectedVersion int                                       `json:"expected_version"`
+			RequestID       string                                    `json:"request_id"`
+			SearchID        string                                    `json:"search_id"`
+			ScenarioID      string                                    `json:"scenario_id"`
+			Options         []regressioninvestigations.ResponseOption `json:"options"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "a four-option correction comparison is required")
+			return
+		}
+		current, e := investigations.Get(r.PathValue("id"), r.PathValue("investigation_id"))
+		if e != nil {
+			writeRegressionInvestigation(w, current, e, 201)
+			return
+		}
+		owner := false
+		for _, id := range current.OwnerIDs {
+			if id == c.UserID && c.AgentID == "" {
+				owner = true
+			}
+		}
+		if !owner {
+			writeAPIError(w, 403, "regression_owner_required", "a named human investigation owner must compare correction options")
+			return
+		}
+		projected := project(current)
+		var ranges []regressioninvestigations.CulpritRange
+		for _, s := range projected.Searches {
+			if s.ID == in.SearchID && s.ScenarioID == in.ScenarioID {
+				ranges = s.Ranges
+			}
+		}
+		for _, option := range in.Options {
+			for _, releaseID := range option.AffectedReleaseIDs {
+				if _, err := releaseStore.Get(current.RepositoryID, releaseID); err != nil {
+					writeAPIError(w, 422, "regression_release_invalid", "every affected release must resolve in this repository")
+					return
+				}
+			}
+			for _, pullID := range option.AffectedPullIDs {
+				pull, err := pullStore.Get(current.RepositoryID, pullID)
+				if err != nil || (pull.Status != "open" && pull.Status != "queued") {
+					writeAPIError(w, 422, "regression_pull_invalid", "affected current work must resolve to an open or queued pull in this repository")
+					return
+				}
+			}
+		}
+		out, e := investigations.CreateResponse(current.RepositoryID, current.ID, actor(c), regressioninvestigations.Response{RequestID: in.RequestID, SearchID: in.SearchID, ScenarioID: in.ScenarioID, CulpritRanges: ranges, Options: in.Options}, in.ExpectedVersion)
+		writeRegressionInvestigation(w, project(out), e, 201)
+	})
+	mux.HandleFunc("POST /repositories/{id}/regression-investigations/{investigation_id}/responses/{response_id}/publish", func(w http.ResponseWriter, r *http.Request) {
+		c, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var in struct {
+			ExpectedVersion int                                     `json:"expected_version"`
+			SelectedKind    string                                  `json:"selected_kind"`
+			Rationale       string                                  `json:"rationale"`
+			Title           string                                  `json:"title"`
+			Work            []regressioninvestigations.ResponseWork `json:"work"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "a selected governed correction is required")
+			return
+		}
+		current, e := investigations.Get(r.PathValue("id"), r.PathValue("investigation_id"))
+		if e != nil {
+			writeRegressionInvestigation(w, current, e, 201)
+			return
+		}
+		owner := false
+		for _, id := range current.OwnerIDs {
+			if id == c.UserID && c.AgentID == "" {
+				owner = true
+			}
+		}
+		if !owner {
+			writeAPIError(w, 403, "regression_owner_required", "a named human investigation owner must publish correction work")
+			return
+		}
+		var response *regressioninvestigations.Response
+		for i := range current.Responses {
+			if current.Responses[i].ID == r.PathValue("response_id") {
+				response = &current.Responses[i]
+			}
+		}
+		if response == nil {
+			writeAPIError(w, 404, "regression_response_not_found", "correction comparison not found")
+			return
+		}
+		var option *regressioninvestigations.ResponseOption
+		for i := range response.Options {
+			if response.Options[i].Kind == in.SelectedKind {
+				option = &response.Options[i]
+			}
+		}
+		if option == nil {
+			writeAPIError(w, 422, "invalid_regression_response", "selected correction was not compared")
+			return
+		}
+		items := []proposals.ReasoningItem{}
+		for _, rg := range response.CulpritRanges {
+			items = append(items, proposals.ReasoningItem{ID: rg.WorkingRevision + ":" + rg.RegressedRevision, Kind: "culprit_range", Summary: rg.WorkingRevision + " → " + rg.RegressedRevision, Status: "supported"})
+		}
+		items = append(items, proposals.ReasoningItem{ID: response.ID, Kind: in.SelectedKind, Summary: option.Summary, Status: "selected"})
+		tasks := make([]proposals.ImplementationTaskInput, 0, len(in.Work))
+		for _, work := range in.Work {
+			if work.AssigneeType == "human" {
+				repository, repositoryErr := catalog.GetByID(current.RepositoryID)
+				participant, participantErr := catalog.HasCollaborator(work.AssigneeID, current.RepositoryID)
+				if repositoryErr != nil || participantErr != nil || (repository.OwnerID != work.AssigneeID && !participant) {
+					writeAPIError(w, 422, "regression_assignee_invalid", "human correction assignees must be current repository participants")
+					return
+				}
+			}
+			criteria := append(append([]string{}, current.AcceptanceCriteria...), work.AcceptanceCriteria...)
+			tasks = append(tasks, proposals.ImplementationTaskInput{Title: work.Title, Outcome: work.Outcome + " Acceptance: " + strings.Join(work.AcceptanceCriteria, "; "), Risk: strings.Join(option.Risks, "; "), VerificationPlan: strings.Join(criteria, "; "), AssigneeType: work.AssigneeType, AssigneeID: work.AssigneeID})
+		}
+		body := "Original intent: " + current.ExpectedBehavior + "\n\nRegression: " + current.RegressedBehavior + "\n\nDeliberate tradeoff: " + in.Rationale + "\n\nConstraints: " + strings.Join(option.Constraints, "; ") + "\nBackport targets: " + strings.Join(option.BackportTargets, ", ") + "\nAffected releases: " + strings.Join(option.AffectedReleaseIDs, ", ") + "\nCurrent pulls: " + strings.Join(option.AffectedPullIDs, ", ")
+		p, created, e := proposalStore.CreateImplementation(proposals.ImplementationInput{RepositoryID: current.RepositoryID, ActorID: c.UserID, Title: in.Title, Body: body, Origin: proposals.ReasoningOrigin{RegressionInvestigationID: current.ID, RegressionResponseID: response.ID, Revision: current.KnownBad.Revision, Items: items, SelectedItemIDs: []string{response.ID}, AnalysisStatus: "owner_selected"}, Tasks: tasks})
+		if e != nil {
+			writeAPIError(w, 422, "regression_work_invalid", "correction work could not be published")
+			return
+		}
+		ids := make([]string, len(created))
+		for i := range created {
+			ids[i] = created[i].ID
+		}
+		out, e := investigations.PublishResponse(current.RepositoryID, current.ID, response.ID, c.UserID, in.SelectedKind, in.Rationale, p.ID, ids, in.Work, in.ExpectedVersion)
 		writeRegressionInvestigation(w, project(out), e, 201)
 	})
 }

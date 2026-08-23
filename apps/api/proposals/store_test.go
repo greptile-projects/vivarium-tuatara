@@ -81,6 +81,20 @@ func TestAssuranceImplementationAcceptsCanonicalAssessmentReferences(t *testing.
 	}
 }
 
+func TestRegressionImplementationFreezesHandoffAndRetry(t *testing.T) {
+	store, _ := New(t.TempDir())
+	origin := ReasoningOrigin{RegressionInvestigationID: strings.Repeat("3", 32), RegressionResponseID: strings.Repeat("4", 32), Revision: strings.Repeat("5", 40), Items: []ReasoningItem{{ID: "range", Kind: "culprit_range", Summary: "supported transition", Status: "supported"}}, SelectedItemIDs: []string{"range"}, AnalysisStatus: "owner_selected"}
+	input := ImplementationInput{RepositoryID: repositoryID, ActorID: authorID, Title: "Preserve checkout intent", Body: "Forward repair with explicit tradeoffs.", Origin: origin, Tasks: []ImplementationTaskInput{{Title: "Repair checkout", Outcome: "Restore behavior", Risk: "Backport risk", VerificationPlan: "Run frozen scenario", AssigneeType: "agent", AssigneeID: commenterID}}}
+	proposal, tasks, err := store.CreateImplementation(input)
+	if err != nil || proposal.Reasoning == nil || proposal.Reasoning.RegressionResponseID != origin.RegressionResponseID || len(tasks) != 1 || tasks[0].Assignment == nil || tasks[0].Assignment.Access.Branch != "task-scoped branch (created when work starts)" {
+		t.Fatalf("regression implementation = %#v %#v, %v", proposal, tasks, err)
+	}
+	retry, retryTasks, err := store.CreateImplementation(input)
+	if err != nil || retry.ID != proposal.ID || retryTasks[0].ID != tasks[0].ID {
+		t.Fatalf("retry duplicated handoff: %#v %#v %v", retry, retryTasks, err)
+	}
+}
+
 func TestSecurityFindingImplementationFreezesOriginAndRetry(t *testing.T) {
 	store, _ := New(t.TempDir())
 	origin := ReasoningOrigin{SecurityFindingID: strings.Repeat("1", 32), SecurityFindingVersion: 2, ThreatModelID: strings.Repeat("2", 24), ThreatModelVersion: 3, Revision: strings.Repeat("a", 40), SelectedItemIDs: []string{"attempt"}, Items: []ReasoningItem{{ID: "attempt", Kind: "permitted_security_evidence", Summary: "sanitized failed containment", Status: "audience_restricted"}}, AnalysisStatus: "security_finding_repair"}

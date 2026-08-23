@@ -189,6 +189,40 @@ type Search struct {
 	CreatedAt     time.Time          `json:"created_at"`
 	UpdatedAt     time.Time          `json:"updated_at"`
 }
+type ResponseOption struct {
+	Kind               string   `json:"kind"`
+	Summary            string   `json:"summary"`
+	Benefits           []string `json:"benefits"`
+	Risks              []string `json:"risks"`
+	Constraints        []string `json:"constraints"`
+	AffectedReleaseIDs []string `json:"affected_release_ids"`
+	AffectedPullIDs    []string `json:"affected_pull_ids"`
+	BackportTargets    []string `json:"backport_targets"`
+}
+type ResponseWork struct {
+	Title              string   `json:"title"`
+	Outcome            string   `json:"outcome"`
+	AssigneeType       string   `json:"assignee_type"`
+	AssigneeID         string   `json:"assignee_id"`
+	AcceptanceCriteria []string `json:"acceptance_criteria"`
+}
+type Response struct {
+	ID            string           `json:"id"`
+	RequestID     string           `json:"request_id"`
+	RequestDigest string           `json:"request_digest"`
+	SearchID      string           `json:"search_id"`
+	ScenarioID    string           `json:"scenario_id"`
+	CulpritRanges []CulpritRange   `json:"culprit_ranges"`
+	Options       []ResponseOption `json:"options"`
+	SelectedKind  string           `json:"selected_kind,omitempty"`
+	Rationale     string           `json:"rationale,omitempty"`
+	Work          []ResponseWork   `json:"work,omitempty"`
+	ProposalID    string           `json:"proposal_id,omitempty"`
+	TaskIDs       []string         `json:"task_ids"`
+	CreatedBy     string           `json:"created_by"`
+	CreatedAt     time.Time        `json:"created_at"`
+	PublishedAt   time.Time        `json:"published_at,omitempty"`
+}
 type Investigation struct {
 	ID                 string     `json:"id"`
 	RequestID          string     `json:"request_id"`
@@ -213,6 +247,7 @@ type Investigation struct {
 	Scenarios          []Scenario `json:"scenarios"`
 	Attempts           []Attempt  `json:"attempts"`
 	Searches           []Search   `json:"searches"`
+	Responses          []Response `json:"responses"`
 	CreatedBy          string     `json:"created_by"`
 	CreatedAt          time.Time  `json:"created_at"`
 	UpdatedAt          time.Time  `json:"updated_at"`
@@ -267,8 +302,122 @@ func (s *Store) Create(v Investigation, actor string) (Investigation, error) {
 		v.Evidence[i].ID = id()
 	}
 	v.History = []Entry{{ID: id(), Kind: "opened", ActorID: actor, To: "open", Message: "Search boundary agreed", CreatedAt: now}}
-	v.Scenarios, v.Attempts, v.Searches = []Scenario{}, []Attempt{}, []Search{}
+	v.Scenarios, v.Attempts, v.Searches, v.Responses = []Scenario{}, []Attempt{}, []Search{}, []Response{}
 	return v, s.write(v)
+}
+
+func (s *Store) CreateResponse(repo, wid, actor string, response Response, expected int) (Investigation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, e := s.lock()
+	if e != nil {
+		return Investigation{}, e
+	}
+	defer unlock()
+	v, e := s.Get(repo, wid)
+	if e != nil {
+		return Investigation{}, e
+	}
+	body, e := json.Marshal(struct {
+		Actor, SearchID, ScenarioID string
+		Options                     []ResponseOption
+	}{actor, response.SearchID, response.ScenarioID, response.Options})
+	if e != nil {
+		return Investigation{}, e
+	}
+	sum := sha256.Sum256(body)
+	digest := hex.EncodeToString(sum[:])
+	for _, retained := range v.Responses {
+		if retained.RequestID == response.RequestID {
+			if retained.RequestDigest != digest || retained.CreatedBy != actor {
+				return Investigation{}, ErrConflict
+			}
+			return v, nil
+		}
+	}
+	if v.Version != expected || !token(actor) || !token(response.RequestID) || len(response.Options) != 4 {
+		return Investigation{}, ErrInvalid
+	}
+	var search *Search
+	for i := range v.Searches {
+		if v.Searches[i].ID == response.SearchID {
+			search = &v.Searches[i]
+		}
+	}
+	if search == nil || search.ScenarioID != response.ScenarioID || len(response.CulpritRanges) == 0 {
+		return Investigation{}, ErrInvalid
+	}
+	kinds := map[string]bool{}
+	for i := range response.Options {
+		o := &response.Options[i]
+		if (o.Kind != "revert" && o.Kind != "containment" && o.Kind != "dependency_adjustment" && o.Kind != "forward_repair") || kinds[o.Kind] || !text(o.Summary) {
+			return Investigation{}, ErrInvalid
+		}
+		kinds[o.Kind] = true
+		o.Benefits, o.Risks, o.Constraints, o.AffectedReleaseIDs, o.AffectedPullIDs, o.BackportTargets = uniq(o.Benefits), uniq(o.Risks), uniq(o.Constraints), uniq(o.AffectedReleaseIDs), uniq(o.AffectedPullIDs), uniq(o.BackportTargets)
+	}
+	now := s.now()
+	response.ID, response.RequestDigest, response.CulpritRanges, response.TaskIDs, response.CreatedBy, response.CreatedAt = id(), digest, append([]CulpritRange(nil), response.CulpritRanges...), []string{}, actor, now
+	v.Responses = append(v.Responses, response)
+	v.History = append(v.History, Entry{ID: id(), Kind: "response_compared", ActorID: actor, Message: "Governed correction alternatives compared against retained evidence", CreatedAt: now})
+	v.Version++
+	v.UpdatedAt = now
+	return v, s.write(v)
+}
+
+func (s *Store) PublishResponse(repo, wid, responseID, actor, selected, rationale, proposalID string, taskIDs []string, work []ResponseWork, expected int) (Investigation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, e := s.lock()
+	if e != nil {
+		return Investigation{}, e
+	}
+	defer unlock()
+	v, e := s.Get(repo, wid)
+	if e != nil {
+		return Investigation{}, e
+	}
+	for i := range v.Responses {
+		r := &v.Responses[i]
+		if r.ID != responseID || r.ProposalID == "" {
+			continue
+		}
+		retainedWork, _ := json.Marshal(r.Work)
+		requestedWork, _ := json.Marshal(work)
+		if r.SelectedKind == selected && r.Rationale == rationale && r.ProposalID == proposalID && strings.Join(r.TaskIDs, "\x00") == strings.Join(uniq(taskIDs), "\x00") && string(retainedWork) == string(requestedWork) {
+			return v, nil
+		}
+		return Investigation{}, ErrConflict
+	}
+	if v.Version != expected || !token(actor) || !text(rationale) || !token(proposalID) || len(taskIDs) == 0 || len(work) == 0 {
+		return Investigation{}, ErrInvalid
+	}
+	for _, item := range work {
+		if !text(item.Title) || !text(item.Outcome) || (item.AssigneeType != "human" && item.AssigneeType != "agent") || !token(item.AssigneeID) || len(item.AcceptanceCriteria) == 0 {
+			return Investigation{}, ErrInvalid
+		}
+	}
+	for i := range v.Responses {
+		r := &v.Responses[i]
+		if r.ID != responseID {
+			continue
+		}
+		found := false
+		for _, o := range r.Options {
+			if o.Kind == selected {
+				found = true
+			}
+		}
+		if !found {
+			return Investigation{}, ErrInvalid
+		}
+		r.SelectedKind, r.Rationale, r.ProposalID, r.TaskIDs, r.Work, r.PublishedAt = selected, rationale, proposalID, uniq(taskIDs), append([]ResponseWork(nil), work...), s.now()
+		v.History = append(v.History, Entry{ID: id(), Kind: "response_published", ActorID: actor, Message: "Selected correction published into ordinary governed work", CreatedAt: r.PublishedAt})
+		v.Version++
+		v.UpdatedAt = r.PublishedAt
+		return v, s.write(v)
+	}
+	return Investigation{}, ErrNotFound
 }
 
 func (s *Store) CreateSearch(repo, wid, actor string, search Search, expected int) (Investigation, error) {
