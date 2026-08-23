@@ -2814,7 +2814,8 @@ before and intended digests, finish only the missing work, and deduplicate chang
 Human, agent, and operator attribution comes from the original retained intent.
 Finalization rechecks the running lifecycle and the original principal's live file-control lease;
 stop, suspension, expiry, takeover, release, or lease expiry leaves the action pending and appends
-no completion or change provenance.
+no completion or change provenance. Every retry requires the exact control version frozen by the
+intent; reacquiring a newer lease under the same principal does not revive revoked authority.
 These records grant no merge, secret, environment, branch, review, check, or publication authority.
 
 An owner applies an accepted request through its merge endpoint. The operation
