@@ -46,6 +46,15 @@ removed owners or repositories stale. The preview and assignment are coordinatio
 facts only: every item remains `no_authority_granted`, and execution must pass through the target
 repository or environment's ordinary access, secret, review, deployment, and roadmap controls.
 
+A consumer participant can then bind an agreement to an already-merged pull, its current human
+approvals and exact-commit passing checks, the release that includes that pull, and a finished staged
+deployment. The delivery snapshot derives provider, pull, merge, release, and environment revisions
+from their owning stores and retains policy, rehearsal, support, user-acceptance, cost, rollout, and
+health attestations. Unmet criteria or a failed/paused rollout remains an explicit safe pause; a later
+successful recovery links back to that paused snapshot. Repository access is rechecked on reads and
+restricted delivery identities are redacted. Adoption delivery records grant no review, merge,
+release, deployment, pause, restoration, agent, or provider authority.
+
 ## Project incubators before repositories
 
 Authenticated collaborators use `/incubators` or the web project-incubator workspace to establish

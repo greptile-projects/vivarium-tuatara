@@ -1212,7 +1212,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		registerIncubatorRoutes(mux, store, authStore, userStore, repositoryCatalog, organizationStore, incubatorStore, feedbackStore, supportThreadStore, governanceStore, workspaceStore, pullRequestStore, previewStore, checkRunStore, releaseStore, documentationStore, packageStore, apiContractStore, contributorOpportunityStore, deploymentStore, roadmapStore, serviceObjectiveStore, projectFundStore, outcomeValidationStore)
 	}
 	if adoptionWorkspaceStore != nil && authStore != nil && userStore != nil && repositoryCatalog != nil && organizationStore != nil {
-		registerAdoptionWorkspaceRoutes(mux, authStore, userStore, repositoryCatalog, organizationStore, incubatorStore, federationStore, roadmapStore, supportThreadStore, decisionStore, packageStore, apiContractStore, releaseStore, checkRunStore, deploymentStore, adoptionWorkspaceStore)
+		registerAdoptionWorkspaceRoutes(mux, authStore, userStore, repositoryCatalog, organizationStore, incubatorStore, federationStore, roadmapStore, supportThreadStore, decisionStore, packageStore, apiContractStore, releaseStore, checkRunStore, pullRequestStore, deploymentStore, adoptionWorkspaceStore)
 	}
 	if federationStore != nil && userStore != nil && authStore != nil {
 		registerFederationRoutes(mux, federationStore, userStore, organizationStore, authStore, store, repositoryCatalog, pullRequestStore, changeSessionStore, releaseStore, issueStore, contributorPathwayStore, contributorOpportunityStore)

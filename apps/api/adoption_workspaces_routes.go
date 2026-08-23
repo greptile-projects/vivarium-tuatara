@@ -17,6 +17,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/incubators"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
 	packageversions "github.com/greptile-projects/vivarium-tuatara/apps/api/packages"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/roadmaps"
@@ -44,8 +45,30 @@ type adoptionPlanInput struct {
 	adoptionworkspaces.AdoptionPlan
 	ExpectedVersion int `json:"expected_version"`
 }
+type adoptionDeliveryInput struct {
+	adoptionworkspaces.AdoptionDelivery
+	ExpectedVersion int `json:"expected_version"`
+}
 
-func registerAdoptionWorkspaceRoutes(mux *http.ServeMux, credentials *auth.Store, identities *users.Store, catalog *repositories.Store, orgs *organizations.Store, incubatorStore *incubators.Store, federationStore *federation.Store, roadmapStore *roadmaps.Store, supportStore *supportthreads.Store, decisionStore *decisions.Store, packageStore *packageversions.Store, apiStore *apicontracts.Store, releaseStore *releases.Store, buildStore *checkruns.Store, deploymentStore *deployments.Store, store *adoptionworkspaces.Store) {
+func storeCanReadRepository(catalog *repositories.Store, viewer adoptionworkspaces.Viewer, id string) bool {
+	repository, err := catalog.GetByID(id)
+	if err != nil {
+		return false
+	}
+	if repository.Visibility == repositories.Public {
+		return true
+	}
+	if viewer.PrincipalType == "agent" {
+		return viewer.RepositoryID == id
+	}
+	if repository.OwnerID == viewer.PrincipalID {
+		return true
+	}
+	ok, _ := catalog.HasCollaborator(viewer.PrincipalID, id)
+	return ok
+}
+
+func registerAdoptionWorkspaceRoutes(mux *http.ServeMux, credentials *auth.Store, identities *users.Store, catalog *repositories.Store, orgs *organizations.Store, incubatorStore *incubators.Store, federationStore *federation.Store, roadmapStore *roadmaps.Store, supportStore *supportthreads.Store, decisionStore *decisions.Store, packageStore *packageversions.Store, apiStore *apicontracts.Store, releaseStore *releases.Store, buildStore *checkruns.Store, pullStore *pullrequests.Store, deploymentStore *deployments.Store, store *adoptionworkspaces.Store) {
 	authn := func(w http.ResponseWriter, r *http.Request) (auth.Credential, bool) {
 		a, ok := authenticateRequest(w, r, credentials, "repositories:read", false)
 		if !ok {
@@ -136,6 +159,19 @@ func registerAdoptionWorkspaceRoutes(mux *http.ServeMux, credentials *auth.Store
 		}
 		work.Authority = "no_authority_granted"
 		return work
+	})
+	store.ConfigureDeliveryProjection(func(v adoptionworkspaces.Viewer, delivery adoptionworkspaces.AdoptionDelivery) adoptionworkspaces.AdoptionDelivery {
+		if !storeCanReadRepository(catalog, v, delivery.ConsumerRepositoryID) {
+			delivery.ConsumerRepositoryID, delivery.PullRequestID, delivery.PullRevision, delivery.MergeRevision, delivery.ReleaseID, delivery.ReleaseRevision, delivery.DeploymentID, delivery.EnvironmentID = "restricted", "", "", "", "", "", "", ""
+			delivery.CheckRunIDs, delivery.ApprovalIDs, delivery.Rollout, delivery.Health = nil, nil, nil, nil
+			delivery.State = "access_revoked"
+		}
+		if !storeCanReadRepository(catalog, v, delivery.ProviderRepositoryID) {
+			delivery.ProviderRepositoryID, delivery.ProviderRevision = "restricted", ""
+			delivery.State = "access_revoked"
+		}
+		delivery.Authority = "no_authority_granted"
+		return delivery
 	})
 	store.ConfigureEnvironmentResolver(func(repositoryID, environmentID string) bool {
 		if deploymentStore == nil {
@@ -450,6 +486,132 @@ func registerAdoptionWorkspaceRoutes(mux *http.ServeMux, credentials *auth.Store
 			created, e = store.Get(created.ID, viewer(actor))
 		}
 		writeAdoptionWorkspace(w, created, e, 201)
+	})
+	mux.HandleFunc("POST /adoption-workspaces/{workspace_id}/deliveries", func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := authn(w, r)
+		if !ok {
+			return
+		}
+		if actor.AgentID != "" {
+			writeAPIError(w, 403, "human_delivery_attestation_required", "a human consumer participant must retain adoption delivery evidence")
+			return
+		}
+		var in adoptionDeliveryInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "exact ordinary delivery records, attestations, and expected version are required")
+			return
+		}
+		consumer, err := catalog.GetByID(in.ConsumerRepositoryID)
+		if err != nil || (actor.RepositoryID != "" && actor.RepositoryID != in.ConsumerRepositoryID) || !consumer.HasParticipant(actor.UserID) || pullStore == nil || releaseStore == nil || buildStore == nil || deploymentStore == nil {
+			writeAPIError(w, 403, "consumer_delivery_forbidden", "current consumer repository participation and available ordinary delivery records are required")
+			return
+		}
+		workspace, err := store.Get(r.PathValue("workspace_id"), viewer(actor))
+		if err != nil {
+			writeAdoptionWorkspace(w, adoptionworkspaces.Workspace{}, err, 200)
+			return
+		}
+		providerRevision, providerRepository := "", ""
+		for _, plan := range workspace.Plans {
+			if plan.ID != in.PlanID {
+				continue
+			}
+			for _, trial := range workspace.Trials {
+				if trial.ID == plan.TrialID {
+					providerRevision, providerRepository = trial.Source.Revision, trial.Source.RepositoryID
+				}
+			}
+		}
+		pull, pullErr := pullStore.Get(in.ConsumerRepositoryID, in.PullRequestID)
+		release, releaseErr := releaseStore.Get(in.ConsumerRepositoryID, in.ReleaseID)
+		promotion, promotionErr := deploymentStore.GetPromotion(in.ConsumerRepositoryID, in.DeploymentID)
+		if pullErr != nil || releaseErr != nil || promotionErr != nil || pull.Status != "merged" || pull.MergeCommitID == nil || promotion.ReleaseID != release.ID || promotion.CommitID != release.CommitID || promotion.EnvironmentID == "" || providerRevision == "" || providerRepository == "" {
+			writeAPIError(w, 422, "invalid_adoption_delivery", "pull, release, deployment, and provider revisions must resolve through ordinary platform records")
+			return
+		}
+		included := false
+		for _, evidence := range release.Inclusions.PullEvidence {
+			included = included || evidence.PullRequestID == pull.ID && evidence.SourceCommitID == pull.SourceCommitID
+		}
+		reviews, reviewErr := pullStore.ListReviews(in.ConsumerRepositoryID, pull.ID)
+		approvalIDs := []string{}
+		if reviewErr == nil {
+			for _, review := range reviews {
+				if review.Decision == pullrequests.Approved && !review.Stale && review.ReviewedCommitID == pull.SourceCommitID {
+					approvalIDs = append(approvalIDs, review.ID)
+				}
+			}
+		}
+		runs, runErr := buildStore.List(in.ConsumerRepositoryID, pull.ID)
+		checkIDs, checksPassed := []string{}, runErr == nil
+		for _, run := range runs {
+			if run.CommitID != pull.SourceCommitID {
+				continue
+			}
+			checkIDs = append(checkIDs, run.ID)
+			checksPassed = checksPassed && run.State == "succeeded"
+		}
+		checksPassed = checksPassed && len(checkIDs) > 0
+		for _, approval := range promotion.Approvals {
+			approvalIDs = append(approvalIDs, approval.ActorID)
+		}
+		if !included || len(approvalIDs) == len(promotion.Approvals) || !checksPassed {
+			writeAPIError(w, 422, "adoption_delivery_not_ready", "the exact pull must be merged, approved, checked, included in the release, and governed by deployment approvals")
+			return
+		}
+		for _, attestation := range in.Attestations {
+			if attestation.AttestedBy != actor.UserID {
+				writeAPIError(w, 422, "invalid_attestation_owner", "delivery attestations must be authored by the authenticated human")
+				return
+			}
+		}
+		in.PullRevision, in.MergeRevision, in.ReleaseRevision = pull.SourceCommitID, *pull.MergeCommitID, release.CommitID
+		in.ProviderRevision, in.ProviderRepositoryID, in.EnvironmentID = providerRevision, providerRepository, promotion.EnvironmentID
+		in.CheckRunIDs, in.ApprovalIDs, in.Authority = checkIDs, approvalIDs, "no_authority_granted"
+		requestedRestores := in.RestoresDeliveryID
+		in.RestoresDeliveryID, in.RecoveryOfDeploymentID = "", ""
+		in.Rollout, in.Health = []string{}, []string{}
+		for _, stage := range promotion.Rollout.Stages {
+			in.Rollout = append(in.Rollout, "staged rollout: "+stage.Name)
+		}
+		for _, event := range promotion.Events {
+			in.Rollout = append(in.Rollout, event.Kind+": "+event.State)
+		}
+		for _, evidence := range promotion.Evidence {
+			in.Health = append(in.Health, evidence.Stage+" / "+evidence.Signal+": "+evidence.State)
+		}
+		if len(in.Rollout) == 0 {
+			in.Rollout = []string{"deployment state: " + promotion.State}
+		}
+		if len(in.Health) == 0 {
+			in.Health = []string{"deployment health: " + promotion.State}
+		}
+		in.PauseReasons = nil
+		unmet := []string{}
+		for _, attestation := range in.Attestations {
+			if !attestation.Satisfied {
+				unmet = append(unmet, "unmet "+attestation.Kind+" attestation")
+			}
+		}
+		switch promotion.State {
+		case "succeeded":
+			if len(unmet) > 0 {
+				in.State, in.PauseReasons = "paused", unmet
+			} else if promotion.RecoveryOf != "" {
+				in.State = "restored"
+				in.RestoresDeliveryID, in.RecoveryOfDeploymentID = requestedRestores, promotion.RecoveryOf
+			} else {
+				in.State = "operating"
+			}
+		case "failed", "paused", "canceled":
+			in.State = "paused"
+			in.PauseReasons = []string{"deployment " + promotion.State}
+		default:
+			writeAPIError(w, 422, "adoption_rollout_incomplete", "the staged deployment must finish or enter a retained safe pause")
+			return
+		}
+		out, createErr := store.CreateDelivery(r.PathValue("workspace_id"), in.AdoptionDelivery, viewer(actor), in.ExpectedVersion)
+		writeAdoptionWorkspace(w, out, createErr, 201)
 	})
 }
 

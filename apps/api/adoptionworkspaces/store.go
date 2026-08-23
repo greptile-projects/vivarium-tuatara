@@ -162,26 +162,63 @@ type AdoptionPlan struct {
 	CreatedBy               string          `json:"created_by"`
 	CreatedAt               time.Time       `json:"created_at"`
 }
+type DeliveryAttestation struct {
+	Kind       string `json:"kind"`
+	Statement  string `json:"statement"`
+	Satisfied  bool   `json:"satisfied"`
+	AttestedBy string `json:"attested_by"`
+}
+type AdoptionDelivery struct {
+	ID                     string                `json:"id"`
+	PlanID                 string                `json:"plan_id"`
+	ConsumerRepositoryID   string                `json:"consumer_repository_id"`
+	PullRequestID          string                `json:"pull_request_id"`
+	PullRevision           string                `json:"pull_revision"`
+	MergeRevision          string                `json:"merge_revision"`
+	ReleaseID              string                `json:"release_id"`
+	ReleaseRevision        string                `json:"release_revision"`
+	DeploymentID           string                `json:"deployment_id"`
+	EnvironmentID          string                `json:"environment_id"`
+	ProviderRepositoryID   string                `json:"provider_repository_id"`
+	ProviderRevision       string                `json:"provider_revision"`
+	CheckRunIDs            []string              `json:"check_run_ids"`
+	ApprovalIDs            []string              `json:"approval_ids"`
+	Attestations           []DeliveryAttestation `json:"attestations"`
+	Rollout                []string              `json:"rollout"`
+	Health                 []string              `json:"health"`
+	CostCents              int64                 `json:"cost_cents"`
+	Currency               string                `json:"currency"`
+	SupportReadiness       string                `json:"support_readiness"`
+	UserAcceptance         string                `json:"user_acceptance"`
+	RestoresDeliveryID     string                `json:"restores_delivery_id,omitempty"`
+	RecoveryOfDeploymentID string                `json:"recovery_of_deployment_id,omitempty"`
+	State                  string                `json:"state"`
+	PauseReasons           []string              `json:"pause_reasons"`
+	Authority              string                `json:"authority"`
+	RecordedBy             string                `json:"recorded_by"`
+	RecordedAt             time.Time             `json:"recorded_at"`
+}
 type Workspace struct {
-	ID               string            `json:"id"`
-	Version          int               `json:"version"`
-	Title            string            `json:"title"`
-	Outcome          string            `json:"outcome"`
-	Source           Source            `json:"source"`
-	RequiredJourneys []string          `json:"required_journeys"`
-	Environments     []string          `json:"environments"`
-	Constraints      []string          `json:"constraints"`
-	BudgetCents      int64             `json:"budget_cents"`
-	Currency         string            `json:"currency"`
-	Owners           []Owner           `json:"owners"`
-	Criteria         []Criterion       `json:"evaluation_criteria"`
-	Candidates       []Candidate       `json:"candidates"`
-	Invitations      []Invitation      `json:"invitations"`
-	Trials           []TrialDefinition `json:"trials"`
-	Plans            []AdoptionPlan    `json:"plans"`
-	CreatedBy        string            `json:"created_by"`
-	CreatedAt        time.Time         `json:"created_at"`
-	UpdatedAt        time.Time         `json:"updated_at"`
+	ID               string             `json:"id"`
+	Version          int                `json:"version"`
+	Title            string             `json:"title"`
+	Outcome          string             `json:"outcome"`
+	Source           Source             `json:"source"`
+	RequiredJourneys []string           `json:"required_journeys"`
+	Environments     []string           `json:"environments"`
+	Constraints      []string           `json:"constraints"`
+	BudgetCents      int64              `json:"budget_cents"`
+	Currency         string             `json:"currency"`
+	Owners           []Owner            `json:"owners"`
+	Criteria         []Criterion        `json:"evaluation_criteria"`
+	Candidates       []Candidate        `json:"candidates"`
+	Invitations      []Invitation       `json:"invitations"`
+	Trials           []TrialDefinition  `json:"trials"`
+	Plans            []AdoptionPlan     `json:"plans"`
+	Deliveries       []AdoptionDelivery `json:"deliveries"`
+	CreatedBy        string             `json:"created_by"`
+	CreatedAt        time.Time          `json:"created_at"`
+	UpdatedAt        time.Time          `json:"updated_at"`
 }
 
 type Viewer struct {
@@ -203,6 +240,7 @@ type Store struct {
 	now                func() time.Time
 	canReadRepository  func(Viewer, string) bool
 	projectPlanTarget  func(Viewer, AdoptionWork) AdoptionWork
+	projectDelivery    func(Viewer, AdoptionDelivery) AdoptionDelivery
 	resolveEnvironment func(string, string) bool
 }
 
@@ -213,11 +251,16 @@ func New(root string) (*Store, error) {
 	if e := os.MkdirAll(root, 0700); e != nil {
 		return nil, e
 	}
-	return &Store{root: root, now: time.Now, canReadRepository: func(Viewer, string) bool { return false }, projectPlanTarget: func(_ Viewer, work AdoptionWork) AdoptionWork { return work }, resolveEnvironment: func(string, string) bool { return false }}, nil
+	return &Store{root: root, now: time.Now, canReadRepository: func(Viewer, string) bool { return false }, projectPlanTarget: func(_ Viewer, work AdoptionWork) AdoptionWork { return work }, projectDelivery: func(_ Viewer, delivery AdoptionDelivery) AdoptionDelivery { return delivery }, resolveEnvironment: func(string, string) bool { return false }}, nil
 }
 func (s *Store) ConfigurePlanTargetProjection(project func(Viewer, AdoptionWork) AdoptionWork) {
 	if project != nil {
 		s.projectPlanTarget = project
+	}
+}
+func (s *Store) ConfigureDeliveryProjection(project func(Viewer, AdoptionDelivery) AdoptionDelivery) {
+	if project != nil {
+		s.projectDelivery = project
 	}
 }
 func (s *Store) ConfigureEnvironmentResolver(resolve func(string, string) bool) {
@@ -479,6 +522,9 @@ func (s *Store) project(x Workspace, viewer Viewer) Workspace {
 			x.Plans[i].Work[j] = s.projectPlanTarget(viewer, x.Plans[i].Work[j])
 		}
 	}
+	for i := range x.Deliveries {
+		x.Deliveries[i] = s.projectDelivery(viewer, x.Deliveries[i])
+	}
 	return x
 }
 func (s *Store) Get(v string, viewer Viewer) (Workspace, error) {
@@ -692,6 +738,80 @@ func (s *Store) CreatePlan(workspace string, in AdoptionPlan, viewer Viewer, exp
 	x.UpdatedAt = now
 	e = s.write(x)
 	return x, e
+}
+
+// CreateDelivery retains a projection of ordinary review and delivery records.
+// Those records must already exist and authorize their own effects; this ledger
+// cannot review, merge, release, deploy, pause, or restore anything.
+func (s *Store) CreateDelivery(workspace string, in AdoptionDelivery, viewer Viewer, expected int) (Workspace, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, e := s.lock()
+	if e != nil {
+		return Workspace{}, e
+	}
+	defer f.Close()
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	x, e := s.read(workspace)
+	if e != nil {
+		return Workspace{}, ErrNotFound
+	}
+	if !planningParticipant(x, viewer) {
+		return Workspace{}, ErrForbidden
+	}
+	if x.Version != expected {
+		return Workspace{}, ErrConflict
+	}
+	var plan *AdoptionPlan
+	for i := range x.Plans {
+		if x.Plans[i].ID == in.PlanID {
+			plan = &x.Plans[i]
+		}
+	}
+	if plan == nil || !revision(in.PullRevision) || !revision(in.MergeRevision) || !revision(in.ReleaseRevision) || !revision(in.ProviderRevision) || !text(in.ConsumerRepositoryID, 100) || !text(in.ProviderRepositoryID, 100) || !text(in.PullRequestID, 100) || !text(in.ReleaseID, 100) || !text(in.DeploymentID, 100) || !text(in.EnvironmentID, 100) || !list(in.CheckRunIDs, 100) || !list(in.ApprovalIDs, 100) || len(in.Attestations) == 0 || len(in.Attestations) > 50 || !list(in.Rollout, 100) || !list(in.Health, 100) || in.CostCents < 0 || !text(in.Currency, 10) || !safeText(in.SupportReadiness, 5000) || !safeText(in.UserAcceptance, 5000) {
+		return Workspace{}, ErrInvalid
+	}
+	consumerPlanned := false
+	for _, work := range plan.Work {
+		consumerPlanned = consumerPlanned || work.RepositoryID == in.ConsumerRepositoryID
+	}
+	if !consumerPlanned {
+		return Workspace{}, ErrInvalid
+	}
+	seenKinds, allSatisfied := map[string]bool{}, true
+	for _, attestation := range in.Attestations {
+		if !map[string]bool{"policy": true, "rehearsal": true, "support": true, "user_acceptance": true, "cost": true}[attestation.Kind] || seenKinds[attestation.Kind] || !safeText(attestation.Statement, 5000) || attestation.AttestedBy != viewer.PrincipalID {
+			return Workspace{}, ErrInvalid
+		}
+		seenKinds[attestation.Kind], allSatisfied = true, allSatisfied && attestation.Satisfied
+	}
+	for _, kind := range []string{"policy", "rehearsal", "support", "user_acceptance", "cost"} {
+		if !seenKinds[kind] {
+			return Workspace{}, ErrInvalid
+		}
+	}
+	if in.State == "operating" && !allSatisfied {
+		return Workspace{}, ErrInvalid
+	}
+	if !map[string]bool{"operating": true, "paused": true, "restored": true}[in.State] || (in.State == "paused" && !list(in.PauseReasons, 50)) || (in.State != "paused" && len(in.PauseReasons) != 0) || (in.State == "restored" && (!text(in.RestoresDeliveryID, 100) || !text(in.RecoveryOfDeploymentID, 100))) || (in.State != "restored" && (in.RestoresDeliveryID != "" || in.RecoveryOfDeploymentID != "")) {
+		return Workspace{}, ErrInvalid
+	}
+	if in.RestoresDeliveryID != "" {
+		found := false
+		for _, delivery := range x.Deliveries {
+			found = found || (delivery.ID == in.RestoresDeliveryID && delivery.State == "paused" && delivery.ConsumerRepositoryID == in.ConsumerRepositoryID && delivery.DeploymentID == in.RecoveryOfDeploymentID)
+		}
+		if !found {
+			return Workspace{}, ErrInvalid
+		}
+	}
+	now := s.now().UTC().Truncate(time.Microsecond)
+	in.ID, in.RecordedBy, in.RecordedAt, in.Authority = id(), viewer.PrincipalID, now, "no_authority_granted"
+	x.Deliveries = append(x.Deliveries, in)
+	x.Version++
+	x.UpdatedAt = now
+	e = s.write(x)
+	return s.project(x, viewer), e
 }
 
 // CreateTrial appends a reproducible definition. It confers no package, API,
