@@ -154,9 +154,8 @@ func registerWorkflowComponentRoutes(mux *http.ServeMux, git *storage.Store, cat
 			writeAPIError(w, 404, "workflow_component_not_found", "component not found")
 			return
 		}
-		pkg, err := packageStore.Get(c.Source.PackageName, c.Source.PackageVersion)
-		if err != nil || pkg.SHA256 != c.Source.PackageSHA256 || pkg.Lifecycle != "active" {
-			writeAPIError(w, 409, "component_trust_changed", "publisher package is unavailable, replaced, or no longer trusted")
+		if !workflowComponentCurrentlyTrusted(catalog, packageStore, peers, c) {
+			writeAPIError(w, 409, "component_trust_changed", "publisher ownership, package provenance, or federation trust is no longer current")
 			return
 		}
 		out, err := components.Install(r.PathValue("id"), in.Name, actor.UserID, p.ID, p.SourceCommitID, c, declaration.Mappings, declaration.Configuration, declaration.AcceptedDataUse, in.ExpectedVersion)
