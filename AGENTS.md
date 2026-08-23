@@ -43,6 +43,14 @@ Hypothesis citations resolve each selected revision to one unambiguous search ca
 identity check. Multiple completed outcomes aggregate independently of storage order; pass/fail disagreement or any
 flaky attempt projects as flaky rather than a definitive working or regressed result.
 
+Named human investigation owners can freeze a four-way response comparison covering an evidence-backed
+revert, configuration or rollout containment, dependency adjustment, and forward repair. Each alternative
+retains benefits, risks, constraints, exact affected releases and open work, and backport targets beside the
+supported culprit ranges. Selecting an option publishes retry-stable ordinary human- or agent-owned proposal
+tasks with the original intent, reproduction criteria, deliberate tradeoffs, and exact bad revision as their
+reasoning context. The handoff grants no rollback, Git, session, workspace, pull, merge, release, deployment,
+or environment authority; task sessions and contributions continue through ordinary repository governance.
+
 Conflict reconciliation resolution checkpoints in the workspace ledger assemble an immutable unreferenced
 two-parent candidate and retain all affected required checks, reproductions, contract/schema scenarios,
 preview acceptance, and repository conflict tests with exact commands, criteria, coverage, logs, artifacts,

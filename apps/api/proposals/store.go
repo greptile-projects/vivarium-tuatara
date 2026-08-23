@@ -101,6 +101,8 @@ type ReasoningOrigin struct {
 	OpportunityID                  string                     `json:"opportunity_id,omitempty"`
 	RoadmapItemID                  string                     `json:"roadmap_item_id,omitempty"`
 	RoadmapVersion                 int                        `json:"roadmap_version,omitempty"`
+	RegressionInvestigationID      string                     `json:"regression_investigation_id,omitempty"`
+	RegressionResponseID           string                     `json:"regression_response_id,omitempty"`
 }
 
 type ReasoningItem struct {
@@ -410,8 +412,9 @@ func (s *Store) CreateImplementation(input ImplementationInput) (Proposal, []Tas
 	isDebugging := validID(input.Origin.DebuggingWorkspaceID) && validID(input.Origin.DebuggingRepairWorkID) && validID(input.Origin.DebuggingScenarioID) && validID(input.Origin.DebuggingCauseClaimID)
 	isExploratory := validID(input.Origin.ExploratorySessionID) && strings.TrimSpace(input.Origin.ExploratoryFindingID) != "" && validID(input.Origin.ExploratoryRepairID)
 	isSecurityFinding := validID(input.Origin.SecurityFindingID) && input.Origin.SecurityFindingVersion > 0 && validThreatModelReference(input.Origin.ThreatModelID) && input.Origin.ThreatModelVersion > 0
+	isRegression := validID(input.Origin.RegressionInvestigationID) && validID(input.Origin.RegressionResponseID)
 	originCount := 0
-	for _, present := range []bool{isAssessment, isAccessibility, isDecision, isIssue, isGovernance, isRoadmap, isDataObservation, isReliability, isRecovery, isSupport, isDebugging, isDesign, isExploratory, isSecurityFinding} {
+	for _, present := range []bool{isAssessment, isAccessibility, isDecision, isIssue, isGovernance, isRoadmap, isDataObservation, isReliability, isRecovery, isSupport, isDebugging, isDesign, isExploratory, isSecurityFinding, isRegression} {
 		if present {
 			originCount++
 		}
@@ -462,6 +465,18 @@ func (s *Store) CreateImplementation(input ImplementationInput) (Proposal, []Tas
 			for i, task := range r.Tasks {
 				value := input.Tasks[i]
 				if task.Title != strings.TrimSpace(value.Title) || task.Outcome != strings.TrimSpace(value.Outcome) || task.Risk != strings.TrimSpace(value.Risk) || task.VerificationPlan != strings.TrimSpace(value.VerificationPlan) || task.Assignment == nil || task.Assignment.AssigneeType != value.AssigneeType || (value.AssigneeID != "" && task.Assignment.AssigneeID != value.AssigneeID) || (i > 0 && value.DependsOnPrevious != (len(task.DependencyIDs) == 1 && task.DependencyIDs[0] == r.Tasks[i-1].ID)) {
+					return Proposal{}, nil, ErrImplementationConflict
+				}
+			}
+			return r.Proposal, append([]Task(nil), r.Tasks...), nil
+		}
+		if isRegression && r.Proposal.RepositoryID == input.RepositoryID && r.Proposal.Reasoning != nil && r.Proposal.Reasoning.RegressionInvestigationID == input.Origin.RegressionInvestigationID && r.Proposal.Reasoning.RegressionResponseID == input.Origin.RegressionResponseID {
+			if !reflect.DeepEqual(*r.Proposal.Reasoning, input.Origin) || r.Proposal.Title != title || r.Proposal.Body != body || len(r.Tasks) != len(input.Tasks) {
+				return Proposal{}, nil, ErrImplementationConflict
+			}
+			for i, task := range r.Tasks {
+				value := input.Tasks[i]
+				if task.Title != strings.TrimSpace(value.Title) || task.Outcome != strings.TrimSpace(value.Outcome) || task.Risk != strings.TrimSpace(value.Risk) || task.VerificationPlan != strings.TrimSpace(value.VerificationPlan) || task.Assignment == nil || task.Assignment.AssigneeType != value.AssigneeType || task.Assignment.AssigneeID != value.AssigneeID {
 					return Proposal{}, nil, ErrImplementationConflict
 				}
 			}

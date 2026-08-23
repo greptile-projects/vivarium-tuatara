@@ -77,6 +77,18 @@ agent explanations reviewable beside human decisions. Multiple ranges, interacti
 midpoints, and regressed merges remain competing claims until additional evidence resolves them. Searches are
 evidence ledgers only and grant no Git, check execution, pull, package, agent, or repository authority.
 
+Named human investigation owners can carry a supported search into a durable response comparison. The
+comparison must include exactly one revert, rollout/configuration containment, dependency adjustment, and
+forward-repair option, each with explicit benefits, risks, constraints, affected repository releases, affected
+open or queued pulls, and backport targets. Its culprit ranges are frozen from the live evidence projection so
+later readers can see what supported the decision rather than only its outcome. An owner may select one option
+with a rationale and derive ordinary human- or agent-assigned proposal tasks whose reasoning retains the
+investigation, response, known-bad revision, original expected behavior, acceptance criteria, tradeoffs, and
+backport scope. Exact retries converge on the same proposal and task identities. Those tasks may later use the
+platform's existing task session and shared-workspace paths and publish ordinary attributed pulls; the
+regression ledger itself grants no rollback, Git, agent, workspace, pull, review, merge, queue, release,
+deployment, configuration, or environment authority.
+
 ## Meaning-preserving conflict checkpoints
 
 Conflict-reconciliation workspaces can turn a resolved working tree into an unreferenced, immutable

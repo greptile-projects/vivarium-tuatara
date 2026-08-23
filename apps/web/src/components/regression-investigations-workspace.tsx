@@ -44,6 +44,16 @@ type Investigation = {
   scenarios: Scenario[];
   attempts: Attempt[];
   searches: Search[];
+  responses: ResponsePlan[];
+};
+type ResponsePlan = {
+  id: string;
+  search_id: string;
+  options: { kind: string; summary: string; benefits: string[]; risks: string[]; constraints: string[]; affected_release_ids: string[]; affected_pull_ids: string[]; backport_targets: string[] }[];
+  selected_kind?: string;
+  rationale?: string;
+  proposal_id?: string;
+  task_ids: string[];
 };
 type SearchCandidate = {
   kind: string;
@@ -157,6 +167,7 @@ const normalized = (investigation: Investigation): Investigation => ({
   scenarios: investigation.scenarios ?? [],
   attempts: investigation.attempts ?? [],
   searches: investigation.searches ?? [],
+  responses: investigation.responses ?? [],
 });
 export function RegressionInvestigationsWorkspace({
   repositoryID,
@@ -170,6 +181,7 @@ export function RegressionInvestigationsWorkspace({
   const createRequestID = useRef(crypto.randomUUID());
   const attemptRequestIDs = useRef<Record<string, string>>({});
   const searchRequestID = useRef(crypto.randomUUID());
+  const responseRequestID = useRef(crypto.randomUUID());
   const load = useCallback(async () => {
     try {
       const x = await api<{ regression_investigations: Investigation[] }>(
@@ -435,6 +447,16 @@ export function RegressionInvestigationsWorkspace({
       setError(x instanceof Error ? x.message : "Search guidance failed");
     }
   }
+  async function compareResponses(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault(); if (!token || !selected) return;
+    const f=new FormData(e.currentTarget), search=selected.searches.find((x)=>x.id===value(f,"response_search")); if(!search)return;
+    const shared={benefits:list(value(f,"benefits")),risks:list(value(f,"risks")),constraints:list(value(f,"constraints")),affected_release_ids:list(value(f,"releases")),affected_pull_ids:list(value(f,"pulls")),backport_targets:list(value(f,"backports"))};
+    try { const out=await api<Investigation>(`/repositories/${repositoryID}/regression-investigations/${selected.id}/responses`,{method:"POST",body:JSON.stringify({expected_version:selected.version,request_id:responseRequestID.current,search_id:search.id,scenario_id:search.scenario_id,options:["revert","containment","dependency_adjustment","forward_repair"].map((kind)=>({...shared,kind,summary:value(f,kind)}))})},token); replace(out);responseRequestID.current=crypto.randomUUID();e.currentTarget.reset();setError(""); } catch(x){setError(x instanceof Error?x.message:"Correction options could not be compared")}
+  }
+  async function publishResponse(e: FormEvent<HTMLFormElement>, response: ResponsePlan) {
+    e.preventDefault();if(!token||!selected)return;const f=new FormData(e.currentTarget);
+    try{const out=await api<Investigation>(`/repositories/${repositoryID}/regression-investigations/${selected.id}/responses/${response.id}/publish`,{method:"POST",body:JSON.stringify({expected_version:selected.version,selected_kind:value(f,"selected_kind"),rationale:value(f,"rationale"),title:value(f,"proposal_title"),work:[{title:value(f,"task_title"),outcome:value(f,"outcome"),assignee_type:value(f,"assignee_type"),assignee_id:value(f,"assignee_id"),acceptance_criteria:list(value(f,"work_criteria"))}]})},token);replace(out);setError("")}catch(x){setError(x instanceof Error?x.message:"Correction work could not be published")}
+  }
   return (
     <main className="mx-auto max-w-7xl space-y-6 p-6">
       <div>
@@ -675,6 +697,35 @@ export function RegressionInvestigationsWorkspace({
                   {x}
                 </p>
               ))}
+            </Card>
+            <Card className="p-5">
+              <h2 className="font-semibold">Governed regression response</h2>
+              <p className="mt-1 text-sm text-[var(--muted)]">Compare containment and durable corrections against the supported culprit range before creating ordinary owned work.</p>
+              <form onSubmit={compareResponses} className="mt-4 grid gap-2 sm:grid-cols-2">
+                <select className={field} name="response_search" required><option value="">Evidence search…</option>{selected.searches.filter((x)=>x.culprit_ranges.length>0).map((x)=><option key={x.id} value={x.id}>{x.id.slice(0,8)} · {x.culprit_ranges.length} range(s)</option>)}</select>
+                <input className={field} name="releases" placeholder="Affected release IDs, comma separated" />
+                <textarea className={field} name="revert" required placeholder="Evidence-backed revert: what valid intent would be lost?" />
+                <textarea className={field} name="containment" required placeholder="Configuration or rollout containment" />
+                <textarea className={field} name="dependency_adjustment" required placeholder="Dependency adjustment" />
+                <textarea className={field} name="forward_repair" required placeholder="Forward repair preserving original intent" />
+                <input className={field} name="pulls" placeholder="Affected current pull IDs" />
+                <input className={field} name="backports" placeholder="Backport targets" />
+                <input className={field} name="benefits" required placeholder="Benefits, comma separated" />
+                <input className={field} name="risks" required placeholder="Tradeoffs and risks, comma separated" />
+                <input className={`${field} sm:col-span-2`} name="constraints" required placeholder="Repository, release, rollout, and environment constraints" />
+                <Button type="submit" className="sm:col-span-2">Freeze four-way comparison</Button>
+              </form>
+              <div className="mt-5 space-y-4">{selected.responses.map((response)=><section key={response.id} className="rounded-lg border border-[var(--border)] p-4">
+                <div className="grid gap-2 sm:grid-cols-2">{response.options.map((option)=><div key={option.kind} className="rounded-md bg-[var(--surface-muted)] p-3 text-sm"><b>{option.kind.replaceAll("_"," ")}</b><p>{option.summary}</p><p className="mt-1 text-[var(--muted)]">Risk: {option.risks.join("; ")}</p></div>)}</div>
+                {response.proposal_id ? <p className="mt-3 text-sm"><Badge tone="success">published</Badge> Proposal {response.proposal_id} · tasks {response.task_ids.join(", ")}</p> : <form onSubmit={(e)=>publishResponse(e,response)} className="mt-3 grid gap-2 sm:grid-cols-2">
+                  <select className={field} name="selected_kind">{response.options.map((o)=><option key={o.kind} value={o.kind}>{o.kind.replaceAll("_"," ")}</option>)}</select>
+                  <input className={field} name="proposal_title" required placeholder="Correction proposal title" />
+                  <textarea className={`${field} sm:col-span-2`} name="rationale" required placeholder="Why this choice best limits harm while preserving valid intent" />
+                  <input className={field} name="task_title" required placeholder="Owned correction task" /><input className={field} name="outcome" required placeholder="Required outcome" />
+                  <select className={field} name="assignee_type"><option value="human">Human owner</option><option value="agent">Task-scoped agent</option></select><input className={field} name="assignee_id" required placeholder="Assignee ID" />
+                  <input className={`${field} sm:col-span-2`} name="work_criteria" required placeholder="Acceptance criteria, comma separated" /><Button type="submit" className="sm:col-span-2">Create ordinary governed work</Button>
+                </form>}
+              </section>)}</div>
             </Card>
             <Card className="p-5">
               <h2 className="font-semibold">Repeatable comparison scenarios</h2>

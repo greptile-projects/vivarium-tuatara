@@ -1558,8 +1558,8 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	if authStore != nil && repositoryCatalog != nil && debugWorkspaceStore != nil && releaseStore != nil && deploymentStore != nil && issueStore != nil && incidentStore != nil && supportThreadStore != nil && serviceObjectiveStore != nil && packageStore != nil && infrastructureStore != nil {
 		registerDebugWorkspaceRoutes(mux, store, repositoryCatalog, authStore, debugWorkspaceStore, releaseStore, deploymentStore, issueStore, incidentStore, supportThreadStore, serviceObjectiveStore, packageStore, infrastructureStore, workspaceStore, proposalStore, pullRequestStore, checkRunStore)
 	}
-	if authStore != nil && repositoryCatalog != nil && regressionInvestigationStore != nil && issueStore != nil && supportThreadStore != nil && checkRunStore != nil && releaseStore != nil && deploymentStore != nil && debugWorkspaceStore != nil {
-		registerRegressionInvestigationRoutes(mux, store, repositoryCatalog, authStore, regressionInvestigationStore, issueStore, supportThreadStore, checkRunStore, releaseStore, deploymentStore, debugWorkspaceStore, pullRequestStore)
+	if authStore != nil && repositoryCatalog != nil && regressionInvestigationStore != nil && issueStore != nil && supportThreadStore != nil && checkRunStore != nil && releaseStore != nil && deploymentStore != nil && debugWorkspaceStore != nil && proposalStore != nil {
+		registerRegressionInvestigationRoutes(mux, store, repositoryCatalog, authStore, regressionInvestigationStore, issueStore, supportThreadStore, checkRunStore, releaseStore, deploymentStore, debugWorkspaceStore, pullRequestStore, proposalStore)
 	}
 	if authStore != nil && userStore != nil && repositoryCatalog != nil && apiContractStore != nil && pullRequestStore != nil && releaseStore != nil {
 		registerAPIContractRoutes(mux, store, repositoryCatalog, authStore, apiContractStore, pullRequestStore, releaseStore)

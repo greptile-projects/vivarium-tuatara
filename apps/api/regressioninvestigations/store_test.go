@@ -56,6 +56,37 @@ func TestStoreRetainsScopeAndStatusChanges(t *testing.T) {
 	}
 }
 
+func TestResponseComparisonAndPublicationRetainGovernedHandoff(t *testing.T) {
+	s, _ := New(t.TempDir())
+	v, err := s.Create(validInvestigation(), "actor-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	v.Scenarios = append(v.Scenarios, Scenario{ID: "scenario-1"})
+	v.Searches = append(v.Searches, Search{ID: "search-1", ScenarioID: "scenario-1"})
+	if err := s.write(v); err != nil {
+		t.Fatal(err)
+	}
+	options := []ResponseOption{
+		{Kind: "revert", Summary: "Revert while preserving the original intent in follow-up work."},
+		{Kind: "containment", Summary: "Narrow the rollout while correction is reviewed."},
+		{Kind: "dependency_adjustment", Summary: "Pin the compatible dependency revision."},
+		{Kind: "forward_repair", Summary: "Repair the introducing change without removing valid behavior."},
+	}
+	v, err = s.CreateResponse(v.RepositoryID, v.ID, "owner-1", Response{RequestID: "response-request", SearchID: "search-1", ScenarioID: "scenario-1", CulpritRanges: []CulpritRange{{WorkingRevision: commit, RegressedRevision: strings.Repeat("b", 40)}}, Options: options}, v.Version)
+	if err != nil || len(v.Responses) != 1 || len(v.Responses[0].CulpritRanges) != 1 {
+		t.Fatalf("comparison = %#v, %v", v.Responses, err)
+	}
+	work := []ResponseWork{{Title: "Repair checkout", Outcome: "Restore single submission", AssigneeType: "agent", AssigneeID: "agent-1", AcceptanceCriteria: []string{"scenario passes"}}}
+	v, err = s.PublishResponse(v.RepositoryID, v.ID, v.Responses[0].ID, "owner-1", "forward_repair", "Preserve intentional validation", "proposal-1", []string{"task-1"}, work, v.Version)
+	if err != nil || v.Responses[0].ProposalID != "proposal-1" || v.Responses[0].SelectedKind != "forward_repair" {
+		t.Fatalf("publication = %#v, %v", v.Responses[0], err)
+	}
+	if _, err = s.PublishResponse(v.RepositoryID, v.ID, v.Responses[0].ID, "owner-1", "revert", "changed", "proposal-2", []string{"task-2"}, work, v.Version); !errors.Is(err, ErrConflict) {
+		t.Fatalf("want immutable publication conflict, got %v", err)
+	}
+}
+
 func TestStoreRejectsIncompleteOrCredentialShapedContext(t *testing.T) {
 	s, _ := New(t.TempDir())
 	v := validInvestigation()
