@@ -87,6 +87,37 @@ func TestResponseComparisonAndPublicationRetainGovernedHandoff(t *testing.T) {
 	}
 }
 
+func TestCorrectionRequiresExactPassingScenarioAndOriginalCriteria(t *testing.T) {
+	s, _ := New(t.TempDir())
+	v, _ := s.Create(validInvestigation(), "actor-1")
+	v.Scenarios = append(v.Scenarios, Scenario{ID: "scenario-1"})
+	v.Responses = append(v.Responses, Response{ID: "response-1", ScenarioID: "scenario-1", ProposalID: "proposal-1", TaskIDs: []string{"task-1"}})
+	v.Attempts = append(v.Attempts, Attempt{ID: "attempt-1", ScenarioID: "scenario-1", Revision: commit, State: "completed", Classification: "passed"})
+	if err := s.write(v); err != nil {
+		t.Fatal(err)
+	}
+	proof := Correction{RequestID: "correction-1", Kind: "backport", ResponseID: "response-1", TaskID: "task-1", PullRequestID: "pull-1", Revision: commit, Target: "v1.x", ScenarioID: "scenario-1", AttemptID: "attempt-1", RequiredChecks: []string{"test"}, CheckRunIDs: []string{"run-1"}, RequirementIDs: []string{"checkout-intent"}, CriteriaSatisfied: append([]string{}, v.AcceptanceCriteria...), ProofState: "passed"}
+	proved, err := s.RecordCorrection(v.RepositoryID, v.ID, "owner-1", proof, v.Version)
+	if err != nil || len(proved.Corrections) != 1 || proved.Corrections[0].AcceptanceCriteria[0] != v.AcceptanceCriteria[0] {
+		t.Fatalf("proof = %#v, %v", proved.Corrections, err)
+	}
+	if _, err = s.RecordCorrection(v.RepositoryID, v.ID, "owner-1", proof, v.Version); err != nil {
+		t.Fatalf("exact retry did not reconcile: %v", err)
+	}
+	partial := proof
+	partial.RequestID = "correction-2"
+	partial.CriteriaSatisfied = nil
+	if _, err = s.RecordCorrection(v.RepositoryID, v.ID, "owner-1", partial, proved.Version); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("partial correction accepted: %v", err)
+	}
+	failed := proof
+	failed.RequestID = "correction-3"
+	failed.AttemptID = "missing"
+	if _, err = s.RecordCorrection(v.RepositoryID, v.ID, "owner-1", failed, proved.Version); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("unproved correction accepted: %v", err)
+	}
+}
+
 func TestStoreRejectsIncompleteOrCredentialShapedContext(t *testing.T) {
 	s, _ := New(t.TempDir())
 	v := validInvestigation()

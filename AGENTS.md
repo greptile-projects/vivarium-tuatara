@@ -51,6 +51,15 @@ tasks with the original intent, reproduction criteria, deliberate tradeoffs, and
 reasoning context. The handoff grants no rollback, Git, session, workspace, pull, merge, release, deployment,
 or environment authority; task sessions and contributions continue through ordinary repository governance.
 
+Exact repair and backport correction proofs bind a published response task and its current pull revision to
+the frozen regression scenario, one completed passing attempt, every named successful affected check, current
+quality-plan requirement identities, and the complete original acceptance criteria. Reads derive review, merge,
+release inclusion, deployment, and observed outcome from ordinary stores. A moved candidate, stale historical
+baseline, missing or rerun failing check, failed backport proof, or disagreeing deployment signal reopens the
+proof explicitly; status alone never closes it. Retained requirement and check names let a maintainable scenario
+be carried into quality planning and required-check policy without granting plan, check, Git, review, release,
+deployment, or environment authority.
+
 Conflict reconciliation resolution checkpoints in the workspace ledger assemble an immutable unreferenced
 two-parent candidate and retain all affected required checks, reproductions, contract/schema scenarios,
 preview acceptance, and repository conflict tests with exact commands, criteria, coverage, logs, artifacts,
