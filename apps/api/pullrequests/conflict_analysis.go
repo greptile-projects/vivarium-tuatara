@@ -76,11 +76,8 @@ func (s *Store) AnalyzePullConflict(repositoryID, pullID, candidateID, ownerID s
 	if err != nil {
 		return ConflictAnalysis{}, err
 	}
-	source, target := p.SourceCommitID, ""
+	source, target := p.SourceCommitID, p.TargetCommitID
 	currentTarget, branchErr := branchCommit(repository, p.TargetBranch)
-	if branchErr == nil {
-		target = currentTarget
-	}
 	analysisCandidate := ""
 	candidateSuperseded := false
 	if candidateID != "" {
@@ -107,8 +104,11 @@ func (s *Store) AnalyzePullConflict(repositoryID, pullID, candidateID, ownerID s
 	if candidateSuperseded {
 		analysis.StaleReasons = append(analysis.StaleReasons, "integration candidate was superseded")
 	}
-	analysis.Source.PullRequests = s.pullEvidence(repositoryID, analysis.BaseCommitID, source)
-	analysis.Target.PullRequests = s.pullEvidence(repositoryID, analysis.BaseCommitID, target)
+	var evidenceIncomplete []string
+	analysis.Source.PullRequests, evidenceIncomplete = s.pullEvidence(repositoryID, analysis.BaseCommitID, source)
+	analysis.Incomplete = append(analysis.Incomplete, evidenceIncomplete...)
+	analysis.Target.PullRequests, evidenceIncomplete = s.pullEvidence(repositoryID, analysis.BaseCommitID, target)
+	analysis.Incomplete = append(analysis.Incomplete, evidenceIncomplete...)
 	analysis.Source.OwnerIDs = evidenceOwners(analysis.Source.OwnerIDs, analysis.Source.PullRequests)
 	analysis.Target.OwnerIDs = evidenceOwners(analysis.Target.OwnerIDs, analysis.Target.PullRequests)
 	sourceRepository, sourceRepositoryErr := s.git.Open(p.SourceRepositoryID)
@@ -125,7 +125,7 @@ func (s *Store) AnalyzePullConflict(repositoryID, pullID, candidateID, ownerID s
 	} else {
 		analysis.Incomplete = append(analysis.Incomplete, "source branch is unavailable")
 	}
-	if currentTarget != "" {
+	if branchErr == nil {
 		analysis.Target.CurrentCommitID = currentTarget
 		if currentTarget != target {
 			analysis.StaleReasons = append(analysis.StaleReasons, "target branch moved after the analyzed revision")
@@ -161,10 +161,16 @@ func (s *Store) AnalyzeBranches(repositoryID, sourceBranch, targetBranch, ownerI
 		return ConflictAnalysis{}, err
 	}
 	analysis.Source.CurrentCommitID, analysis.Target.CurrentCommitID = source, target
-	analysis.Source.PullRequests = s.pullEvidence(repositoryID, analysis.BaseCommitID, source)
-	analysis.Target.PullRequests = s.pullEvidence(repositoryID, analysis.BaseCommitID, target)
+	var evidenceIncomplete []string
+	analysis.Source.PullRequests, evidenceIncomplete = s.pullEvidence(repositoryID, analysis.BaseCommitID, source)
+	analysis.Incomplete = append(analysis.Incomplete, evidenceIncomplete...)
+	analysis.Target.PullRequests, evidenceIncomplete = s.pullEvidence(repositoryID, analysis.BaseCommitID, target)
+	analysis.Incomplete = append(analysis.Incomplete, evidenceIncomplete...)
 	analysis.Source.OwnerIDs = evidenceOwners(analysis.Source.OwnerIDs, analysis.Source.PullRequests)
 	analysis.Target.OwnerIDs = evidenceOwners(analysis.Target.OwnerIDs, analysis.Target.PullRequests)
+	if len(analysis.Incomplete) > 0 {
+		analysis.Status = "incomplete"
+	}
 	return analysis, nil
 }
 
@@ -317,7 +323,20 @@ func gitRead(repository *storage.Repository, args ...string) ([]byte, error) {
 	return command.Output()
 }
 
-var symbolPattern = regexp.MustCompile(`(?m)^\s*(?:(?:export\s+)?(?:async\s+)?(?:func|function|class|type|interface|const|var|let|def|message|service|enum)\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*(?:\(|interface\b|struct\b|=)`)
+var symbolPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`^\s*func\s+\([^)]*\)\s*([A-Za-z_][A-Za-z0-9_]*)\s*\(`),
+	regexp.MustCompile(`^\s*(?:export\s+)?(?:async\s+)?(?:func|function|class|type|interface|const|var|let|def|message|service|enum)\s+([A-Za-z_][A-Za-z0-9_]*)\b`),
+	regexp.MustCompile(`^\s+([A-Za-z_][A-Za-z0-9_]*)\s*\([^)]*\)\s*(?:[A-Za-z_*\[({]|$)`),
+}
+
+func declaredSymbol(line string) string {
+	for _, pattern := range symbolPatterns {
+		if match := pattern.FindStringSubmatch(line); match != nil {
+			return match[1]
+		}
+	}
+	return ""
+}
 
 func sharedChangedSymbols(repository *storage.Repository, base, source, target snapshotEntry) []string {
 	read := func(entry snapshotEntry) string {
@@ -335,14 +354,14 @@ func sharedChangedSymbols(repository *storage.Repository, base, source, target s
 		result := map[string]bool{}
 		prior := map[string]string{}
 		for _, line := range strings.Split(before, "\n") {
-			if match := symbolPattern.FindStringSubmatch(line); match != nil {
-				prior[match[1]] = strings.TrimSpace(line)
+			if symbol := declaredSymbol(line); symbol != "" {
+				prior[symbol] = strings.TrimSpace(line)
 			}
 		}
 		for _, line := range strings.Split(after, "\n") {
-			match := symbolPattern.FindStringSubmatch(line)
-			if match != nil && prior[match[1]] != strings.TrimSpace(line) {
-				result[match[1]] = true
+			symbol := declaredSymbol(line)
+			if symbol != "" && prior[symbol] != strings.TrimSpace(line) {
+				result[symbol] = true
 			}
 		}
 		return result
@@ -374,12 +393,13 @@ func uniqueStrings(values []string) []string {
 	return result
 }
 
-func (s *Store) pullEvidence(repositoryID, base, revision string) []ConflictPullEvidence {
+func (s *Store) pullEvidence(repositoryID, base, revision string) ([]ConflictPullEvidence, []string) {
 	pulls, err := s.List(repositoryID)
 	if err != nil {
-		return []ConflictPullEvidence{}
+		return []ConflictPullEvidence{}, []string{"pull request collaboration evidence could not be loaded"}
 	}
 	result := []ConflictPullEvidence{}
+	incomplete := []string{}
 	repository, openErr := s.git.Open(repositoryID)
 	for _, p := range pulls {
 		matches := p.SourceCommitID == revision || (p.MergeCommitID != nil && *p.MergeCommitID == revision)
@@ -404,17 +424,23 @@ func (s *Store) pullEvidence(repositoryID, base, revision string) []ConflictPull
 		if p.ContributionEvidence != nil {
 			evidence.AcceptanceCriteria = append(evidence.AcceptanceCriteria, p.ContributionEvidence.AcceptanceCriteria...)
 		}
-		comments, _ := s.ListComments(repositoryID, p.ID)
+		comments, commentsErr := s.ListComments(repositoryID, p.ID)
+		if commentsErr != nil {
+			incomplete = append(incomplete, fmt.Sprintf("discussion evidence for pull request %s could not be loaded", p.ID))
+		}
 		for _, comment := range comments {
 			evidence.DiscussionIDs = append(evidence.DiscussionIDs, comment.ID)
 		}
-		reviews, _ := s.ListReviews(repositoryID, p.ID)
+		reviews, reviewsErr := s.ListReviews(repositoryID, p.ID)
+		if reviewsErr != nil {
+			incomplete = append(incomplete, fmt.Sprintf("review decision evidence for pull request %s could not be loaded", p.ID))
+		}
 		for _, review := range reviews {
 			evidence.DecisionIDs = append(evidence.DecisionIDs, review.ID)
 		}
 		result = append(result, evidence)
 	}
-	return result
+	return result, uniqueStrings(incomplete)
 }
 
 func evidenceOwners(ownerIDs []string, evidence []ConflictPullEvidence) []string {

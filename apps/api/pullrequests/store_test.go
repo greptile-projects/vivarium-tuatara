@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -114,12 +115,38 @@ func TestConflictAnalysisExplainsExactTextualStructuralAndSemanticCollision(t *t
 	if analysis.Status != "current" || analysis.BaseCommitID != string(base) || len(analysis.Files) != 1 || strings.Join(analysis.Files[0].Kinds, ",") != "semantic,structural,textual" || len(analysis.Semantic) != 1 || analysis.Semantic[0].Symbol != "Apply" || len(analysis.AffectedChecks) != 1 || analysis.AffectedChecks[0].Name != "contract" {
 		t.Fatalf("analysis = %#v", analysis)
 	}
+	if declaredSymbol("name = sourceValue") != "" || declaredSymbol("func (service *Worker) Work(input string) error {") != "Work" {
+		t.Fatalf("semantic declaration detection accepted assignment or lost receiver method")
+	}
+	if err := os.WriteFile(store.commentsPath(repository.ID(), pull.ID), []byte("invalid"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.reviewsPath(repository.ID(), pull.ID), []byte("invalid"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	analysis, err = store.AnalyzePullConflict(repository.ID(), pull.ID, "", testID('3'))
+	if err != nil || analysis.Status != "incomplete" || len(analysis.Incomplete) != 2 {
+		t.Fatalf("unavailable collaboration evidence = %#v, %v", analysis, err)
+	}
+	if err := os.Remove(store.commentsPath(repository.ID(), pull.ID)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(store.reviewsPath(repository.ID(), pull.ID)); err != nil {
+		t.Fatal(err)
+	}
 	advancedTree := writeFileTree("type Contract interface {\n\tApply(int) error\n}\n")
 	advanced := writeCommitWithParents(t, repository, advancedTree, []storage.ObjectID{source}, "advanced")
 	_ = repository.UpdateReference(storage.Reference{Name: "refs/heads/topic", Target: string(advanced)})
 	analysis, err = store.AnalyzePullConflict(repository.ID(), pull.ID, "", testID('3'))
 	if err != nil || analysis.Status != "stale" || len(analysis.StaleReasons) != 1 {
 		t.Fatalf("stale analysis = %#v, %v", analysis, err)
+	}
+	if err := repository.DeleteReference("refs/heads/main"); err != nil {
+		t.Fatal(err)
+	}
+	analysis, err = store.AnalyzePullConflict(repository.ID(), pull.ID, "", testID('3'))
+	if err != nil || analysis.Status != "incomplete" || analysis.Target.CommitID != string(target) || !slices.Contains(analysis.Incomplete, "target branch is unavailable") {
+		t.Fatalf("retained target analysis = %#v, %v", analysis, err)
 	}
 }
 

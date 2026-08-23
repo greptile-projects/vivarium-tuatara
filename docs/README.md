@@ -2774,7 +2774,7 @@ branch state.
 
 Conflict analysis is available before anyone edits conflict markers. `GET
 /repositories/{id}/pulls/{pull_id}/conflict-analysis` compares the pull's exact
-adopted source with the current target, or a retained queue attempt when
+adopted source with its retained target snapshot, or a retained queue attempt when
 `candidate_id` is supplied. `GET /repositories/{id}/conflict-analysis` compares
 the current tips named by `source_branch` and `target_branch`. Both use a
 read-only three-way index rooted at the exact merge base and return textual,
