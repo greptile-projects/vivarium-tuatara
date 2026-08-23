@@ -298,7 +298,8 @@ whenever dependencies change or the web job fails before it starts.
   snapshots grant no review, merge, release, deployment, pause, restoration, agent, or provider
   authority. Repository-bound credentials must match the consumer repository, and attestation
   attribution is fixed to the authenticated human; historical checks from other pull revisions do not
-  affect current readiness.
+  affect current readiness. Restorations bind the selected paused delivery's deployment ID to the
+  recovery promotion's server-derived `recovery_of` target.
 
 - **Project incubators** — `/incubators` and the web `/incubators` workspace provide a
   collaborative home before repository creation beneath `$INCUBATOR_STORAGE_ROOT`

@@ -54,7 +54,9 @@ revisions, current human review approvals, exact-commit passing checks, release 
 deployment state from repository-owned stores. Each attestation is attributed only to the authenticated
 human submitting it; callers cannot name another attester. Succeeded deployments become operating (or linked
 restorations); failed or paused deployments and unmet criteria remain paused. Historical check runs from
-other pull revisions do not affect current-revision readiness. Reads recheck both
+other pull revisions do not affect current-revision readiness. A restored snapshot must select the
+paused delivery whose deployment ID equals the recovery promotion's server-derived `recovery_of` target;
+another paused delivery in the repository cannot be substituted. Reads recheck both
 repository boundaries and redact delivery provenance after access loss. The endpoint records evidence
 only and grants no review, merge, release, deployment, environment, pause, or restoration authority.
 

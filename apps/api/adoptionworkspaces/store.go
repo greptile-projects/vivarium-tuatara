@@ -169,33 +169,34 @@ type DeliveryAttestation struct {
 	AttestedBy string `json:"attested_by"`
 }
 type AdoptionDelivery struct {
-	ID                   string                `json:"id"`
-	PlanID               string                `json:"plan_id"`
-	ConsumerRepositoryID string                `json:"consumer_repository_id"`
-	PullRequestID        string                `json:"pull_request_id"`
-	PullRevision         string                `json:"pull_revision"`
-	MergeRevision        string                `json:"merge_revision"`
-	ReleaseID            string                `json:"release_id"`
-	ReleaseRevision      string                `json:"release_revision"`
-	DeploymentID         string                `json:"deployment_id"`
-	EnvironmentID        string                `json:"environment_id"`
-	ProviderRepositoryID string                `json:"provider_repository_id"`
-	ProviderRevision     string                `json:"provider_revision"`
-	CheckRunIDs          []string              `json:"check_run_ids"`
-	ApprovalIDs          []string              `json:"approval_ids"`
-	Attestations         []DeliveryAttestation `json:"attestations"`
-	Rollout              []string              `json:"rollout"`
-	Health               []string              `json:"health"`
-	CostCents            int64                 `json:"cost_cents"`
-	Currency             string                `json:"currency"`
-	SupportReadiness     string                `json:"support_readiness"`
-	UserAcceptance       string                `json:"user_acceptance"`
-	RestoresDeliveryID   string                `json:"restores_delivery_id,omitempty"`
-	State                string                `json:"state"`
-	PauseReasons         []string              `json:"pause_reasons"`
-	Authority            string                `json:"authority"`
-	RecordedBy           string                `json:"recorded_by"`
-	RecordedAt           time.Time             `json:"recorded_at"`
+	ID                     string                `json:"id"`
+	PlanID                 string                `json:"plan_id"`
+	ConsumerRepositoryID   string                `json:"consumer_repository_id"`
+	PullRequestID          string                `json:"pull_request_id"`
+	PullRevision           string                `json:"pull_revision"`
+	MergeRevision          string                `json:"merge_revision"`
+	ReleaseID              string                `json:"release_id"`
+	ReleaseRevision        string                `json:"release_revision"`
+	DeploymentID           string                `json:"deployment_id"`
+	EnvironmentID          string                `json:"environment_id"`
+	ProviderRepositoryID   string                `json:"provider_repository_id"`
+	ProviderRevision       string                `json:"provider_revision"`
+	CheckRunIDs            []string              `json:"check_run_ids"`
+	ApprovalIDs            []string              `json:"approval_ids"`
+	Attestations           []DeliveryAttestation `json:"attestations"`
+	Rollout                []string              `json:"rollout"`
+	Health                 []string              `json:"health"`
+	CostCents              int64                 `json:"cost_cents"`
+	Currency               string                `json:"currency"`
+	SupportReadiness       string                `json:"support_readiness"`
+	UserAcceptance         string                `json:"user_acceptance"`
+	RestoresDeliveryID     string                `json:"restores_delivery_id,omitempty"`
+	RecoveryOfDeploymentID string                `json:"recovery_of_deployment_id,omitempty"`
+	State                  string                `json:"state"`
+	PauseReasons           []string              `json:"pause_reasons"`
+	Authority              string                `json:"authority"`
+	RecordedBy             string                `json:"recorded_by"`
+	RecordedAt             time.Time             `json:"recorded_at"`
 }
 type Workspace struct {
 	ID               string             `json:"id"`
@@ -792,13 +793,13 @@ func (s *Store) CreateDelivery(workspace string, in AdoptionDelivery, viewer Vie
 	if in.State == "operating" && !allSatisfied {
 		return Workspace{}, ErrInvalid
 	}
-	if !map[string]bool{"operating": true, "paused": true, "restored": true}[in.State] || (in.State == "paused" && !list(in.PauseReasons, 50)) || (in.State != "paused" && len(in.PauseReasons) != 0) || (in.State == "restored" && !text(in.RestoresDeliveryID, 100)) {
+	if !map[string]bool{"operating": true, "paused": true, "restored": true}[in.State] || (in.State == "paused" && !list(in.PauseReasons, 50)) || (in.State != "paused" && len(in.PauseReasons) != 0) || (in.State == "restored" && (!text(in.RestoresDeliveryID, 100) || !text(in.RecoveryOfDeploymentID, 100))) || (in.State != "restored" && (in.RestoresDeliveryID != "" || in.RecoveryOfDeploymentID != "")) {
 		return Workspace{}, ErrInvalid
 	}
 	if in.RestoresDeliveryID != "" {
 		found := false
 		for _, delivery := range x.Deliveries {
-			found = found || (delivery.ID == in.RestoresDeliveryID && delivery.State == "paused" && delivery.ConsumerRepositoryID == in.ConsumerRepositoryID)
+			found = found || (delivery.ID == in.RestoresDeliveryID && delivery.State == "paused" && delivery.ConsumerRepositoryID == in.ConsumerRepositoryID && delivery.DeploymentID == in.RecoveryOfDeploymentID)
 		}
 		if !found {
 			return Workspace{}, ErrInvalid

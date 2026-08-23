@@ -242,6 +242,12 @@ func TestDeliveryRequiresCompleteAttestationsAndSafeRestore(t *testing.T) {
 	}
 	restored := base
 	restored.State, restored.RestoresDeliveryID = "restored", x.Deliveries[0].ID
+	restored.RecoveryOfDeploymentID = x.Deliveries[0].DeploymentID
+	unrelated := restored
+	unrelated.RecoveryOfDeploymentID = "unrelated-failed-deployment"
+	if _, err = s.CreateDelivery(x.ID, unrelated, v, x.Version); !errorsIs(err, ErrInvalid) {
+		t.Fatalf("recovery linked to unrelated paused delivery: %v", err)
+	}
 	x, err = s.CreateDelivery(x.ID, restored, v, x.Version)
 	if err != nil || x.Deliveries[1].RestoresDeliveryID != x.Deliveries[0].ID {
 		t.Fatalf("governed restoration not linked: %+v, %v", x.Deliveries, err)

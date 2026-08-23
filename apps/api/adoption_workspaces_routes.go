@@ -568,6 +568,8 @@ func registerAdoptionWorkspaceRoutes(mux *http.ServeMux, credentials *auth.Store
 		in.PullRevision, in.MergeRevision, in.ReleaseRevision = pull.SourceCommitID, *pull.MergeCommitID, release.CommitID
 		in.ProviderRevision, in.ProviderRepositoryID, in.EnvironmentID = providerRevision, providerRepository, promotion.EnvironmentID
 		in.CheckRunIDs, in.ApprovalIDs, in.Authority = checkIDs, approvalIDs, "no_authority_granted"
+		requestedRestores := in.RestoresDeliveryID
+		in.RestoresDeliveryID, in.RecoveryOfDeploymentID = "", ""
 		in.Rollout, in.Health = []string{}, []string{}
 		for _, stage := range promotion.Rollout.Stages {
 			in.Rollout = append(in.Rollout, "staged rollout: "+stage.Name)
@@ -597,6 +599,7 @@ func registerAdoptionWorkspaceRoutes(mux *http.ServeMux, credentials *auth.Store
 				in.State, in.PauseReasons = "paused", unmet
 			} else if promotion.RecoveryOf != "" {
 				in.State = "restored"
+				in.RestoresDeliveryID, in.RecoveryOfDeploymentID = requestedRestores, promotion.RecoveryOf
 			} else {
 				in.State = "operating"
 			}
