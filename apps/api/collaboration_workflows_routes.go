@@ -70,6 +70,8 @@ func registerCollaborationWorkflowRoutes(mux *http.ServeMux, git *storage.Store,
 			}
 			check := func(inv collaborationworkflows.Invocation) (bool, string) {
 				switch inv.Kind {
+				case "manual":
+					return true, ""
 				case "platform_action":
 					if !stringIn(inv.Action, "create_issue", "comment", "request_review", "dispatch_check", "update_project", "notify") {
 						return false, "platform action is not in the permitted workflow action set"
@@ -169,6 +171,9 @@ func registerCollaborationWorkflowRoutes(mux *http.ServeMux, git *storage.Store,
 			writeAPIError(w, 500, "workflow_executions_unavailable", "executions could not be read")
 			return
 		}
+		for i := range out {
+			out[i] = collaborationworkflows.PublicExecution(out[i])
+		}
 		writeJSON(w, 200, map[string]any{"executions": out})
 	})
 	mux.HandleFunc("GET /repositories/{id}/collaboration-workflows/{workflow_id}/executions/{execution_id}", func(w http.ResponseWriter, r *http.Request) {
@@ -180,7 +185,7 @@ func registerCollaborationWorkflowRoutes(mux *http.ServeMux, git *storage.Store,
 			writeAPIError(w, 404, "workflow_execution_not_found", "workflow execution not found")
 			return
 		}
-		writeJSON(w, 200, out)
+		writeJSON(w, 200, collaborationworkflows.PublicExecution(out))
 	})
 	type claimInput struct {
 		ExpectedVersion int `json:"expected_version"`
@@ -210,6 +215,13 @@ func registerCollaborationWorkflowRoutes(mux *http.ServeMux, git *storage.Store,
 							stepOwner = true
 						}
 					}
+					if st.Manual {
+						for _, run := range ex.Steps {
+							if run.StepID == st.ID && run.TakenOverBy == actor.UserID {
+								stepOwner = true
+							}
+						}
+					}
 				}
 			}
 		}
@@ -221,10 +233,15 @@ func registerCollaborationWorkflowRoutes(mux *http.ServeMux, git *storage.Store,
 		writeJSON(w, 200, out)
 	})
 	type completeInput struct {
-		Token       string         `json:"token"`
-		Actions     int            `json:"actions"`
-		Outputs     map[string]any `json:"outputs"`
-		FailureCode string         `json:"failure_code"`
+		Token        string                                `json:"token"`
+		Actions      int                                   `json:"actions"`
+		Outputs      map[string]any                        `json:"outputs"`
+		FailureCode  string                                `json:"failure_code"`
+		Logs         []collaborationworkflows.StepLog      `json:"logs"`
+		Artifacts    []collaborationworkflows.StepArtifact `json:"artifacts"`
+		AgentSession *collaborationworkflows.AgentSession  `json:"agent_session"`
+		CostUnits    float64                               `json:"cost_units"`
+		Provenance   []string                              `json:"provenance"`
 	}
 	mux.HandleFunc("POST /repositories/{id}/collaboration-workflows/{workflow_id}/executions/{execution_id}/steps/{step_id}/complete", func(w http.ResponseWriter, r *http.Request) {
 		var in completeInput
@@ -237,14 +254,41 @@ func registerCollaborationWorkflowRoutes(mux *http.ServeMux, git *storage.Store,
 			writeAPIError(w, 404, "workflow_execution_not_found", "workflow execution not found")
 			return
 		}
-		out, err := workflows.CompleteStep(ex.ID, r.PathValue("step_id"), in.Token, in.Actions, in.Outputs, in.FailureCode)
+		out, err := workflows.CompleteStepEvidence(ex.ID, r.PathValue("step_id"), in.Token, in.Actions, in.Outputs, in.FailureCode, in.Logs, in.Artifacts, in.AgentSession, in.CostUnits, in.Provenance)
 		writeWorkflowExecution(w, out, err, 200)
+	})
+	type interventionInput struct {
+		ExpectedVersion int    `json:"expected_version"`
+		Kind            string `json:"kind"`
+		StepID          string `json:"step_id"`
+		Reason          string `json:"reason"`
+		InputName       string `json:"input_name"`
+		Value           any    `json:"value"`
+	}
+	mux.HandleFunc("POST /repositories/{id}/collaboration-workflows/{workflow_id}/executions/{execution_id}/interventions", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var in interventionInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "a versioned intervention is required")
+			return
+		}
+		ex, err := workflows.GetExecution(r.PathValue("execution_id"))
+		if err != nil || ex.WorkflowID != r.PathValue("workflow_id") || ex.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "workflow_execution_not_found", "workflow execution not found")
+			return
+		}
+		out, err := workflows.Intervene(ex.ID, actor.UserID, in.Kind, in.StepID, in.Reason, in.InputName, in.Value, in.ExpectedVersion)
+		writeWorkflowExecution(w, collaborationworkflows.PublicExecution(out), err, 200)
 	})
 	type cancelInput struct {
 		Code string `json:"code"`
 	}
 	mux.HandleFunc("POST /repositories/{id}/collaboration-workflows/{workflow_id}/executions/{execution_id}/cancel", func(w http.ResponseWriter, r *http.Request) {
-		if _, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write"); !ok {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
 			return
 		}
 		var in cancelInput
@@ -257,7 +301,7 @@ func registerCollaborationWorkflowRoutes(mux *http.ServeMux, git *storage.Store,
 			writeAPIError(w, 404, "workflow_execution_not_found", "workflow execution not found")
 			return
 		}
-		out, err := workflows.CancelExecution(ex.ID, in.Code)
+		out, err := workflows.Intervene(ex.ID, actor.UserID, "cancel", "", in.Code, "", nil, ex.Version)
 		writeWorkflowExecution(w, out, err, 200)
 	})
 }
@@ -319,9 +363,9 @@ func writeWorkflowLeaseError(w http.ResponseWriter, err error) {
 func writeWorkflowExecution(w http.ResponseWriter, out collaborationworkflows.Execution, err error, status int) {
 	switch {
 	case err == nil:
-		writeJSON(w, status, out)
+		writeJSON(w, status, collaborationworkflows.PublicExecution(out))
 	case errors.Is(err, collaborationworkflows.ErrInvalid):
-		writeAPIError(w, 400, "invalid_workflow_event", "event inputs or outputs violate the reviewed workflow contract")
+		writeAPIError(w, 400, "invalid_workflow_data", "event, evidence, output, or intervention data violates the reviewed workflow contract")
 	case errors.Is(err, collaborationworkflows.ErrCredential):
 		writeAPIError(w, 401, "workflow_step_credential_invalid", "step credential is invalid, expired, or revoked")
 	case errors.Is(err, collaborationworkflows.ErrExecutionConflict):

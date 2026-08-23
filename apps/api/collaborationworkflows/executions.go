@@ -20,6 +20,7 @@ var ErrCredential = errors.New("invalid step credential")
 
 var credentialText = regexp.MustCompile(`(?i)(bearer\s+[a-z0-9._~+/=-]{12,}|(?:token|password|secret|api[_-]?key)\s*[:=]\s*\S+)`)
 var commitID = regexp.MustCompile(`^[0-9a-f]{40}$`)
+var sha256ID = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 type TriggerEvent struct {
 	ID                string            `json:"id"`
@@ -44,24 +45,75 @@ type StepRun struct {
 	Outputs             map[string]any `json:"outputs,omitempty"`
 	ActionsUsed         int            `json:"actions_used"`
 	FailureCode         string         `json:"failure_code,omitempty"`
+	Attempts            []StepAttempt  `json:"attempts"`
+	ProvidedInputs      map[string]any `json:"provided_inputs,omitempty"`
+	TakenOverBy         string         `json:"taken_over_by,omitempty"`
+}
+
+type StepLog struct {
+	Time    time.Time `json:"time"`
+	Level   string    `json:"level"`
+	Message string    `json:"message"`
+}
+type StepArtifact struct {
+	Name       string `json:"name"`
+	Kind       string `json:"kind"`
+	SHA256     string `json:"sha256"`
+	Size       int64  `json:"size"`
+	Restricted bool   `json:"restricted,omitempty"`
+}
+type AgentSession struct {
+	ID      string `json:"id"`
+	AgentID string `json:"agent_id"`
+	Status  string `json:"status"`
+	URL     string `json:"url,omitempty"`
+}
+type StepAttempt struct {
+	Number       int            `json:"number"`
+	Status       string         `json:"status"`
+	StartedAt    time.Time      `json:"started_at"`
+	FinishedAt   *time.Time     `json:"finished_at,omitempty"`
+	Inputs       map[string]any `json:"inputs"`
+	Outputs      map[string]any `json:"outputs,omitempty"`
+	Logs         []StepLog      `json:"logs"`
+	Artifacts    []StepArtifact `json:"artifacts"`
+	AgentSession *AgentSession  `json:"agent_session,omitempty"`
+	CostUnits    float64        `json:"cost_units"`
+	ActionsUsed  int            `json:"actions_used"`
+	FailureCode  string         `json:"failure_code,omitempty"`
+	Provenance   []string       `json:"provenance"`
+}
+type Intervention struct {
+	ID        string    `json:"id"`
+	Kind      string    `json:"kind"`
+	StepID    string    `json:"step_id,omitempty"`
+	ActorID   string    `json:"actor_id"`
+	Reason    string    `json:"reason"`
+	InputName string    `json:"input_name,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	Version   int       `json:"version"`
 }
 
 type Execution struct {
-	ID               string       `json:"id"`
-	RepositoryID     string       `json:"repository_id"`
-	WorkflowID       string       `json:"workflow_id"`
-	WorkflowVersion  int          `json:"workflow_version"`
-	WorkflowSource   Source       `json:"workflow_source"`
-	Trigger          TriggerEvent `json:"trigger"`
-	Status           string       `json:"status"`
-	Version          int          `json:"version"`
-	BudgetActions    int          `json:"budget_actions"`
-	ActionsUsed      int          `json:"actions_used"`
-	Steps            []StepRun    `json:"steps"`
-	CreatedAt        time.Time    `json:"created_at"`
-	UpdatedAt        time.Time    `json:"updated_at"`
-	FinishedAt       *time.Time   `json:"finished_at,omitempty"`
-	CancellationCode string       `json:"cancellation_code,omitempty"`
+	ID                   string         `json:"id"`
+	RepositoryID         string         `json:"repository_id"`
+	WorkflowID           string         `json:"workflow_id"`
+	WorkflowVersion      int            `json:"workflow_version"`
+	WorkflowSource       Source         `json:"workflow_source"`
+	Trigger              TriggerEvent   `json:"trigger"`
+	Status               string         `json:"status"`
+	Version              int            `json:"version"`
+	BudgetActions        int            `json:"budget_actions"`
+	ActionsUsed          int            `json:"actions_used"`
+	CostUnits            float64        `json:"cost_units"`
+	Steps                []StepRun      `json:"steps"`
+	CreatedAt            time.Time      `json:"created_at"`
+	UpdatedAt            time.Time      `json:"updated_at"`
+	FinishedAt           *time.Time     `json:"finished_at,omitempty"`
+	CancellationCode     string         `json:"cancellation_code,omitempty"`
+	Interventions        []Intervention `json:"interventions"`
+	PredictedNextActions []string       `json:"predicted_next_actions"`
+	PausedBy             string         `json:"paused_by,omitempty"`
 }
 
 type StepLease struct {
@@ -135,9 +187,18 @@ func (s *Store) StartExecution(workflowID string, workflowVersion int, event Tri
 		}
 		steps := make([]StepRun, 0, len(rev.Definition.Steps))
 		for _, st := range rev.Definition.Steps {
-			steps = append(steps, StepRun{StepID: st.ID, Status: "pending", Outputs: map[string]any{}})
+			status := "pending"
+			if st.Approval != "" {
+				status = "waiting_approval"
+			} else if len(st.RequestedInputs) > 0 {
+				status = "waiting_input"
+			} else if st.Manual {
+				status = "waiting_manual"
+			}
+			steps = append(steps, StepRun{StepID: st.ID, Status: status, Outputs: map[string]any{}, Attempts: []StepAttempt{}, ProvidedInputs: map[string]any{}})
 		}
-		out = Execution{ID: id, RepositoryID: w.RepositoryID, WorkflowID: w.ID, WorkflowVersion: workflowVersion, WorkflowSource: rev.Source, Trigger: event, Status: "running", Version: 1, BudgetActions: rev.Definition.BudgetActions, Steps: steps, CreatedAt: now, UpdatedAt: now}
+		out = Execution{ID: id, RepositoryID: w.RepositoryID, WorkflowID: w.ID, WorkflowVersion: workflowVersion, WorkflowSource: rev.Source, Trigger: event, Status: "running", Version: 1, BudgetActions: rev.Definition.BudgetActions, Steps: steps, Interventions: []Intervention{}, CreatedAt: now, UpdatedAt: now}
+		deriveNextActions(&out, rev.Definition)
 		return s.writeExecution(out)
 	})
 	return out, err
@@ -195,8 +256,11 @@ func (s *Store) ClaimStep(executionID, stepID string, expectedVersion int, actor
 		sr.CredentialExpiresAt = &expiry
 		sr.StartedAt = &now
 		sr.FailureCode = ""
+		sr.CompletionSHA256 = ""
+		sr.Attempts = append(sr.Attempts, StepAttempt{Number: sr.Attempt, Status: "running", StartedAt: now, Inputs: stepInputs(ex, st), Logs: []StepLog{}, Artifacts: []StepArtifact{}, Provenance: []string{"workflow:" + ex.WorkflowID, "source:" + ex.WorkflowSource.Revision, "event:" + ex.Trigger.ID}})
 		ex.Version++
 		ex.UpdatedAt = now
+		deriveNextActions(&ex, def)
 		if err = s.writeExecution(ex); err != nil {
 			return err
 		}
@@ -207,6 +271,9 @@ func (s *Store) ClaimStep(executionID, stepID string, expectedVersion int, actor
 }
 
 func (s *Store) CompleteStep(executionID, stepID, token string, actions int, outputs map[string]any, failure string) (Execution, error) {
+	return s.CompleteStepEvidence(executionID, stepID, token, actions, outputs, failure, nil, nil, nil, 0, nil)
+}
+func (s *Store) CompleteStepEvidence(executionID, stepID, token string, actions int, outputs map[string]any, failure string, logs []StepLog, artifacts []StepArtifact, session *AgentSession, cost float64, provenance []string) (Execution, error) {
 	var ex Execution
 	err := s.lock(func() error {
 		var err error
@@ -224,7 +291,7 @@ func (s *Store) CompleteStep(executionID, stepID, token string, actions int, out
 		}
 		sr := executionStep(&ex, stepID)
 		sum := sha256.Sum256([]byte(token))
-		completion := completionDigest(hex.EncodeToString(sum[:]), actions, outputs, failure)
+		completion := completionDigest(hex.EncodeToString(sum[:]), actions, outputs, failure, logs, artifacts, session, cost, provenance)
 		if sr.CompletionSHA256 != "" {
 			if sr.CompletionSHA256 == completion {
 				return nil
@@ -247,8 +314,21 @@ func (s *Store) CompleteStep(executionID, stepID, token string, actions int, out
 			_ = s.writeExecution(ex)
 			return ErrCredential
 		}
-		if actions < 0 || actions > st.BudgetActions || ex.ActionsUsed+actions > ex.BudgetActions {
+		if actions < 0 || actions > st.BudgetActions || ex.ActionsUsed+actions > ex.BudgetActions || cost < 0 {
 			return ErrExecutionBlocked
+		}
+		if containsCredential(logs) || containsCredential(artifacts) || containsCredential(provenance) || containsCredential(session) {
+			return ErrInvalid
+		}
+		for _, l := range logs {
+			if !oneOf(l.Level, "debug", "info", "warning", "error") || l.Time.IsZero() || len(l.Message) > 10000 {
+				return ErrInvalid
+			}
+		}
+		for _, a := range artifacts {
+			if a.Name == "" || !sha256ID.MatchString(a.SHA256) || a.Size < 0 {
+				return ErrInvalid
+			}
 		}
 		allowed := map[string]bool{}
 		for _, k := range st.Outputs {
@@ -268,6 +348,13 @@ func (s *Store) CompleteStep(executionID, stepID, token string, actions int, out
 		sr.CredentialExpiresAt = nil
 		sr.FinishedAt = &now
 		sr.CompletionSHA256 = completion
+		if len(sr.Attempts) == 0 {
+			return ErrExecutionConflict
+		}
+		attempt := &sr.Attempts[len(sr.Attempts)-1]
+		attempt.FinishedAt, attempt.Outputs, attempt.Logs, attempt.Artifacts, attempt.AgentSession, attempt.CostUnits, attempt.ActionsUsed, attempt.FailureCode = &now, clean, append([]StepLog{}, logs...), append([]StepArtifact{}, artifacts...), session, cost, actions, failure
+		attempt.Provenance = append(attempt.Provenance, provenance...)
+		ex.CostUnits += cost
 		if failure != "" {
 			sr.Status = "interrupted"
 			if sr.Attempt >= st.Retries+1 {
@@ -277,12 +364,144 @@ func (s *Store) CompleteStep(executionID, stepID, token string, actions int, out
 		} else {
 			sr.Status = "succeeded"
 		}
+		attempt.Status = sr.Status
 		finishExecution(&ex, now)
+		deriveNextActions(&ex, w.Revisions[ex.WorkflowVersion-1].Definition)
 		ex.Version++
 		ex.UpdatedAt = now
 		return s.writeExecution(ex)
 	})
 	return ex, err
+}
+
+func (s *Store) Intervene(id, actor, kind, stepID, reason, inputName string, value any, expected int) (Execution, error) {
+	var ex Execution
+	err := s.lock(func() error {
+		var err error
+		ex, err = s.readExecution(id)
+		if err != nil {
+			return err
+		}
+		if ex.Version != expected || actor == "" || strings.TrimSpace(reason) == "" {
+			return ErrExecutionConflict
+		}
+		if containsCredential(value) || containsCredential(reason) {
+			return ErrInvalid
+		}
+		w, err := s.read(ex.WorkflowID)
+		if err != nil {
+			return err
+		}
+		def := w.Revisions[ex.WorkflowVersion-1].Definition
+		st, hasStep := definitionStep(def, stepID)
+		sr := executionStep(&ex, stepID)
+		now := s.now()
+		switch kind {
+		case "pause":
+			if ex.Status != "running" {
+				return ErrExecutionBlocked
+			}
+			ex.Status, ex.PausedBy = "paused", actor
+		case "resume":
+			if ex.Status != "paused" {
+				return ErrExecutionBlocked
+			}
+			ex.Status, ex.PausedBy = "running", ""
+		case "cancel":
+			if ex.Status != "running" && ex.Status != "paused" {
+				return ErrExecutionBlocked
+			}
+			ex.Status, ex.CancellationCode, ex.FinishedAt = "cancelled", reason, &now
+			for i := range ex.Steps {
+				if !oneOf(ex.Steps[i].Status, "succeeded", "skipped") {
+					ex.Steps[i].Status = "cancelled"
+					ex.Steps[i].CredentialSHA256 = ""
+					ex.Steps[i].CredentialExpiresAt = nil
+				}
+			}
+		case "retry":
+			if !hasStep || sr == nil || !oneOf(sr.Status, "interrupted", "failed") || sr.Attempt >= st.Retries+1 {
+				return ErrExecutionBlocked
+			}
+			sr.Status, sr.FailureCode, ex.Status, ex.FinishedAt = "pending", "", "running", nil
+			for i := range ex.Steps {
+				other := &ex.Steps[i]
+				if other.FailureCode != "execution_terminal" {
+					continue
+				}
+				other.FailureCode, other.FinishedAt = "", nil
+				otherDef, _ := definitionStep(def, other.StepID)
+				switch {
+				case otherDef.Approval != "":
+					other.Status = "waiting_approval"
+				case len(otherDef.RequestedInputs) > 0:
+					other.Status = "waiting_input"
+				case otherDef.Manual:
+					other.Status = "waiting_manual"
+				default:
+					other.Status = "pending"
+				}
+			}
+		case "skip":
+			if !hasStep || sr == nil || !st.Optional || !oneOf(sr.Status, "pending", "waiting_input", "waiting_approval", "waiting_manual", "interrupted") {
+				return ErrExecutionBlocked
+			}
+			sr.Status, sr.FinishedAt = "skipped", &now
+			finishExecution(&ex, now)
+		case "provide_input":
+			if !hasStep || sr == nil || sr.Status != "waiting_input" || !contains(st.RequestedInputs, inputName) || inputName == "" {
+				return ErrExecutionBlocked
+			}
+			if sr.ProvidedInputs == nil {
+				sr.ProvidedInputs = map[string]any{}
+			}
+			sr.ProvidedInputs[inputName] = value
+			ready := true
+			for _, n := range st.RequestedInputs {
+				if _, ok := sr.ProvidedInputs[n]; !ok {
+					ready = false
+				}
+			}
+			if ready && sr.Status == "waiting_input" {
+				sr.Status = "pending"
+			}
+		case "approve":
+			if !hasStep || sr == nil || st.Approval == "" || sr.Status != "waiting_approval" {
+				return ErrExecutionBlocked
+			}
+			sr.Status = "pending"
+		case "take_over":
+			if !hasStep || sr == nil || !st.Manual || !oneOf(sr.Status, "waiting_manual", "pending") {
+				return ErrExecutionBlocked
+			}
+			sr.Status, sr.TakenOverBy = "pending", actor
+		default:
+			return ErrInvalid
+		}
+		ex.Version++
+		ex.UpdatedAt = now
+		ex.Interventions = append(ex.Interventions, Intervention{ID: executionID(ex.ID, kind, strings.Join([]string{actor, stepID, inputName, now.String()}, "\x00")), Kind: kind, StepID: stepID, ActorID: actor, Reason: reason, InputName: inputName, CreatedAt: now, Version: ex.Version})
+		deriveNextActions(&ex, def)
+		return s.writeExecution(ex)
+	})
+	return ex, err
+}
+
+func PublicExecution(ex Execution) Execution {
+	for i := range ex.Steps {
+		ex.Steps[i].CredentialSHA256 = ""
+		ex.Steps[i].CompletionSHA256 = ""
+		for j := range ex.Steps[i].Attempts {
+			visible := make([]StepArtifact, 0, len(ex.Steps[i].Attempts[j].Artifacts))
+			for _, artifact := range ex.Steps[i].Attempts[j].Artifacts {
+				if !artifact.Restricted {
+					visible = append(visible, artifact)
+				}
+			}
+			ex.Steps[i].Attempts[j].Artifacts = visible
+		}
+	}
+	return ex
 }
 
 func (s *Store) CancelExecution(id, code string) (Execution, error) {
@@ -412,7 +631,7 @@ func executionStep(ex *Execution, id string) *StepRun {
 func dependenciesSucceeded(ex Execution, ids []string) bool {
 	for _, id := range ids {
 		s := executionStep(&ex, id)
-		if s == nil || s.Status != "succeeded" {
+		if s == nil || (s.Status != "succeeded" && s.Status != "skipped") {
 			return false
 		}
 	}
@@ -420,6 +639,11 @@ func dependenciesSucceeded(ex Execution, ids []string) bool {
 }
 func stepInputs(ex Execution, st Step) map[string]any {
 	out := map[string]any{}
+	if current := executionStep(&ex, st.ID); current != nil {
+		for k, v := range current.ProvidedInputs {
+			out[k] = v
+		}
+	}
 	for key, ref := range st.Inputs {
 		if strings.HasPrefix(ref, "event.") {
 			out[key] = ex.Trigger.Inputs[strings.TrimPrefix(ref, "event.")]
@@ -441,7 +665,7 @@ func finishExecution(ex *Execution, now time.Time) {
 		if s.Status == "failed" {
 			failed = true
 		}
-		if s.Status != "succeeded" && s.Status != "failed" && s.Status != "cancelled" {
+		if s.Status != "succeeded" && s.Status != "skipped" && s.Status != "failed" && s.Status != "cancelled" {
 			all = false
 		}
 	}
@@ -463,6 +687,44 @@ func finishExecution(ex *Execution, now time.Time) {
 		ex.FinishedAt = &now
 	}
 }
+func deriveNextActions(ex *Execution, def Definition) {
+	next := []string{}
+	if ex.Status == "paused" {
+		next = append(next, "resume or cancel this execution")
+	}
+	if ex.Status == "running" {
+		for _, sr := range ex.Steps {
+			st, _ := definitionStep(def, sr.StepID)
+			switch sr.Status {
+			case "pending":
+				if dependenciesSucceeded(*ex, st.Needs) {
+					if st.Manual {
+						next = append(next, "take over "+st.Name)
+					} else {
+						next = append(next, "run "+st.Name)
+					}
+				}
+			case "waiting_input":
+				next = append(next, "provide requested input for "+st.Name)
+			case "waiting_approval":
+				next = append(next, "approve "+st.Name)
+			case "waiting_manual":
+				next = append(next, "take over "+st.Name)
+			case "interrupted":
+				if sr.Attempt < st.Retries+1 {
+					next = append(next, "retry "+st.Name)
+				}
+			}
+			if st.Optional && !oneOf(sr.Status, "succeeded", "skipped", "cancelled") {
+				next = append(next, "skip optional "+st.Name)
+			}
+		}
+	}
+	if len(next) == 0 && oneOf(ex.Status, "succeeded", "failed", "cancelled") {
+		next = append(next, "inspect retained attempts and provenance")
+	}
+	ex.PredictedNextActions = next
+}
 func executionID(repo, wf, event string) string {
 	h := sha256.Sum256([]byte(repo + "\x00" + wf + "\x00" + event))
 	return hex.EncodeToString(h[:16])
@@ -473,13 +735,14 @@ func equalJSON(a, b any) bool {
 	y, _ := json.Marshal(b)
 	return string(x) == string(y)
 }
-func completionDigest(tokenDigest string, actions int, outputs map[string]any, failure string) string {
+func completionDigest(tokenDigest string, actions int, outputs map[string]any, failure string, evidence ...any) string {
 	b, _ := json.Marshal(struct {
 		TokenDigest string         `json:"token_digest"`
 		Actions     int            `json:"actions"`
 		Outputs     map[string]any `json:"outputs"`
 		Failure     string         `json:"failure"`
-	}{tokenDigest, actions, outputs, failure})
+		Evidence    []any          `json:"evidence"`
+	}{tokenDigest, actions, outputs, failure, evidence})
 	h := sha256.Sum256(b)
 	return hex.EncodeToString(h[:])
 }
