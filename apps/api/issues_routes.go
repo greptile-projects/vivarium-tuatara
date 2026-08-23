@@ -259,6 +259,12 @@ func registerIssueRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *rep
 			writeJSON(w, 202, v)
 			return
 		}
+		if input.Status == "triaged" {
+			revision := workflowRepositoryHead(gitStore, v.RepositoryID)
+			if revision != "" {
+				recordActivity(activity, repos, activities.Event{Kind: "issue.accepted", ActorID: actor.UserID, RepositoryID: v.RepositoryID, ResourceType: "issue", ResourceID: v.ID, ResourceTitle: v.Title, ResourceRevision: revision})
+			}
+		}
 		writeJSON(w, 200, v)
 	})
 	mux.HandleFunc("POST /repositories/{id}/issues/{issue_id}/reproduction-attempts", func(w http.ResponseWriter, r *http.Request) {

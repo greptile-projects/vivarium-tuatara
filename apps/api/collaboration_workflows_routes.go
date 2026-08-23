@@ -17,6 +17,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/collaborationworkflows"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/federation"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/issues"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/packages"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
@@ -33,7 +34,7 @@ type collaborationWorkflowSourceInput struct {
 
 var exactCommit = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
-func registerCollaborationWorkflowRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, workflows *collaborationworkflows.Store, components *workflowcomponents.Store, packageStore *packages.Store, peers *federation.Store, agents *agentprojects.Store, pulls *pullrequests.Store, deliveries *activities.Store) {
+func registerCollaborationWorkflowRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, workflows *collaborationworkflows.Store, components *workflowcomponents.Store, packageStore *packages.Store, peers *federation.Store, agents *agentprojects.Store, pulls *pullrequests.Store, issueStore *issues.Store, deliveries *activities.Store) {
 	mux.HandleFunc("GET /repositories/{id}/collaboration-workflows", func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id")); !ok {
 			return
@@ -372,7 +373,7 @@ func registerCollaborationWorkflowRoutes(mux *http.ServeMux, git *storage.Store,
 			writeAPIError(w, 409, "stale_workflow_input", "workflow revision is no longer current")
 			return
 		}
-		event, ok := workflowEventFromDelivery(git, pulls, deliveries, r.PathValue("id"), in.DeliveryID)
+		event, ok := workflowEventFromDelivery(git, pulls, issueStore, deliveries, r.PathValue("id"), in.DeliveryID)
 		if !ok {
 			writeAPIError(w, 409, "stale_workflow_input", "a trusted current repository event delivery is required")
 			return
@@ -541,12 +542,22 @@ func writeWorkflowGovernance(w http.ResponseWriter, out any, err error, status i
 	}
 }
 
-func workflowEventFromDelivery(git *storage.Store, pulls *pullrequests.Store, deliveries *activities.Store, repo, deliveryID string) (collaborationworkflows.TriggerEvent, bool) {
+func workflowEventFromDelivery(git *storage.Store, pulls *pullrequests.Store, issueStore *issues.Store, deliveries *activities.Store, repo, deliveryID string) (collaborationworkflows.TriggerEvent, bool) {
 	if deliveries == nil {
 		return collaborationworkflows.TriggerEvent{}, false
 	}
 	delivery, err := deliveries.Get(deliveryID)
-	if err != nil || delivery.RepositoryID != repo || delivery.ResourceType != "pull_request" || delivery.ResourceRevision == "" {
+	if err != nil || delivery.RepositoryID != repo || delivery.ResourceRevision == "" {
+		return collaborationworkflows.TriggerEvent{}, false
+	}
+	if delivery.ResourceType == "issue" && delivery.Kind == "issue.accepted" && issueStore != nil {
+		issue, issueErr := issueStore.Get(repo, delivery.ResourceID)
+		if issueErr != nil || issue.Status != "triaged" || !workflowCommitReachable(git, repo, delivery.ResourceRevision) || workflowRepositoryHead(git, repo) != delivery.ResourceRevision {
+			return collaborationworkflows.TriggerEvent{}, false
+		}
+		return collaborationworkflows.TriggerEvent{ID: delivery.ID, Kind: "repository_event", Name: "issue.accepted", ActorID: delivery.ActorID, OccurredAt: delivery.CreatedAt, Inputs: map[string]any{"issue_id": delivery.ResourceID}, ResourceRevisions: map[string]string{"issue_id": delivery.ResourceRevision}}, true
+	}
+	if delivery.ResourceType != "pull_request" {
 		return collaborationworkflows.TriggerEvent{}, false
 	}
 	names := map[string]string{"pull_request.created": "pull.opened", "pull_request.synchronized": "pull.synchronized", "pull_request.merged": "pull.merged"}
@@ -559,6 +570,21 @@ func workflowEventFromDelivery(git *storage.Store, pulls *pullrequests.Store, de
 		return collaborationworkflows.TriggerEvent{}, false
 	}
 	return collaborationworkflows.TriggerEvent{ID: delivery.ID, Kind: "repository_event", Name: name, ActorID: delivery.ActorID, OccurredAt: delivery.CreatedAt, Inputs: map[string]any{"pull_id": delivery.ResourceID}, ResourceRevisions: map[string]string{"pull_id": delivery.ResourceRevision}}, true
+}
+
+func workflowRepositoryHead(git *storage.Store, repo string) string {
+	if git == nil {
+		return ""
+	}
+	r, err := git.Open(repo)
+	if err != nil {
+		return ""
+	}
+	out, err := exec.Command("git", "--git-dir="+r.Path(), "rev-parse", "refs/heads/main").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 func workflowCommitReachable(git *storage.Store, repo, revision string) bool {

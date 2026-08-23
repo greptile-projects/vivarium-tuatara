@@ -63,6 +63,9 @@ time, resource identity, and exact source revision. The workflow runtime maps th
 trigger names and derives every `TriggerEvent` field server-side; arbitrary participant-supplied event
 IDs, names, times, actors, inputs, revisions, cross-repository deliveries, unsupported event kinds, and
 deliveries made stale by pull movement all fail closed.
+Repository-owner issue triage similarly emits `issue.accepted` at the then-current reachable `main`
+revision. Dispatch derives its issue, actor, time, and revision and rejects the delivery if the issue
+leaves triage or repository head moves, preventing acceptance from being replayed against different code.
 
 The workflow workspace and execution reads project a live dependency graph and preserve every attempt's
 timing, resolved inputs, declared redacted outputs, sanitized logs, artifact digest metadata, agent session,
@@ -116,6 +119,11 @@ workflow, stop it for anomalous behavior or changed authority, or select a prior
 These controls prevent new starts and claims while preserving legitimate completed attempts, outputs,
 costs, receipts, interventions, executions, and workflow revisions. Governance records coordinate
 consent only and do not grant authority over the protected action itself.
+
+`collaborative-workflow-journey.spec.ts` connects accepted issue triage, a reviewed bounded repair agent,
+exact workflow activation and execution, human redirection, protected merge/release/deployment decisions,
+retained evidence and receipts, and the browser run graph. It contains duplicate delivery, stale revision,
+interruption, revoked lease, action-budget excess, and non-owner approval before the exact run succeeds.
 
 ## Evidence-backed software adoption
 
