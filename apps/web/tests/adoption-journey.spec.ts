@@ -1473,15 +1473,33 @@ test("independent teams prove adoption and return the missing fit upstream", asy
       ),
     ).toBeVisible();
   } finally {
+    const cleanupFailures: string[] = [];
     for (const credential of gitCredentials) {
-      const response = await credential.page.request.delete(
-        `/api/auth/credentials/${credential.id}`,
-        { headers: credential.headers },
-      );
-      expect(response.status(), await response.text()).toBe(204);
+      try {
+        const response = await credential.page.request.delete(
+          `/api/auth/credentials/${credential.id}`,
+          { headers: credential.headers },
+        );
+        if (response.status() !== 204) {
+          cleanupFailures.push(
+            `credential ${credential.id}: ${response.status()} ${await response.text()}`,
+          );
+        }
+      } catch (reason) {
+        cleanupFailures.push(
+          `credential ${credential.id}: ${reason instanceof Error ? reason.message : String(reason)}`,
+        );
+      }
     }
-    await Promise.all(
-      copies.map((path) => rm(path, { recursive: true, force: true })),
-    );
+    for (const path of copies) {
+      try {
+        await rm(path, { recursive: true, force: true });
+      } catch (reason) {
+        cleanupFailures.push(
+          `clone ${path}: ${reason instanceof Error ? reason.message : String(reason)}`,
+        );
+      }
+    }
+    expect(cleanupFailures, "adoption journey cleanup failures").toEqual([]);
   }
 });
