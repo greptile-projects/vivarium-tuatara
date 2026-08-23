@@ -14,6 +14,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 )
 
 var (
@@ -92,10 +94,8 @@ type ConflictContext struct {
 	Checkpoints       []ConflictCheckpoint    `json:"checkpoints"`
 }
 type ConflictRequiredCheck struct {
-	Name             string            `json:"name"`
-	Command          string            `json:"command"`
-	WorkingDirectory string            `json:"working_directory,omitempty"`
-	Environment      map[string]string `json:"environment,omitempty"`
+	Name       string               `json:"name"`
+	Definition checkruns.Definition `json:"definition"`
 }
 
 // ConflictCheckpoint is an immutable verification of one assembled result.
@@ -115,20 +115,22 @@ type ConflictCheckpoint struct {
 	CreatedAt          time.Time                    `json:"created_at"`
 }
 type ConflictCriterion struct {
-	ID            string                       `json:"id"`
-	Kind          string                       `json:"kind"`
-	Name          string                       `json:"name"`
-	Origin        string                       `json:"origin"`
-	Command       string                       `json:"command"`
-	ExactCriteria []string                     `json:"exact_criteria"`
-	Coverage      []string                     `json:"coverage"`
-	OwnerIDs      []string                     `json:"owner_ids"`
-	State         string                       `json:"state"`
-	ExitCode      int                          `json:"exit_code"`
-	Logs          string                       `json:"logs,omitempty"`
-	Artifacts     []ConflictCheckpointArtifact `json:"artifacts"`
-	Cost          float64                      `json:"cost"`
-	InvalidatedBy []string                     `json:"invalidated_by,omitempty"`
+	ID              string                       `json:"id"`
+	Kind            string                       `json:"kind"`
+	Name            string                       `json:"name"`
+	Origin          string                       `json:"origin"`
+	Command         string                       `json:"command"`
+	ExactCriteria   []string                     `json:"exact_criteria"`
+	Coverage        []string                     `json:"coverage"`
+	OwnerIDs        []string                     `json:"owner_ids"`
+	State           string                       `json:"state"`
+	ExitCode        int                          `json:"exit_code"`
+	Logs            string                       `json:"logs,omitempty"`
+	Artifacts       []ConflictCheckpointArtifact `json:"artifacts"`
+	Cost            float64                      `json:"cost"`
+	InvalidatedBy   []string                     `json:"invalidated_by,omitempty"`
+	CheckRunID      string                       `json:"check_run_id,omitempty"`
+	CheckRunScopeID string                       `json:"check_run_scope_id,omitempty"`
 }
 type ConflictCheckpointArtifact struct {
 	Path   string `json:"path"`

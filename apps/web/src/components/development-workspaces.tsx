@@ -614,12 +614,20 @@ function ConflictVerification({
   ];
   const requiredChecks =
     context.affected_checks.length > 0 ? context.affected_checks : ["required"];
+  const requiredCommands = new Map(
+    (context.required_checks ?? []).map((check) => [
+      check.name,
+      check.definition.command,
+    ]),
+  );
   const example = [
     ...requiredChecks.map((name) => ({
       kind: "required_check",
       name,
       origin: "both",
-      command: "replace with the repository-defined command",
+      command:
+        requiredCommands.get(name) ??
+        "replace with the repository-defined command",
       exact_criteria: [`${name} remains satisfied`],
       coverage: [path],
       owner_ids: [owner],

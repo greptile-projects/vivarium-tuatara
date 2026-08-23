@@ -26,7 +26,11 @@ import (
 
 // registerConflictWorkspaceRoutes turns read-only conflict evidence into a
 // shared environment without treating that evidence as repository authority.
-func registerConflictWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, pulls *pullrequests.Store, workspaceStore *workspaces.Store, authStore *auth.Store, organizations *organizations.Store) {
+func registerConflictWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, pulls *pullrequests.Store, workspaceStore *workspaces.Store, authStore *auth.Store, organizations *organizations.Store, checkStores ...*checkruns.Store) {
+	var checkStore *checkruns.Store
+	if len(checkStores) > 0 {
+		checkStore = checkStores[0]
+	}
 	mux.HandleFunc("POST /repositories/{id}/pulls/{pull_id}/conflict-workspaces", func(w http.ResponseWriter, r *http.Request) {
 		actor, owner, ok := authorizeRepositoryParticipant(w, r, catalog, authStore, r.PathValue("id"), "repositories:write")
 		if !ok {
@@ -157,7 +161,7 @@ func registerConflictWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, cat
 					writeAPIError(w, 422, "conflict_required_checks_unavailable", "the exact target revision does not define every affected required check")
 					return
 				}
-				context.RequiredChecks = append(context.RequiredChecks, workspaces.ConflictRequiredCheck{Name: name, Command: definition.Command, WorkingDirectory: definition.WorkingDirectory, Environment: definition.Environment})
+				context.RequiredChecks = append(context.RequiredChecks, workspaces.ConflictRequiredCheck{Name: name, Definition: definition})
 			}
 		}
 		role := "collaborator"
@@ -457,6 +461,7 @@ func registerConflictWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, cat
 		}
 		allowedKinds := []string{"required_check", "reproduction", "contract", "schema", "preview_acceptance", "conflict_test"}
 		criteria := make([]workspaces.ConflictCriterion, 0, len(in.Criteria))
+		checkRunScopeID := fmt.Sprintf("%s-%d", item.ID, in.ExpectedVersion)
 		seenKinds, seenRequired := map[string]bool{}, map[string]bool{}
 		requiredDefinitions := map[string]workspaces.ConflictRequiredCheck{}
 		for _, definition := range item.ConflictContext.RequiredChecks {
@@ -472,7 +477,7 @@ func registerConflictWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, cat
 				}
 				seenRequired[requested.Name] = true
 				definition, found := requiredDefinitions[requested.Name]
-				if !found || requested.Command != definition.Command {
+				if !found || requested.Command != definition.Definition.Command {
 					writeAPIError(w, 422, "conflict_checkpoint_required_check_changed", "required-check commands must match the immutable repository definition")
 					return
 				}
@@ -499,6 +504,21 @@ func registerConflictWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, cat
 			writeAPIError(w, 422, "conflict_candidate_invalid", "workspace must form a clean immutable Git candidate before evidence can be retained")
 			return
 		}
+		var checkRepositoryPath string
+		var removeCheckRepository func()
+		if len(seenRequired) > 0 {
+			if checkStore == nil {
+				writeAPIError(w, 503, "conflict_check_executor_unavailable", "the repository check executor is unavailable")
+				return
+			}
+			var prepareErr error
+			checkRepositoryPath, removeCheckRepository, prepareErr = prepareConflictCheckRepository(catalog, item, actor, candidateParts[0])
+			if prepareErr != nil {
+				writeAPIError(w, 503, "conflict_check_candidate_unavailable", "the immutable candidate could not be prepared for isolated checks")
+				return
+			}
+			defer removeCheckRepository()
+		}
 		dependencyBody, dependencyErr := workspaceAuthorizedExec(catalog, item, actor, false, time.Minute, "/workspace", nil, "git", "show", candidateParts[0]+":"+packages.InventoryConfigPath)
 		if dependencyErr != nil {
 			dependencyBody = []byte("absent")
@@ -522,28 +542,46 @@ func registerConflictWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, cat
 				}
 			}
 			started := time.Now()
-			workingDirectory, environment := "/workspace", []string{}
 			if requested.Kind == "required_check" {
-				definition := requiredDefinitions[requested.Name]
-				if definition.WorkingDirectory != "" {
-					var valid bool
-					workingDirectory, valid = workspacePath(w, definition.WorkingDirectory)
-					if !valid {
-						return
+				definition := requiredDefinitions[requested.Name].Definition
+				runs, createErr := checkStore.CreateRequested(item.RepositoryID, checkRunScopeID, candidateParts[0], []checkruns.Definition{definition}, actor.UserID)
+				if createErr != nil || len(runs) != 1 {
+					writeAPIError(w, 503, "conflict_check_failed", "the isolated required check could not be created")
+					return
+				}
+				checkStore.Execute(runs[0], checkRepositoryPath)
+				run, getErr := checkStore.Get(item.RepositoryID, checkRunScopeID, runs[0].ID)
+				if getErr != nil {
+					writeAPIError(w, 503, "conflict_check_failed", "the isolated required check result is unavailable")
+					return
+				}
+				events, _ := checkStore.Events(item.RepositoryID, checkRunScopeID, run.ID, 0)
+				var logs strings.Builder
+				for _, event := range events {
+					if event.Stream != "" && event.Message != "" {
+						logs.WriteString(event.Stream + ": " + event.Message + "\n")
 					}
 				}
-				keys := make([]string, 0, len(definition.Environment))
-				for key := range definition.Environment {
-					keys = append(keys, key)
+				exitCode := 1
+				if run.ExitCode != nil {
+					exitCode = *run.ExitCode
 				}
-				slices.Sort(keys)
-				for _, key := range keys {
-					environment = append(environment, key+"="+definition.Environment[key])
+				state := "failed"
+				if run.State == "succeeded" {
+					state = "passed"
 				}
+				artifacts := make([]workspaces.ConflictCheckpointArtifact, 0, len(run.Artifacts))
+				for _, artifact := range run.Artifacts {
+					artifacts = append(artifacts, workspaces.ConflictCheckpointArtifact{Path: artifact.Path, SHA256: artifact.SHA256, Size: artifact.Size})
+				}
+				logText := logs.String()
+				if len(logText) > workspaceOutputLimit {
+					logText = logText[:workspaceOutputLimit]
+				}
+				criteria = append(criteria, workspaces.ConflictCriterion{Kind: requested.Kind, Name: requested.Name, Origin: requested.Origin, Command: definition.Command, ExactCriteria: requested.ExactCriteria, Coverage: requested.Coverage, OwnerIDs: requested.OwnerIDs, State: state, ExitCode: exitCode, Logs: logText, Artifacts: artifacts, Cost: requested.Cost + time.Since(started).Seconds()/3600, CheckRunID: run.ID, CheckRunScopeID: checkRunScopeID})
+				continue
 			}
-			arguments := []string{"sh", "-c", "candidate=$1; workdir=$2; command=$3; shift 3; git reset --hard --quiet \"$candidate\" && git clean -fdx --quiet && cd -- \"$workdir\" && env \"$@\" sh -lc \"$command\"", "sh", candidateParts[0], workingDirectory, requested.Command}
-			arguments = append(arguments, environment...)
-			output, runErr := workspaceAuthorizedExec(catalog, item, actor, true, 30*time.Minute, "/workspace", nil, arguments...)
+			output, runErr := workspaceAuthorizedExec(catalog, item, actor, true, 30*time.Minute, "/workspace", nil, "sh", "-c", "git reset --hard --quiet \"$1\" && git clean -fdx --quiet && sh -lc \"$2\"", "sh", candidateParts[0], requested.Command)
 			if len(output) > workspaceOutputLimit {
 				output = output[:workspaceOutputLimit]
 			}
@@ -639,6 +677,29 @@ func currentConflictPolicy(store *workspaces.Store, item workspaces.Workspace) (
 		return workspaces.Policy{}, err
 	}
 	return workspaces.Constrain(organizationPolicy, policy), nil
+}
+
+func prepareConflictCheckRepository(catalog *repositories.Store, item workspaces.Workspace, actor auth.Credential, candidate string) (string, func(), error) {
+	bundle, err := workspaceAuthorizedExec(catalog, item, actor, true, time.Minute, "/workspace", nil, "sh", "-c", "git update-ref refs/vivarium/checkpoint \"$1\" && git bundle create - refs/vivarium/checkpoint; status=$?; git update-ref -d refs/vivarium/checkpoint; exit $status", "sh", candidate)
+	if err != nil {
+		return "", func() {}, err
+	}
+	directory, err := os.MkdirTemp("", "vivarium-conflict-check-*")
+	if err != nil {
+		return "", func() {}, err
+	}
+	cleanup := func() { _ = os.RemoveAll(directory) }
+	bundlePath := filepath.Join(directory, "candidate.bundle")
+	if err = os.WriteFile(bundlePath, bundle, 0600); err != nil {
+		cleanup()
+		return "", func() {}, err
+	}
+	repositoryPath := filepath.Join(directory, "repository.git")
+	if output, cloneErr := exec.Command("git", "clone", "--bare", bundlePath, repositoryPath).CombinedOutput(); cloneErr != nil {
+		cleanup()
+		return "", func() {}, fmt.Errorf("clone candidate bundle: %w: %s", cloneErr, strings.TrimSpace(string(output)))
+	}
+	return repositoryPath, cleanup, nil
 }
 
 func conflictAuthorship(actor auth.Credential) workspaces.ConflictAuthorship {

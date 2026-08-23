@@ -1485,9 +1485,17 @@ export type DevelopmentWorkspace = {
     affected_checks: string[];
     required_checks: {
       name: string;
-      command: string;
-      working_directory?: string;
-      environment?: Record<string, string>;
+      definition: {
+        name: string;
+        image: string;
+        command: string;
+        working_directory?: string;
+        environment?: Record<string, string>;
+        timeout_seconds?: number;
+        cpus?: number;
+        memory_mb?: number;
+        storage_mb?: number;
+      };
     }[];
     incomplete: string[];
     publication_targets: {
@@ -1568,6 +1576,8 @@ export type DevelopmentWorkspace = {
         artifacts: { path: string; sha256: string; size: number }[];
         cost: number;
         invalidated_by?: string[];
+        check_run_id?: string;
+        check_run_scope_id?: string;
       }[];
       decisions: {
         criterion_id: string;

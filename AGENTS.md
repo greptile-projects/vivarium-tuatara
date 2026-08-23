@@ -8,6 +8,8 @@ preview acceptance, and repository conflict tests with exact commands, criteria,
 costs, and affected-owner decisions. Each criterion runs from a clean reset of that candidate; successor
 checkpoints append selective source/target/dependency/policy staleness without deleting historical proof or
 granting publication authority. Required-check definitions are frozen from the exact target revision;
+required-check checkpoint criteria run through the same disposable read-only container executor and full image,
+resource, timeout, input, output, environment, and candidate-identity contract as ordinary check runs;
 dependency-manifest and effective-policy revisions are server-derived, and persistence atomically rechecks the
 initiator's live command-control version and running workspace state.
 
