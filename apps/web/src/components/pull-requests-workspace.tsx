@@ -14,6 +14,7 @@ import {
   api,
   type Branch,
   type Credential,
+  type ConflictAnalysis,
   type FileChange,
   type IntegrationCandidate,
   type MergeReadiness,
@@ -540,6 +541,8 @@ export function PullRequestDetail({
   const [reviews, setReviews] = useState<PullRequestReview[]>([]);
   const [federationEvents, setFederationEvents] = useState<FederationEvent[]>([]);
   const [readiness, setReadiness] = useState<MergeReadiness | null>(null);
+  const [conflicts, setConflicts] = useState<ConflictAnalysis | null>(null);
+  const [conflictError, setConflictError] = useState("");
   const [candidates, setCandidates] = useState<IntegrationCandidate[]>([]);
   const [candidateError, setCandidateError] = useState("");
   const [proposal, setProposal] = useState<Proposal | null>(null);
@@ -615,6 +618,12 @@ export function PullRequestDetail({
           : null;
       if (!active()) return false;
       setReadiness(report);
+      const conflictReport = await api<ConflictAnalysis>(`${base}/conflict-analysis`, {}, token)
+        .then((analysis) => ({ analysis, error: "" }))
+        .catch(() => ({ analysis: null, error: "Conflict evidence is temporarily unavailable." }));
+      if (!active()) return false;
+      setConflicts(conflictReport.analysis);
+      setConflictError(conflictReport.error);
       const ids = [
         ...new Set([
           item.author_id,
@@ -647,6 +656,17 @@ export function PullRequestDetail({
   useEffect(() => {
     void Promise.resolve().then(load);
   }, [load]);
+
+  async function inspectCandidate(candidateID?: string) {
+    setConflictError("");
+    try {
+      const query = candidateID ? `?candidate_id=${encodeURIComponent(candidateID)}` : "";
+      setConflicts(await api<ConflictAnalysis>(`/repositories/${repositoryID}/pulls/${pullRequestID}/conflict-analysis${query}`, {}, token));
+      document.getElementById("conflict-evidence")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    } catch (reason) {
+      setConflictError(errorMessage(reason, "Conflict evidence could not be loaded."));
+    }
+  }
 
   async function comment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1109,7 +1129,7 @@ export function PullRequestDetail({
             <section id="integration-candidates" className="scroll-mt-24 space-y-3">
               <div className="flex items-baseline justify-between gap-3"><h2 className="text-lg font-semibold">Integration candidates</h2><span className="text-xs text-[var(--muted)]">Prospective merge evidence</span></div>
               {candidateError && <p role="alert" className="rounded-lg bg-[var(--danger-soft)] p-3 text-sm text-[var(--danger)]">{candidateError}</p>}
-              {[...candidates].reverse().map((candidate) => <Card key={candidate.id} className="p-5"><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="font-semibold">Candidate <code>{short(candidate.commit_id)}</code></p><p className="mt-1 text-xs text-[var(--muted)]">Source <code>{short(candidate.source_commit_id)}</code> combined with base <code>{short(candidate.base_commit_id)}</code> · {formatDate(candidate.created_at)}</p></div><Badge tone={candidate.state === "passed" ? "success" : candidate.state === "failed" ? "danger" : "warning"}>{candidate.state}</Badge></div><div className="mt-4 grid gap-2 sm:grid-cols-3"><div className="rounded-lg bg-[var(--canvas)] p-3"><p className="text-xs text-[var(--muted)]">Base</p><code className="text-xs">{candidate.base_commit_id}</code></div><div className="rounded-lg bg-[var(--canvas)] p-3"><p className="text-xs text-[var(--muted)]">Pull revision</p><code className="text-xs">{candidate.source_commit_id}</code></div><div className="rounded-lg bg-[var(--canvas)] p-3"><p className="text-xs text-[var(--muted)]">Prospective result</p><code className="text-xs">{candidate.commit_id}</code></div></div><p className="mt-4 text-xs text-[var(--muted)]">{candidate.checks.length} candidate {candidate.checks.length === 1 ? "check" : "checks"}; logs and artifacts are retained in Verification checks below.</p></Card>)}
+              {[...candidates].reverse().map((candidate) => <Card key={candidate.id} className="p-5"><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="font-semibold">Candidate <code>{short(candidate.commit_id)}</code></p><p className="mt-1 text-xs text-[var(--muted)]">Source <code>{short(candidate.source_commit_id)}</code> combined with base <code>{short(candidate.base_commit_id)}</code> · {formatDate(candidate.created_at)}</p></div><Badge tone={candidate.state === "passed" ? "success" : candidate.state === "failed" ? "danger" : "warning"}>{candidate.state}</Badge></div><div className="mt-4 grid gap-2 sm:grid-cols-3"><div className="rounded-lg bg-[var(--canvas)] p-3"><p className="text-xs text-[var(--muted)]">Base</p><code className="text-xs">{candidate.base_commit_id}</code></div><div className="rounded-lg bg-[var(--canvas)] p-3"><p className="text-xs text-[var(--muted)]">Pull revision</p><code className="text-xs">{candidate.source_commit_id}</code></div><div className="rounded-lg bg-[var(--canvas)] p-3"><p className="text-xs text-[var(--muted)]">Prospective result</p><code className="text-xs">{candidate.commit_id}</code></div></div><div className="mt-4 flex flex-wrap items-center justify-between gap-3"><p className="text-xs text-[var(--muted)]">{candidate.checks.length} candidate {candidate.checks.length === 1 ? "check" : "checks"}; logs and artifacts are retained in Verification checks below.</p><Button type="button" variant="secondary" onClick={() => void inspectCandidate(candidate.id)}>Explain collisions</Button></div></Card>)}
             </section>
           )}
           <PullRequestChecks
@@ -1224,6 +1244,21 @@ export function PullRequestDetail({
             participant={participant}
             open={pull.status === "open"}
           />
+          {(conflicts || conflictError) && <Card id="conflict-evidence" className="scroll-mt-24 p-5">
+            <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="font-semibold">Conflict evidence</h2>{conflicts && <Badge tone={conflicts.status === "current" ? "success" : "warning"}>{conflicts.status}</Badge>}</div>
+            {conflictError && <p role="alert" className="mt-3 text-sm text-[var(--danger)]">{conflictError}</p>}
+            {conflicts && <>
+              <p className="mt-2 text-sm leading-6 text-[var(--muted)]">Compared exact revisions from merge base <code title={conflicts.base_commit_id}>{short(conflicts.base_commit_id)}</code>. This analysis does not change either branch.</p>
+              {conflicts.candidate_id && <p className="mt-2 text-xs">Retained queue candidate <code>{short(conflicts.candidate_id)}</code></p>}
+              {[...conflicts.stale_reasons, ...conflicts.incomplete].map((reason) => <p key={reason} className="mt-2 text-xs text-[var(--warning)]">{reason}</p>)}
+              <div className="mt-4 grid gap-3">
+                {[conflicts.source, conflicts.target].map((side, index) => <div key={`${side.branch}-${side.commit_id}`} className="rounded-lg bg-[var(--canvas)] p-3 text-xs"><p className="font-semibold">{index === 0 ? "Source intention" : "Target intention"} · <code>{side.branch}</code></p><p className="mt-1 text-[var(--muted)]" title={side.commit_id}>{short(side.commit_id)}{side.current_commit_id && side.current_commit_id !== side.commit_id ? ` · now ${short(side.current_commit_id)}` : ""}</p><p className="mt-1">Owners: {side.owner_ids.map(short).join(", ") || "not identified"}</p>{side.pull_requests.map((linked) => <div key={linked.id} className="mt-2 border-t border-[var(--line)] pt-2"><Link className="font-medium text-[var(--brand)] hover:underline" href={`/pulls/${repositoryID}/${linked.id}`}>{linked.title}</Link><p className="text-[var(--muted)]">author {short(linked.author_id)}{linked.task_id ? ` · task ${short(linked.task_id)}` : ""}{linked.proposal_id ? ` · proposal ${short(linked.proposal_id)}` : ""}</p><p>{linked.discussion_ids.length} discussion item(s) · {linked.decision_ids.length} decision(s)</p>{linked.acceptance_criteria.map((criterion) => <p key={criterion} className="mt-1">Acceptance: {criterion}</p>)}</div>)}</div>)}
+              </div>
+              <div className="mt-4 space-y-3"><p className="text-xs font-semibold text-[var(--muted)]">Colliding files, symbols, and contracts</p>{conflicts.files.length === 0 ? <p className="text-sm text-[var(--muted)]">No overlapping textual, structural, or detected semantic changes.</p> : conflicts.files.map((file) => <div key={file.path} className="rounded-lg border border-[var(--line)] p-3 text-xs"><div className="flex flex-wrap items-center gap-2"><code className="font-semibold">{file.path}</code>{file.kinds.map((kind) => <Badge key={kind} tone={kind === "textual" ? "danger" : "warning"}>{kind}</Badge>)}</div><p className="mt-2 text-[var(--muted)]">source {file.source_change} · target {file.target_change}{file.schema_or_interface ? " · schema/interface surface" : ""}</p>{file.symbols.length > 0 && <p className="mt-1">Shared changed symbols: {file.symbols.join(", ")}</p>}</div>)}</div>
+              {conflicts.affected_checks.length > 0 && <p className="mt-4 text-xs"><strong>Affected checks:</strong> {conflicts.affected_checks.map((check) => check.name).join(", ")}</p>}
+              {conflicts.candidate_id && <Button type="button" variant="secondary" className="mt-4" onClick={() => void inspectCandidate()}>Return to current revisions</Button>}
+            </>}
+          </Card>}
           {pull.status === "merged" ? (
             <Card className="border-[var(--brand)] p-5">
               <Badge tone="success">Merged</Badge>

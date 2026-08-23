@@ -1853,6 +1853,20 @@ ready without being told they may update the maintained branch. Conflict
 detection redirects Git's calculated merge objects into temporary storage, so
 the endpoint never changes repository objects or references.
 
+`GET /repositories/{id}/pulls/{pull_id}/conflict-analysis` returns collaborative
+evidence for the pull's exact source and target revisions. An optional
+`candidate_id` selects that retained integration candidate's immutable source
+and base. `GET /repositories/{id}/conflict-analysis?source_branch={source}&target_branch={target}`
+provides the same read-only analysis for selected branch tips. Responses include
+`base_commit_id`, exact `source` and `target` sides, `status` (`current`, `stale`,
+or `incomplete`), reasons, colliding files and declared symbols, separate
+`textual`, `structural`, and `semantic` classifications, schema/interface
+markers, and affected target-branch checks. Side provenance includes matching
+pull, task, proposal, discussion, review-decision, acceptance-criteria, author,
+and owner identifiers. Semantic items identify their independent detector and
+do not claim that Git's textual merge is blocked. These endpoints never create
+objects, update references, or grant resolution authority.
+
 `POST /repositories/{id}/pulls/{pull_id}/merge` applies a ready request and is
 restricted to the repository owner with `repositories:write`. A request that
 is no longer ready returns `409 pull_request_not_ready`; merge revalidates live

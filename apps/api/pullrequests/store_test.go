@@ -78,6 +78,51 @@ func (q queueRequirements) IntegrationQueuePolicy(string, string) (repositories.
 	return q.policy, nil
 }
 
+func TestConflictAnalysisExplainsExactTextualStructuralAndSemanticCollision(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	repository, _ := gitStore.Create(testID('1'))
+	writeFileTree := func(content string) storage.ObjectID {
+		blob, err := repository.WriteObject(storage.BlobObject, []byte(content))
+		if err != nil {
+			t.Fatal(err)
+		}
+		entry, _ := hex.DecodeString(string(blob))
+		tree, err := repository.WriteObject(storage.TreeObject, append(append([]byte("100644 schema.go\x00"), entry...), []byte{}...))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tree
+	}
+	baseTree := writeFileTree("type Contract interface {\n\tApply(string) error\n}\n")
+	sourceTree := writeFileTree("type Contract interface {\n\tApply(string, bool) error\n}\n")
+	targetTree := writeFileTree("type Contract interface {\n\tApply([]byte) error\n}\n")
+	base := writeCommit(t, repository, baseTree, "base")
+	source := writeCommitWithParents(t, repository, sourceTree, []storage.ObjectID{base}, "source")
+	target := writeCommitWithParents(t, repository, targetTree, []storage.ObjectID{base}, "target")
+	_ = repository.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(target)})
+	_ = repository.CreateReference(storage.Reference{Name: "refs/heads/topic", Target: string(source)})
+	store, _ := New(t.TempDir(), gitStore)
+	store.ConfigureRequiredChecks(queueRequirements{policy: repositories.IntegrationQueuePolicy{RequiredChecks: []string{"contract"}}}, nil)
+	pull, err := store.Create(repository.ID(), testID('2'), "Change contract", "Preserve typed clients.", "topic", "main", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	analysis, err := store.AnalyzePullConflict(repository.ID(), pull.ID, "", testID('3'))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if analysis.Status != "current" || analysis.BaseCommitID != string(base) || len(analysis.Files) != 1 || strings.Join(analysis.Files[0].Kinds, ",") != "semantic,structural,textual" || len(analysis.Semantic) != 1 || analysis.Semantic[0].Symbol != "Apply" || len(analysis.AffectedChecks) != 1 || analysis.AffectedChecks[0].Name != "contract" {
+		t.Fatalf("analysis = %#v", analysis)
+	}
+	advancedTree := writeFileTree("type Contract interface {\n\tApply(int) error\n}\n")
+	advanced := writeCommitWithParents(t, repository, advancedTree, []storage.ObjectID{source}, "advanced")
+	_ = repository.UpdateReference(storage.Reference{Name: "refs/heads/topic", Target: string(advanced)})
+	analysis, err = store.AnalyzePullConflict(repository.ID(), pull.ID, "", testID('3'))
+	if err != nil || analysis.Status != "stale" || len(analysis.StaleReasons) != 1 {
+		t.Fatalf("stale analysis = %#v, %v", analysis, err)
+	}
+}
+
 func TestCreateSnapshotsBranchesAndListsByRepository(t *testing.T) {
 	gitStore, _ := storage.New(t.TempDir())
 	repository, _ := gitStore.Create(testID('1'))
