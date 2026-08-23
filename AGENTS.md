@@ -2,6 +2,13 @@
 
 Guidance for coding agents working in this repository.
 
+Conflict reconciliation resolution checkpoints in the workspace ledger assemble an immutable unreferenced
+two-parent candidate and retain all affected required checks, reproductions, contract/schema scenarios,
+preview acceptance, and repository conflict tests with exact commands, criteria, coverage, logs, artifacts,
+costs, and affected-owner decisions. Each criterion runs from a clean reset of that candidate; successor
+checkpoints append selective source/target/dependency/policy staleness without deleting historical proof or
+granting publication authority.
+
 Agent intent at `/repositories/{id}/agent-projects` and the repository `/agents` workspace retains
 immutable reviewed prompts, instructions, tools, models, knowledge, memory/data terms, tasks, outputs,
 prohibitions, budgets, owners, escalation, and deployment boundaries beneath `$AGENT_PROJECT_STORAGE_ROOT`

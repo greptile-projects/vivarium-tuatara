@@ -260,6 +260,12 @@ export function DevelopmentWorkspaces({
                   onWorkspace={(updated) => setItems([updated])}
                 />
               )}
+              {item.conflict_context && (
+                <ConflictVerification
+                  workspace={item}
+                  onWorkspace={(updated) => setItems([updated])}
+                />
+              )}
               <p className="mt-5 text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">
                 Setup evidence
               </p>
@@ -584,6 +590,255 @@ type Comparison = {
   target: ComparisonSide;
   proposed: ComparisonSide;
 };
+
+function ConflictVerification({
+  workspace,
+  onWorkspace,
+}: {
+  workspace: DevelopmentWorkspace;
+  onWorkspace: (workspace: DevelopmentWorkspace) => void;
+}) {
+  const { token, user } = useAuth();
+  const context = workspace.conflict_context!;
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState("");
+  const path = context.files[0]?.path ?? "affected/path";
+  const owner =
+    context.source.owner_ids[0] ?? context.target.owner_ids[0] ?? "owner-id";
+  const kinds = [
+    "reproduction",
+    "contract",
+    "schema",
+    "preview_acceptance",
+    "conflict_test",
+  ];
+  const requiredChecks =
+    context.affected_checks.length > 0 ? context.affected_checks : ["required"];
+  const example = [
+    ...requiredChecks.map((name) => ({
+      kind: "required_check",
+      name,
+      origin: "both",
+      command: "replace with the repository-defined command",
+      exact_criteria: [`${name} remains satisfied`],
+      coverage: [path],
+      owner_ids: [owner],
+      artifacts: [],
+      cost: 0,
+    })),
+    ...kinds.map((kind) => ({
+      kind,
+      name: kind.replaceAll("_", " "),
+      origin: "both",
+      command: "replace with the repository-defined command",
+      exact_criteria: [`${kind} remains satisfied`],
+      coverage: [path],
+      owner_ids: [owner],
+      artifacts: [],
+      cost: 0,
+    })),
+  ];
+  async function checkpoint(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!token) return;
+    const form = event.currentTarget,
+      data = new FormData(form);
+    setPending(true);
+    try {
+      const criteria = JSON.parse(String(data.get("criteria")));
+      onWorkspace(
+        await api<DevelopmentWorkspace>(
+          `/workspaces/${workspace.id}/conflict-checkpoints`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              expected_version: context.version,
+              dependency_revision: String(data.get("dependency_revision")),
+              policy_revision: String(data.get("policy_revision")),
+              criteria,
+            }),
+          },
+          token,
+        ),
+      );
+      setError("");
+    } catch (reason) {
+      setError(
+        reason instanceof APIError
+          ? reason.message
+          : "Checkpoint criteria must be valid JSON.",
+      );
+    } finally {
+      setPending(false);
+    }
+  }
+  async function decide(
+    checkpointID: string,
+    criterionID: string,
+    decision: "accepted" | "rejected",
+  ) {
+    if (!token) return;
+    const rationale = window.prompt(
+      `${decision === "accepted" ? "Acceptance" : "Rejection"} rationale`,
+    );
+    if (!rationale) return;
+    setPending(true);
+    try {
+      onWorkspace(
+        await api<DevelopmentWorkspace>(
+          `/workspaces/${workspace.id}/conflict-checkpoints/${checkpointID}/criteria/${criterionID}/decision`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              expected_version: context.version,
+              decision,
+              rationale,
+            }),
+          },
+          token,
+        ),
+      );
+      setError("");
+    } catch (reason) {
+      setError(
+        reason instanceof APIError
+          ? reason.message
+          : "Decision could not be retained.",
+      );
+    } finally {
+      setPending(false);
+    }
+  }
+  return (
+    <section className="mt-5 rounded-xl border border-[var(--line)] p-4">
+      <h3 className="font-semibold">Outcome verification checkpoints</h3>
+      <p className="mt-1 text-sm text-[var(--muted)]">
+        Assemble an immutable two-parent candidate and evaluate the promises
+        accepted from both contributions. Commands execute only with live
+        workspace control.
+      </p>
+      {(context.checkpoints ?? []).map((checkpoint) => (
+        <article
+          key={checkpoint.id}
+          className="mt-3 rounded-lg bg-[var(--canvas)] p-3 text-sm"
+        >
+          <p className="font-mono text-xs">
+            candidate {short(checkpoint.candidate_commit_id)} · tree{" "}
+            {short(checkpoint.candidate_tree_id)}
+          </p>
+          <p className="mt-1 text-xs text-[var(--muted)]">
+            source {short(checkpoint.source_revision)} · target{" "}
+            {short(checkpoint.target_revision)} ·{" "}
+            {new Date(checkpoint.created_at).toLocaleString()}
+          </p>
+          <ul className="mt-2 space-y-2">
+            {checkpoint.criteria.map((criterion) => {
+              const decision = checkpoint.decisions.find(
+                (value) =>
+                  value.criterion_id === criterion.id &&
+                  value.owner_id === user?.id,
+              );
+              return (
+                <li
+                  key={criterion.id}
+                  className="rounded border border-[var(--line)] p-2"
+                >
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge
+                      tone={criterion.state === "passed" ? "success" : "danger"}
+                    >
+                      {criterion.state}
+                    </Badge>
+                    <strong>{criterion.name}</strong>
+                    <span className="text-xs text-[var(--muted)]">
+                      {criterion.kind.replaceAll("_", " ")} · {criterion.origin}{" "}
+                      · cost {criterion.cost.toFixed(4)}
+                    </span>
+                    {criterion.invalidated_by?.length ? (
+                      <Badge tone="warning">
+                        stale: {criterion.invalidated_by.join(", ")}
+                      </Badge>
+                    ) : null}
+                  </div>
+                  <code className="mt-2 block text-xs">
+                    {criterion.command}
+                  </code>
+                  <p className="mt-1 text-xs">
+                    Criteria: {criterion.exact_criteria.join("; ")} · Coverage:{" "}
+                    {criterion.coverage.join(", ")}
+                  </p>
+                  {criterion.logs && (
+                    <pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap text-xs text-[var(--muted)]">
+                      {criterion.logs}
+                    </pre>
+                  )}
+                  {criterion.artifacts.map((artifact) => (
+                    <p key={artifact.sha256} className="mt-1 font-mono text-xs">
+                      {artifact.path} · sha256:{short(artifact.sha256)} ·{" "}
+                      {artifact.size} bytes
+                    </p>
+                  ))}
+                  {decision ? (
+                    <p className="mt-2 text-xs">
+                      Your decision: {decision.decision} — {decision.rationale}
+                    </p>
+                  ) : !criterion.invalidated_by?.length ? (
+                    criterion.owner_ids.includes(user?.id ?? "") && (
+                      <div className="mt-2 flex gap-2">
+                        <Button
+                          disabled={pending}
+                          onClick={() =>
+                            void decide(checkpoint.id, criterion.id, "accepted")
+                          }
+                        >
+                          Accept behavior
+                        </Button>
+                        <Button
+                          disabled={pending}
+                          onClick={() =>
+                            void decide(checkpoint.id, criterion.id, "rejected")
+                          }
+                        >
+                          Reject behavior
+                        </Button>
+                      </div>
+                    )
+                  ) : null}
+                </li>
+              );
+            })}
+          </ul>
+        </article>
+      ))}
+      <form className="mt-4 grid gap-2" onSubmit={checkpoint}>
+        <input
+          className="input"
+          name="dependency_revision"
+          placeholder="Exact dependency revision (optional)"
+        />
+        <input
+          className="input"
+          name="policy_revision"
+          placeholder="Exact policy revision (optional)"
+        />
+        <textarea
+          className="input min-h-48 font-mono text-xs"
+          name="criteria"
+          defaultValue={JSON.stringify(example, null, 2)}
+          aria-label="Checkpoint criteria JSON"
+          required
+        />
+        <Button disabled={pending}>Assemble and run checkpoint</Button>
+      </form>
+      {error && (
+        <p role="alert" className="mt-2 text-sm text-[var(--danger)]">
+          {error}
+        </p>
+      )}
+    </section>
+  );
+}
+
 function ConflictMeaning({
   workspace,
   onWorkspace,

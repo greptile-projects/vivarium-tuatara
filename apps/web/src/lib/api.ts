@@ -1531,6 +1531,46 @@ export type DevelopmentWorkspace = {
       applied_at?: string;
       undone_at?: string;
     }[];
+    checkpoints: {
+      id: string;
+      candidate_commit_id: string;
+      candidate_tree_id: string;
+      source_revision: string;
+      target_revision: string;
+      dependency_revision?: string;
+      policy_revision?: string;
+      created_by: ConflictAuthorship;
+      created_at: string;
+      criteria: {
+        id: string;
+        kind:
+          | "required_check"
+          | "reproduction"
+          | "contract"
+          | "schema"
+          | "preview_acceptance"
+          | "conflict_test";
+        name: string;
+        origin: "source" | "target" | "both";
+        command: string;
+        exact_criteria: string[];
+        coverage: string[];
+        owner_ids: string[];
+        state: "passed" | "failed";
+        exit_code: number;
+        logs?: string;
+        artifacts: { path: string; sha256: string; size: number }[];
+        cost: number;
+        invalidated_by?: string[];
+      }[];
+      decisions: {
+        criterion_id: string;
+        owner_id: string;
+        decision: "accepted" | "rejected";
+        rationale: string;
+        created_at: string;
+      }[];
+    }[];
   };
   participants?: {
     principal_kind: "human" | "approved_agent";

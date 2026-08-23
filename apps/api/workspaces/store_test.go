@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -246,6 +247,35 @@ func TestConflictMeaningLedgerRetainsCASAuthorshipAndUndo(t *testing.T) {
 	}
 	if len(created.Changes) != 2 || created.Changes[0].SHA256 != digestContent("resolved") || created.Changes[1].SHA256 != digestContent("before") {
 		t.Fatalf("resolution provenance = %#v", created.Changes)
+	}
+}
+
+func TestConflictCheckpointRetainsExactEvidenceAndAffectedOwnerDecision(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := store.Create(Workspace{RepositoryID: "repo", CommitID: "target", CreatorID: "operator", ConflictContext: &ConflictContext{Source: ConflictRevision{CommitID: "source", OwnerIDs: []string{"source-owner"}}, Target: ConflictRevision{CommitID: "target", OwnerIDs: []string{"target-owner"}}, Files: []ConflictFileEvidence{{Path: "service.go"}}}}, []byte("definition"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkpoint := ConflictCheckpoint{CandidateCommitID: "candidate", CandidateTreeID: "tree", SourceRevision: "source", TargetRevision: "target", PolicyRevision: "policy-v1", CreatedBy: ConflictAuthorship{ActorID: "operator"}, Criteria: []ConflictCriterion{{Kind: "conflict_test", Name: "both retry contracts", Origin: "both", Command: "go test ./...", ExactCriteria: []string{"source and target retry semantics pass"}, Coverage: []string{"service.go"}, OwnerIDs: []string{"source-owner", "target-owner"}, State: "passed", Logs: "ok", Cost: 0.25, Artifacts: []ConflictCheckpointArtifact{{Path: "report.json", SHA256: strings.Repeat("a", 64), Size: 12}}}}}
+	created, err = store.AddConflictCheckpoint(created.ID, 1, checkpoint)
+	if err != nil || created.ConflictContext.Version != 2 || created.ConflictContext.Checkpoints[0].Criteria[0].Logs != "ok" {
+		t.Fatalf("checkpoint=%#v err=%v", created.ConflictContext, err)
+	}
+	criterion := created.ConflictContext.Checkpoints[0].Criteria[0]
+	created, err = store.DecideConflictCheckpoint(created.ID, created.ConflictContext.Checkpoints[0].ID, criterion.ID, 2, ConflictCheckpointDecision{OwnerID: "source-owner", Decision: "accepted", Rationale: "both accepted outcomes remain observable"})
+	if err != nil || created.ConflictContext.Checkpoints[0].Decisions[0].Decision != "accepted" {
+		t.Fatalf("decision=%#v err=%v", created.ConflictContext.Checkpoints[0].Decisions, err)
+	}
+	if _, err = store.DecideConflictCheckpoint(created.ID, created.ConflictContext.Checkpoints[0].ID, criterion.ID, 3, ConflictCheckpointDecision{OwnerID: "unaffected", Decision: "rejected"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("unaffected owner decision error=%v", err)
+	}
+	checkpoint.PolicyRevision = "policy-v2"
+	created, err = store.AddConflictCheckpoint(created.ID, 3, checkpoint)
+	if err != nil || !slices.Contains(created.ConflictContext.Checkpoints[0].Criteria[0].InvalidatedBy, "policy_revision") || len(created.ConflictContext.Checkpoints[0].Decisions) != 1 {
+		t.Fatalf("selective staleness=%#v err=%v", created.ConflictContext.Checkpoints, err)
 	}
 }
 
