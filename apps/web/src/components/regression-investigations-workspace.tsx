@@ -43,20 +43,101 @@ type Investigation = {
   }[];
   scenarios: Scenario[];
   attempts: Attempt[];
+  searches: Search[];
 };
-type ScenarioEnvironment = { image: string; working_directory: string; setup_command?: string; command: string; timeout_seconds: number; cpus: number; memory_mb: number; storage_mb: number };
+type SearchCandidate = {
+  kind: string;
+  repository_id: string;
+  revision: string;
+  parents: string[];
+  merge: boolean;
+  classification: string;
+  attempt_ids: string[];
+  excluded: boolean;
+  exclusion?: string;
+  selected: boolean;
+  subject?: string;
+  changed_paths: string[];
+  owner_ids: string[];
+  pull_request_ids: string[];
+};
+type Search = {
+  id: string;
+  version: number;
+  state: string;
+  scenario_id: string;
+  candidates: SearchCandidate[];
+  culprit_ranges: {
+    working_revision: string;
+    regressed_revision: string;
+    remaining: number;
+    confidence: number;
+    ambiguity?: string;
+  }[];
+  hypotheses: {
+    id: string;
+    actor_id: string;
+    claim: string;
+    candidate_revisions: string[];
+    evidence_ids: string[];
+    attempt_ids: string[];
+    confidence: string;
+  }[];
+  decisions: {
+    id: string;
+    actor_id: string;
+    kind: string;
+    revision?: string;
+    reason: string;
+  }[];
+};
+type ScenarioEnvironment = {
+  image: string;
+  working_directory: string;
+  setup_command?: string;
+  command: string;
+  timeout_seconds: number;
+  cpus: number;
+  memory_mb: number;
+  storage_mb: number;
+};
 type Scenario = {
   id: string;
   name: string;
   environment: ScenarioEnvironment;
   acceptance_criteria: string[];
-  environment_variants: { revision: string; environment: ScenarioEnvironment }[];
+  environment_variants: {
+    revision: string;
+    environment: ScenarioEnvironment;
+  }[];
 };
 type Attempt = {
-  id: string; scenario_id: string; target_kind: string; target_id?: string; revision?: string;
-  dependencies: { name: string; repository_id: string; revision: string; path: string; archive_sha256?: string }[]; classification: string; diagnostic?: string;
-  cost_compute_seconds: number; requested_by: string;
-  runs: { run_id?: string; state: string; exit_code?: number; failure?: string; output?: string; logs?: string; duration_ms: number; artifacts: { path: string; sha256: string; size: number }[] }[];
+  id: string;
+  scenario_id: string;
+  target_kind: string;
+  target_id?: string;
+  revision?: string;
+  dependencies: {
+    name: string;
+    repository_id: string;
+    revision: string;
+    path: string;
+    archive_sha256?: string;
+  }[];
+  classification: string;
+  diagnostic?: string;
+  cost_compute_seconds: number;
+  requested_by: string;
+  runs: {
+    run_id?: string;
+    state: string;
+    exit_code?: number;
+    failure?: string;
+    output?: string;
+    logs?: string;
+    duration_ms: number;
+    artifacts: { path: string; sha256: string; size: number }[];
+  }[];
 };
 const field =
   "rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm";
@@ -75,6 +156,7 @@ const normalized = (investigation: Investigation): Investigation => ({
   affected_environments: investigation.affected_environments ?? [],
   scenarios: investigation.scenarios ?? [],
   attempts: investigation.attempts ?? [],
+  searches: investigation.searches ?? [],
 });
 export function RegressionInvestigationsWorkspace({
   repositoryID,
@@ -87,6 +169,7 @@ export function RegressionInvestigationsWorkspace({
   const [error, setError] = useState("");
   const createRequestID = useRef(crypto.randomUUID());
   const attemptRequestIDs = useRef<Record<string, string>>({});
+  const searchRequestID = useRef(crypto.randomUUID());
   const load = useCallback(async () => {
     try {
       const x = await api<{ regression_investigations: Investigation[] }>(
@@ -211,20 +294,146 @@ export function RegressionInvestigationsWorkspace({
     const f = new FormData(e.currentTarget);
     try {
       const variantText = value(f, "environment_variants");
-      const out = await api<Investigation>(`/repositories/${repositoryID}/regression-investigations/${selected.id}/scenarios`, { method: "POST", body: JSON.stringify({ expected_version: selected.version, scenario: { name: value(f, "scenario_name"), environment: { image: value(f, "image"), working_directory: value(f, "working_directory") || ".", setup_command: value(f, "setup_command"), command: value(f, "command"), timeout_seconds: Number(value(f, "timeout")), cpus: Number(value(f, "cpus")), memory_mb: Number(value(f, "memory")), storage_mb: Number(value(f, "storage")) }, environment_variants: variantText ? JSON.parse(variantText) : [], inputs: [], acceptance_criteria: list(value(f, "scenario_criteria")) } }) }, token);
-      replace(out); e.currentTarget.reset(); setError("");
-    } catch (x) { setError(x instanceof Error ? x.message : "Scenario could not be defined"); }
+      const out = await api<Investigation>(
+        `/repositories/${repositoryID}/regression-investigations/${selected.id}/scenarios`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            expected_version: selected.version,
+            scenario: {
+              name: value(f, "scenario_name"),
+              environment: {
+                image: value(f, "image"),
+                working_directory: value(f, "working_directory") || ".",
+                setup_command: value(f, "setup_command"),
+                command: value(f, "command"),
+                timeout_seconds: Number(value(f, "timeout")),
+                cpus: Number(value(f, "cpus")),
+                memory_mb: Number(value(f, "memory")),
+                storage_mb: Number(value(f, "storage")),
+              },
+              environment_variants: variantText ? JSON.parse(variantText) : [],
+              inputs: [],
+              acceptance_criteria: list(value(f, "scenario_criteria")),
+            },
+          }),
+        },
+        token,
+      );
+      replace(out);
+      e.currentTarget.reset();
+      setError("");
+    } catch (x) {
+      setError(
+        x instanceof Error ? x.message : "Scenario could not be defined",
+      );
+    }
   }
-  async function runScenario(e: FormEvent<HTMLFormElement>, scenario: Scenario) {
+  async function runScenario(
+    e: FormEvent<HTMLFormElement>,
+    scenario: Scenario,
+  ) {
     e.preventDefault();
     if (!token || !selected) return;
-    const f = new FormData(e.currentTarget), dependencies: { name: string; repository_id: string; revision: string }[] = [];
-    for (const item of list(value(f, "dependencies"))) { const [name, repository_id, revision] = item.split("@"); if (name && repository_id && revision) dependencies.push({name,repository_id,revision}); }
-    const requestID = attemptRequestIDs.current[scenario.id] ?? crypto.randomUUID(); attemptRequestIDs.current[scenario.id]=requestID;
+    const f = new FormData(e.currentTarget),
+      dependencies: {
+        name: string;
+        repository_id: string;
+        revision: string;
+      }[] = [];
+    for (const item of list(value(f, "dependencies"))) {
+      const [name, repository_id, revision] = item.split("@");
+      if (name && repository_id && revision)
+        dependencies.push({ name, repository_id, revision });
+    }
+    const requestID =
+      attemptRequestIDs.current[scenario.id] ?? crypto.randomUUID();
+    attemptRequestIDs.current[scenario.id] = requestID;
     try {
-      const out = await api<Investigation>(`/repositories/${repositoryID}/regression-investigations/${selected.id}/scenarios/${scenario.id}/attempts`, { method: "POST", body: JSON.stringify({ expected_version: selected.version, request_id:requestID, target_kind: value(f, "target_kind"), target_id: value(f, "target_id"), revision: value(f, "revision"), dependencies, repeats: Number(value(f, "repeats")) }) }, token);
-      replace(out); delete attemptRequestIDs.current[scenario.id]; setError("");
-    } catch (x) { setError(x instanceof Error ? x.message : "Historical attempt failed"); }
+      const out = await api<Investigation>(
+        `/repositories/${repositoryID}/regression-investigations/${selected.id}/scenarios/${scenario.id}/attempts`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            expected_version: selected.version,
+            request_id: requestID,
+            target_kind: value(f, "target_kind"),
+            target_id: value(f, "target_id"),
+            revision: value(f, "revision"),
+            dependencies,
+            repeats: Number(value(f, "repeats")),
+          }),
+        },
+        token,
+      );
+      replace(out);
+      delete attemptRequestIDs.current[scenario.id];
+      setError("");
+    } catch (x) {
+      setError(x instanceof Error ? x.message : "Historical attempt failed");
+    }
+  }
+  async function scheduleSearch(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!token || !selected) return;
+    const f = new FormData(e.currentTarget);
+    try {
+      const out = await api<Investigation>(
+        `/repositories/${repositoryID}/regression-investigations/${selected.id}/searches`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            expected_version: selected.version,
+            request_id: searchRequestID.current,
+            scenario_id: value(f, "search_scenario"),
+          }),
+        },
+        token,
+      );
+      replace(out);
+      searchRequestID.current = crypto.randomUUID();
+      setError("");
+    } catch (x) {
+      setError(
+        x instanceof Error ? x.message : "Search could not be scheduled",
+      );
+    }
+  }
+  async function guideSearch(
+    e: FormEvent<HTMLFormElement>,
+    search: Search,
+    revision?: string,
+  ) {
+    e.preventDefault();
+    if (!token || !selected) return;
+    const f = new FormData(e.currentTarget),
+      kind = value(f, "kind");
+    try {
+      const out = await api<Investigation>(
+        `/repositories/${repositoryID}/regression-investigations/${selected.id}/searches/${search.id}/guidance`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            expected_version: selected.version,
+            expected_search_version: search.version,
+            kind,
+            revision: revision || value(f, "revision"),
+            classification: value(f, "classification"),
+            reason: value(f, "reason"),
+            claim: value(f, "claim"),
+            confidence: value(f, "confidence"),
+            evidence_ids: list(value(f, "evidence_ids")),
+            attempt_ids: list(value(f, "attempt_ids")),
+            candidate_revisions: list(value(f, "candidate_revisions")),
+          }),
+        },
+        token,
+      );
+      replace(out);
+      setError("");
+    } catch (x) {
+      setError(x instanceof Error ? x.message : "Search guidance failed");
+    }
   }
   return (
     <main className="mx-auto max-w-7xl space-y-6 p-6">
@@ -342,7 +551,11 @@ export function RegressionInvestigationsWorkspace({
                 <legend className="px-1 text-xs font-semibold">
                   Permitted evidence (optional)
                 </legend>
-                <select className={field} name="evidence_kind" defaultValue="issue">
+                <select
+                  className={field}
+                  name="evidence_kind"
+                  defaultValue="issue"
+                >
                   <option value="issue">Issue</option>
                   <option value="support_thread">Support thread</option>
                   <option value="failed_check">Failed check</option>
@@ -351,9 +564,21 @@ export function RegressionInvestigationsWorkspace({
                   <option value="reproduction">Reproduction</option>
                   <option value="commit">Commit</option>
                 </select>
-                <input className={field} name="evidence_id" placeholder="Evidence resource ID" />
-                <input className={field} name="evidence_revision" placeholder="Evidence revision" />
-                <input className={field} name="evidence_label" placeholder="Evidence label" />
+                <input
+                  className={field}
+                  name="evidence_id"
+                  placeholder="Evidence resource ID"
+                />
+                <input
+                  className={field}
+                  name="evidence_revision"
+                  placeholder="Evidence revision"
+                />
+                <input
+                  className={field}
+                  name="evidence_label"
+                  placeholder="Evidence label"
+                />
               </fieldset>
               <Button type="submit">Open durable boundary</Button>
             </form>
@@ -408,18 +633,39 @@ export function RegressionInvestigationsWorkspace({
               </ul>
               <h3 className="mt-4 font-medium">Evidence</h3>
               {selected.evidence.length === 0 ? (
-                <p className="text-sm text-[var(--muted)]">No evidence attached.</p>
+                <p className="text-sm text-[var(--muted)]">
+                  No evidence attached.
+                </p>
               ) : (
                 <ul className="mt-2 space-y-2">
                   {selected.evidence.map((evidence) => (
-                    <li key={evidence.id} className="rounded-lg border border-[var(--border)] p-3 text-sm">
+                    <li
+                      key={evidence.id}
+                      className="rounded-lg border border-[var(--border)] p-3 text-sm"
+                    >
                       <div className="flex items-center justify-between gap-2">
                         <span className="font-medium">{evidence.label}</span>
-                        <Badge tone={evidence.stale ? "warning" : evidence.available ? "success" : "danger"}>
-                          {evidence.stale ? "stale" : evidence.available ? "available" : "unavailable"}
+                        <Badge
+                          tone={
+                            evidence.stale
+                              ? "warning"
+                              : evidence.available
+                                ? "success"
+                                : "danger"
+                          }
+                        >
+                          {evidence.stale
+                            ? "stale"
+                            : evidence.available
+                              ? "available"
+                              : "unavailable"}
                         </Badge>
                       </div>
-                      {evidence.diagnostic && <p className="mt-1 text-[var(--muted)]">{evidence.diagnostic}</p>}
+                      {evidence.diagnostic && (
+                        <p className="mt-1 text-[var(--muted)]">
+                          {evidence.diagnostic}
+                        </p>
+                      )}
                     </li>
                   ))}
                 </ul>
@@ -432,49 +678,423 @@ export function RegressionInvestigationsWorkspace({
             </Card>
             <Card className="p-5">
               <h2 className="font-semibold">Repeatable comparison scenarios</h2>
-              <p className="mt-1 text-sm text-[var(--muted)]">Freeze a preinstalled image, setup, command, resources, and criteria before selecting historical revisions.</p>
-              <form onSubmit={defineScenario} className="mt-4 grid gap-2 sm:grid-cols-2">
-                <input className={field} name="scenario_name" required placeholder="Checkout historical behavior" />
-                <input className={field} name="image" required placeholder="alpine:3.22" />
-                <input className={field} name="working_directory" defaultValue="." placeholder="Working directory" />
-                <input className={field} name="setup_command" placeholder="Revision-specific setup command" />
-                <textarea className={`${field} sm:col-span-2`} name="command" required placeholder="Exact comparison command" />
-                <textarea className={`${field} sm:col-span-2`} name="environment_variants" placeholder='Optional revision-specific environments as JSON: [{"revision":"…","environment":{…}}]' />
-                <input className={field} name="scenario_criteria" required placeholder="Criteria, comma separated" />
+              <p className="mt-1 text-sm text-[var(--muted)]">
+                Freeze a preinstalled image, setup, command, resources, and
+                criteria before selecting historical revisions.
+              </p>
+              <form
+                onSubmit={defineScenario}
+                className="mt-4 grid gap-2 sm:grid-cols-2"
+              >
+                <input
+                  className={field}
+                  name="scenario_name"
+                  required
+                  placeholder="Checkout historical behavior"
+                />
+                <input
+                  className={field}
+                  name="image"
+                  required
+                  placeholder="alpine:3.22"
+                />
+                <input
+                  className={field}
+                  name="working_directory"
+                  defaultValue="."
+                  placeholder="Working directory"
+                />
+                <input
+                  className={field}
+                  name="setup_command"
+                  placeholder="Revision-specific setup command"
+                />
+                <textarea
+                  className={`${field} sm:col-span-2`}
+                  name="command"
+                  required
+                  placeholder="Exact comparison command"
+                />
+                <textarea
+                  className={`${field} sm:col-span-2`}
+                  name="environment_variants"
+                  placeholder='Optional revision-specific environments as JSON: [{"revision":"…","environment":{…}}]'
+                />
+                <input
+                  className={field}
+                  name="scenario_criteria"
+                  required
+                  placeholder="Criteria, comma separated"
+                />
                 <div className="grid grid-cols-4 gap-2">
-                  <input className={field} name="timeout" type="number" defaultValue="120" aria-label="Timeout seconds" />
-                  <input className={field} name="cpus" type="number" step="0.25" defaultValue="1" aria-label="CPUs" />
-                  <input className={field} name="memory" type="number" defaultValue="512" aria-label="Memory MB" />
-                  <input className={field} name="storage" type="number" defaultValue="64" aria-label="Storage MB" />
+                  <input
+                    className={field}
+                    name="timeout"
+                    type="number"
+                    defaultValue="120"
+                    aria-label="Timeout seconds"
+                  />
+                  <input
+                    className={field}
+                    name="cpus"
+                    type="number"
+                    step="0.25"
+                    defaultValue="1"
+                    aria-label="CPUs"
+                  />
+                  <input
+                    className={field}
+                    name="memory"
+                    type="number"
+                    defaultValue="512"
+                    aria-label="Memory MB"
+                  />
+                  <input
+                    className={field}
+                    name="storage"
+                    type="number"
+                    defaultValue="64"
+                    aria-label="Storage MB"
+                  />
                 </div>
-                <Button type="submit" className="sm:col-span-2">Define scenario</Button>
+                <Button type="submit" className="sm:col-span-2">
+                  Define scenario
+                </Button>
               </form>
               <div className="mt-5 space-y-4">
                 {selected.scenarios.map((scenario) => (
-                  <section key={scenario.id} className="rounded-lg border border-[var(--border)] p-4">
-                    <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="font-medium">{scenario.name}</h3><code className="text-xs">{scenario.environment.image}</code></div>
-                    <code className="mt-2 block overflow-x-auto text-xs">{scenario.environment.setup_command ? `${scenario.environment.setup_command} && ` : ""}{scenario.environment.command}</code>
-                    <form onSubmit={(e) => runScenario(e, scenario)} className="mt-3 grid gap-2 sm:grid-cols-2">
-                      <select className={field} name="target_kind" defaultValue="commit"><option value="commit">Commit</option><option value="release">Attested release</option></select>
-                      <input className={field} name="target_id" placeholder="Release ID (for release targets)" />
-                      <input className={field} name="revision" pattern="[0-9a-f]{40}" placeholder="Exact commit (optional for release)" />
-                      <input className={field} name="dependencies" placeholder="Name@RepositoryID@40-char revision, …" />
-                      <input className={field} name="repeats" type="number" min="1" max="5" defaultValue="2" aria-label="Repeat count" />
+                  <section
+                    key={scenario.id}
+                    className="rounded-lg border border-[var(--border)] p-4"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <h3 className="font-medium">{scenario.name}</h3>
+                      <code className="text-xs">
+                        {scenario.environment.image}
+                      </code>
+                    </div>
+                    <code className="mt-2 block overflow-x-auto text-xs">
+                      {scenario.environment.setup_command
+                        ? `${scenario.environment.setup_command} && `
+                        : ""}
+                      {scenario.environment.command}
+                    </code>
+                    <form
+                      onSubmit={(e) => runScenario(e, scenario)}
+                      className="mt-3 grid gap-2 sm:grid-cols-2"
+                    >
+                      <select
+                        className={field}
+                        name="target_kind"
+                        defaultValue="commit"
+                      >
+                        <option value="commit">Commit</option>
+                        <option value="release">Attested release</option>
+                      </select>
+                      <input
+                        className={field}
+                        name="target_id"
+                        placeholder="Release ID (for release targets)"
+                      />
+                      <input
+                        className={field}
+                        name="revision"
+                        pattern="[0-9a-f]{40}"
+                        placeholder="Exact commit (optional for release)"
+                      />
+                      <input
+                        className={field}
+                        name="dependencies"
+                        placeholder="Name@RepositoryID@40-char revision, …"
+                      />
+                      <input
+                        className={field}
+                        name="repeats"
+                        type="number"
+                        min="1"
+                        max="5"
+                        defaultValue="2"
+                        aria-label="Repeat count"
+                      />
                       <Button type="submit">Run isolated comparison</Button>
                     </form>
                     <div className="mt-3 space-y-2">
-                      {selected.attempts.filter((attempt) => attempt.scenario_id === scenario.id).map((attempt) => (
-                        <details key={attempt.id} className="rounded-md bg-[var(--surface-muted)] p-3 text-sm">
-                          <summary className="cursor-pointer"><Badge tone={attempt.classification === "passed" ? "success" : attempt.classification === "flaky" ? "warning" : "danger"}>{attempt.classification.replaceAll("_", " ")}</Badge> <code className="ml-2">{attempt.revision?.slice(0, 12) || attempt.target_id}</code> · {attempt.runs.length} run(s) · {attempt.cost_compute_seconds.toFixed(2)} compute-seconds</summary>
-                          {attempt.diagnostic && <p className="mt-2 text-[var(--muted)]">{attempt.diagnostic}</p>}
-                          {attempt.dependencies.length > 0 && <p className="mt-2"><b>Dependencies:</b> {attempt.dependencies.map((dependency) => `${dependency.name}@${dependency.repository_id}:${dependency.revision.slice(0,12)} → ${dependency.path}`).join(", ")}</p>}
-                          {attempt.runs.map((run, index) => <div key={run.run_id || index} className="mt-3 border-t border-[var(--border)] pt-2"><b>Run {index + 1}:</b> {run.state} ({run.duration_ms} ms){run.failure && <p>{run.failure}</p>}{run.logs && <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap text-xs">{run.logs}</pre>}{run.artifacts.length > 0 && <p>{run.artifacts.length} digest-addressed artifact(s)</p>}</div>)}
-                        </details>
-                      ))}
+                      {selected.attempts
+                        .filter(
+                          (attempt) => attempt.scenario_id === scenario.id,
+                        )
+                        .map((attempt) => (
+                          <details
+                            key={attempt.id}
+                            className="rounded-md bg-[var(--surface-muted)] p-3 text-sm"
+                          >
+                            <summary className="cursor-pointer">
+                              <Badge
+                                tone={
+                                  attempt.classification === "passed"
+                                    ? "success"
+                                    : attempt.classification === "flaky"
+                                      ? "warning"
+                                      : "danger"
+                                }
+                              >
+                                {attempt.classification.replaceAll("_", " ")}
+                              </Badge>{" "}
+                              <code className="ml-2">
+                                {attempt.revision?.slice(0, 12) ||
+                                  attempt.target_id}
+                              </code>{" "}
+                              · {attempt.runs.length} run(s) ·{" "}
+                              {attempt.cost_compute_seconds.toFixed(2)}{" "}
+                              compute-seconds
+                            </summary>
+                            {attempt.diagnostic && (
+                              <p className="mt-2 text-[var(--muted)]">
+                                {attempt.diagnostic}
+                              </p>
+                            )}
+                            {attempt.dependencies.length > 0 && (
+                              <p className="mt-2">
+                                <b>Dependencies:</b>{" "}
+                                {attempt.dependencies
+                                  .map(
+                                    (dependency) =>
+                                      `${dependency.name}@${dependency.repository_id}:${dependency.revision.slice(0, 12)} → ${dependency.path}`,
+                                  )
+                                  .join(", ")}
+                              </p>
+                            )}
+                            {attempt.runs.map((run, index) => (
+                              <div
+                                key={run.run_id || index}
+                                className="mt-3 border-t border-[var(--border)] pt-2"
+                              >
+                                <b>Run {index + 1}:</b> {run.state} (
+                                {run.duration_ms} ms)
+                                {run.failure && <p>{run.failure}</p>}
+                                {run.logs && (
+                                  <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap text-xs">
+                                    {run.logs}
+                                  </pre>
+                                )}
+                                {run.artifacts.length > 0 && (
+                                  <p>
+                                    {run.artifacts.length} digest-addressed
+                                    artifact(s)
+                                  </p>
+                                )}
+                              </div>
+                            ))}
+                          </details>
+                        ))}
                     </div>
                   </section>
                 ))}
               </div>
+            </Card>
+            <Card className="p-5">
+              <h2 className="font-semibold">Evidence-driven graph search</h2>
+              {selected.searches.length === 0 ? (
+                <form onSubmit={scheduleSearch} className="mt-3 flex gap-2">
+                  <select
+                    className={field}
+                    name="search_scenario"
+                    required
+                    defaultValue=""
+                  >
+                    <option value="" disabled>
+                      Select a frozen scenario
+                    </option>
+                    {selected.scenarios.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </select>
+                  <Button type="submit">Schedule search</Button>
+                </form>
+              ) : (
+                selected.searches.map((search) => (
+                  <section key={search.id} className="mt-4 space-y-4">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <Badge
+                          tone={
+                            search.state === "isolated" ? "success" : "warning"
+                          }
+                        >
+                          {search.state}
+                        </Badge>
+                        <span className="ml-2 text-sm text-[var(--muted)]">
+                          {
+                            search.candidates.filter(
+                              (c) => !c.excluded && c.classification === "",
+                            ).length
+                          }{" "}
+                          candidates remain
+                        </span>
+                      </div>
+                      <span className="text-sm">
+                        {search.culprit_ranges.length} competing range(s)
+                      </span>
+                    </div>
+                    <div className="space-y-2">
+                      {search.culprit_ranges.map((range, i) => (
+                        <div
+                          key={`${range.working_revision}-${range.regressed_revision}-${i}`}
+                          className="rounded-lg border border-[var(--border)] p-3 text-sm"
+                        >
+                          <code>
+                            {range.working_revision.slice(0, 8)} →{" "}
+                            {range.regressed_revision.slice(0, 8)}
+                          </code>
+                          <span className="ml-2">
+                            {Math.round(range.confidence * 100)}% confidence ·{" "}
+                            {range.remaining} untested
+                          </span>
+                          {range.ambiguity && (
+                            <p className="mt-1 text-[var(--warning)]">
+                              {range.ambiguity}
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                    <div className="space-y-2">
+                      {search.candidates.map((candidate) => (
+                        <details
+                          key={`${candidate.repository_id}-${candidate.revision}`}
+                          open={candidate.selected}
+                          className={`rounded-lg border p-3 ${candidate.selected ? "border-[var(--brand)]" : "border-[var(--border)]"}`}
+                        >
+                          <summary className="cursor-pointer text-sm">
+                            <Badge
+                              tone={
+                                candidate.classification === "working"
+                                  ? "success"
+                                  : candidate.classification === "regressed"
+                                    ? "danger"
+                                    : candidate.excluded ||
+                                        candidate.classification === "flaky"
+                                      ? "warning"
+                                      : undefined
+                              }
+                            >
+                              {candidate.excluded
+                                ? "excluded"
+                                : candidate.classification || "untested"}
+                            </Badge>{" "}
+                            <code className="ml-2">
+                              {candidate.revision.slice(0, 12)}
+                            </code>
+                            {candidate.merge && " · merge"}
+                            {candidate.selected && " · recommended next"}
+                            <span className="ml-2">{candidate.subject}</span>
+                          </summary>
+                          <div className="mt-2 text-xs text-[var(--muted)]">
+                            {candidate.changed_paths.join(", ") ||
+                              "No direct path diff"}
+                            {candidate.owner_ids.length > 0 &&
+                              ` · owners ${candidate.owner_ids.join(", ")}`}
+                            {candidate.pull_request_ids.length > 0 &&
+                              ` · pulls ${candidate.pull_request_ids.join(", ")}`}
+                          </div>
+                          {candidate.exclusion && (
+                            <p className="mt-2 text-sm">
+                              Excluded: {candidate.exclusion}
+                            </p>
+                          )}
+                          <form
+                            onSubmit={(e) =>
+                              guideSearch(e, search, candidate.revision)
+                            }
+                            className="mt-3 flex flex-wrap gap-2"
+                          >
+                            <input type="hidden" name="kind" value="classify" />
+                            <select
+                              name="classification"
+                              className={field}
+                              defaultValue="working"
+                            >
+                              <option value="working">Working</option>
+                              <option value="regressed">Regressed</option>
+                              <option value="flaky">Flaky</option>
+                              <option value="invalid">Invalid trial</option>
+                            </select>
+                            <input
+                              name="reason"
+                              className={field}
+                              required
+                              placeholder="Evidence-backed rationale"
+                            />
+                            <Button type="submit">Record guidance</Button>
+                          </form>
+                        </details>
+                      ))}
+                    </div>
+                    <form
+                      onSubmit={(e) => guideSearch(e, search)}
+                      className="grid gap-2 rounded-lg bg-[var(--surface-muted)] p-3 sm:grid-cols-2"
+                    >
+                      <input type="hidden" name="kind" value="hypothesis" />
+                      <textarea
+                        name="claim"
+                        className={`${field} sm:col-span-2`}
+                        required
+                        placeholder="Causal claim explaining why the transition introduced the behavior"
+                      />
+                      <input
+                        name="candidate_revisions"
+                        className={field}
+                        required
+                        placeholder="Cited candidate commits, comma separated"
+                      />
+                      <input
+                        name="attempt_ids"
+                        className={field}
+                        placeholder="Cited attempt IDs, comma separated"
+                      />
+                      <input
+                        name="evidence_ids"
+                        className={field}
+                        placeholder="Cited evidence IDs, comma separated"
+                      />
+                      <select
+                        name="confidence"
+                        className={field}
+                        defaultValue="medium"
+                      >
+                        <option>low</option>
+                        <option>medium</option>
+                        <option>high</option>
+                      </select>
+                      <input
+                        name="reason"
+                        className={field}
+                        required
+                        placeholder="Decision rationale"
+                      />
+                      <Button type="submit">Append cited hypothesis</Button>
+                    </form>
+                    {search.hypotheses.map((h) => (
+                      <blockquote
+                        key={h.id}
+                        className="border-l-2 border-[var(--brand)] pl-3 text-sm"
+                      >
+                        <b>
+                          {h.confidence} confidence · {h.actor_id}
+                        </b>
+                        <p>{h.claim}</p>
+                        <code>
+                          {h.candidate_revisions
+                            .map((r) => r.slice(0, 8))
+                            .join(", ")}
+                        </code>
+                      </blockquote>
+                    ))}
+                  </section>
+                ))
+              )}
             </Card>
             <Card className="p-5">
               <h2 className="font-semibold">Discussion and boundary history</h2>

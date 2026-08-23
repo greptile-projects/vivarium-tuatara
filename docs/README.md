@@ -55,6 +55,28 @@ states are durable gaps rather than behavioral evidence, so collaborators can te
 from historical setup, data, dependency, or nondeterminism differences. Scenario records and attempts
 grant no Git, package, network, environment, release, deployment, or general execution authority.
 
+Once a scenario exists, collaborators schedule an evidence-driven search over the full ancestry path between
+the frozen good and bad commits. The durable candidate set preserves merge parents and may include explicitly
+selected readable cross-repository dependency revisions. Completed attempts from only that search's frozen scenario
+are projected onto the set; the server recommends an untested midpoint and derives all still-supported,
+graph-ancestry-proven working-to-regressed ranges
+rather than publishing an opaque bisect answer. Each range reports its remaining candidates, confidence, and
+merge or flaky ambiguity. Candidate views include the direct changed paths, commit author, linked ordinary pull
+requests, and the exact attempts supporting their classification.
+Dependency evidence joins on both repository identity and revision, preventing an equal hash from a different
+repository from supplying or hiding a candidate outcome.
+Hypothesis attempt citations use that same exact identity and reject revision selectors that identify more than one
+search candidate. Candidate outcomes aggregate across all matching completed attempts without storage-order
+precedence: mixed pass/fail or any flaky result remains explicitly flaky.
+
+CAS-versioned collaborator guidance records working, regressed, flaky, invalid, excluded, and restored trials
+with attribution and rationale. Rewritten or missing commits become explicit exclusions on reads. Causal
+hypotheses name exact candidates and must cite retained investigation evidence or historical attempts from the
+same frozen scenario and selected revision, keeping
+agent explanations reviewable beside human decisions. Multiple ranges, interacting dependency changes, flaky
+midpoints, and regressed merges remain competing claims until additional evidence resolves them. Searches are
+evidence ledgers only and grant no Git, check execution, pull, package, agent, or repository authority.
+
 ## Meaning-preserving conflict checkpoints
 
 Conflict-reconciliation workspaces can turn a resolved working tree into an unreferenced, immutable

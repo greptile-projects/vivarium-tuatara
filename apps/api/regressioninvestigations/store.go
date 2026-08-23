@@ -131,6 +131,64 @@ type Attempt struct {
 	CreatedAt          time.Time           `json:"created_at"`
 	CompletedAt        time.Time           `json:"completed_at"`
 }
+type SearchCandidate struct {
+	Kind           string   `json:"kind"`
+	RepositoryID   string   `json:"repository_id"`
+	Revision       string   `json:"revision"`
+	Parents        []string `json:"parents"`
+	Merge          bool     `json:"merge"`
+	Classification string   `json:"classification"`
+	AttemptIDs     []string `json:"attempt_ids"`
+	Excluded       bool     `json:"excluded"`
+	Exclusion      string   `json:"exclusion,omitempty"`
+	Selected       bool     `json:"selected"`
+	Subject        string   `json:"subject,omitempty"`
+	ChangedPaths   []string `json:"changed_paths"`
+	OwnerIDs       []string `json:"owner_ids"`
+	PullRequestIDs []string `json:"pull_request_ids"`
+}
+type CulpritRange struct {
+	Kind              string  `json:"kind"`
+	RepositoryID      string  `json:"repository_id"`
+	WorkingRevision   string  `json:"working_revision"`
+	RegressedRevision string  `json:"regressed_revision"`
+	Remaining         int     `json:"remaining"`
+	Confidence        float64 `json:"confidence"`
+	Ambiguity         string  `json:"ambiguity,omitempty"`
+}
+type CausalHypothesis struct {
+	ID                 string    `json:"id"`
+	ActorID            string    `json:"actor_id"`
+	Claim              string    `json:"claim"`
+	CandidateRevisions []string  `json:"candidate_revisions"`
+	EvidenceIDs        []string  `json:"evidence_ids"`
+	AttemptIDs         []string  `json:"attempt_ids"`
+	Confidence         string    `json:"confidence"`
+	CreatedAt          time.Time `json:"created_at"`
+}
+type SearchDecision struct {
+	ID        string    `json:"id"`
+	ActorID   string    `json:"actor_id"`
+	Kind      string    `json:"kind"`
+	Revision  string    `json:"revision,omitempty"`
+	Reason    string    `json:"reason"`
+	CreatedAt time.Time `json:"created_at"`
+}
+type Search struct {
+	ID            string             `json:"id"`
+	RequestID     string             `json:"request_id"`
+	RequestDigest string             `json:"request_digest"`
+	ScenarioID    string             `json:"scenario_id"`
+	Version       int                `json:"version"`
+	State         string             `json:"state"`
+	Candidates    []SearchCandidate  `json:"candidates"`
+	Ranges        []CulpritRange     `json:"culprit_ranges"`
+	Hypotheses    []CausalHypothesis `json:"hypotheses"`
+	Decisions     []SearchDecision   `json:"decisions"`
+	CreatedBy     string             `json:"created_by"`
+	CreatedAt     time.Time          `json:"created_at"`
+	UpdatedAt     time.Time          `json:"updated_at"`
+}
 type Investigation struct {
 	ID                 string     `json:"id"`
 	RequestID          string     `json:"request_id"`
@@ -154,6 +212,7 @@ type Investigation struct {
 	History            []Entry    `json:"history"`
 	Scenarios          []Scenario `json:"scenarios"`
 	Attempts           []Attempt  `json:"attempts"`
+	Searches           []Search   `json:"searches"`
 	CreatedBy          string     `json:"created_by"`
 	CreatedAt          time.Time  `json:"created_at"`
 	UpdatedAt          time.Time  `json:"updated_at"`
@@ -208,8 +267,179 @@ func (s *Store) Create(v Investigation, actor string) (Investigation, error) {
 		v.Evidence[i].ID = id()
 	}
 	v.History = []Entry{{ID: id(), Kind: "opened", ActorID: actor, To: "open", Message: "Search boundary agreed", CreatedAt: now}}
-	v.Scenarios, v.Attempts = []Scenario{}, []Attempt{}
+	v.Scenarios, v.Attempts, v.Searches = []Scenario{}, []Attempt{}, []Search{}
 	return v, s.write(v)
+}
+
+func (s *Store) CreateSearch(repo, wid, actor string, search Search, expected int) (Investigation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, e := s.lock()
+	if e != nil {
+		return Investigation{}, e
+	}
+	defer unlock()
+	v, e := s.Get(repo, wid)
+	if e != nil {
+		return Investigation{}, e
+	}
+	digestBody, e := json.Marshal(struct {
+		Actor      string            `json:"actor"`
+		ScenarioID string            `json:"scenario_id"`
+		Candidates []SearchCandidate `json:"candidates"`
+	}{actor, search.ScenarioID, search.Candidates})
+	if e != nil {
+		return Investigation{}, e
+	}
+	digestSum := sha256.Sum256(digestBody)
+	digest := hex.EncodeToString(digestSum[:])
+	for _, retained := range v.Searches {
+		if retained.RequestID == search.RequestID {
+			if retained.RequestDigest != digest || retained.CreatedBy != actor {
+				return Investigation{}, ErrConflict
+			}
+			return v, nil
+		}
+	}
+	if v.Version != expected || !token(actor) || !token(search.RequestID) || !token(search.ScenarioID) || len(search.Candidates) < 2 {
+		return Investigation{}, ErrInvalid
+	}
+	found := false
+	for _, scenario := range v.Scenarios {
+		if scenario.ID == search.ScenarioID {
+			found = true
+		}
+	}
+	if !found {
+		return Investigation{}, ErrInvalid
+	}
+	now := s.now()
+	search.ID, search.RequestDigest, search.Version, search.State, search.CreatedBy, search.CreatedAt, search.UpdatedAt = id(), digest, 1, "searching", actor, now, now
+	if search.Ranges == nil {
+		search.Ranges = []CulpritRange{}
+	}
+	search.Hypotheses, search.Decisions = []CausalHypothesis{}, []SearchDecision{}
+	v.Searches = append(v.Searches, search)
+	v.History = append(v.History, Entry{ID: id(), Kind: "search_scheduled", ActorID: actor, Message: "Evidence-driven commit graph search scheduled", CreatedAt: now})
+	v.Version++
+	v.UpdatedAt = now
+	return v, s.write(v)
+}
+
+func (s *Store) GuideSearch(repo, wid, searchID, actor, kind, revision, classification, reason, claim, confidence string, evidenceIDs, attemptIDs, candidateRevisions []string, expectedInvestigation, expectedSearch int) (Investigation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, e := s.lock()
+	if e != nil {
+		return Investigation{}, e
+	}
+	defer unlock()
+	v, e := s.Get(repo, wid)
+	if e != nil {
+		return Investigation{}, e
+	}
+	if v.Version != expectedInvestigation || !token(actor) || !text(reason) {
+		return Investigation{}, ErrConflict
+	}
+	index := -1
+	for i := range v.Searches {
+		if v.Searches[i].ID == searchID {
+			index = i
+		}
+	}
+	if index < 0 || v.Searches[index].Version != expectedSearch {
+		return Investigation{}, ErrConflict
+	}
+	search := &v.Searches[index]
+	now := s.now()
+	switch kind {
+	case "classify", "exclude", "restore":
+		candidate := -1
+		for i := range search.Candidates {
+			if search.Candidates[i].Revision == revision {
+				candidate = i
+			}
+		}
+		if candidate < 0 {
+			return Investigation{}, ErrInvalid
+		}
+		c := &search.Candidates[candidate]
+		if kind == "classify" {
+			if classification != "working" && classification != "regressed" && classification != "flaky" && classification != "invalid" {
+				return Investigation{}, ErrInvalid
+			}
+			c.Classification, c.Excluded, c.Exclusion = classification, classification == "invalid", ""
+			if c.Excluded {
+				c.Exclusion = reason
+			}
+		} else if kind == "exclude" {
+			c.Excluded, c.Exclusion, c.Classification = true, reason, "invalid"
+		} else {
+			c.Excluded, c.Exclusion, c.Classification = false, "", ""
+		}
+	case "hypothesis":
+		if !text(claim) || (confidence != "low" && confidence != "medium" && confidence != "high") || len(candidateRevisions) == 0 || len(evidenceIDs)+len(attemptIDs) == 0 {
+			return Investigation{}, ErrInvalid
+		}
+		candidatesByRevision := map[string][]SearchCandidate{}
+		for _, c := range search.Candidates {
+			candidatesByRevision[c.Revision] = append(candidatesByRevision[c.Revision], c)
+		}
+		for _, revision := range candidateRevisions {
+			if len(candidatesByRevision[revision]) != 1 {
+				return Investigation{}, ErrInvalid
+			}
+		}
+		validEvidence := map[string]bool{}
+		attemptsByID := map[string]Attempt{}
+		for _, evidence := range v.Evidence {
+			validEvidence[evidence.ID] = true
+		}
+		for _, attempt := range v.Attempts {
+			attemptsByID[attempt.ID] = attempt
+		}
+		for _, evidenceID := range evidenceIDs {
+			if !validEvidence[evidenceID] {
+				return Investigation{}, ErrInvalid
+			}
+		}
+		for _, attemptID := range attemptIDs {
+			attempt, ok := attemptsByID[attemptID]
+			if !ok || attempt.ScenarioID != search.ScenarioID || !attemptSupportsCandidate(attempt, candidatesByRevision, candidateRevisions) {
+				return Investigation{}, ErrInvalid
+			}
+		}
+		search.Hypotheses = append(search.Hypotheses, CausalHypothesis{ID: id(), ActorID: actor, Claim: claim, CandidateRevisions: uniq(candidateRevisions), EvidenceIDs: uniq(evidenceIDs), AttemptIDs: uniq(attemptIDs), Confidence: confidence, CreatedAt: now})
+	default:
+		return Investigation{}, ErrInvalid
+	}
+	search.Decisions = append(search.Decisions, SearchDecision{ID: id(), ActorID: actor, Kind: kind, Revision: revision, Reason: reason, CreatedAt: now})
+	search.Version++
+	search.UpdatedAt = now
+	v.Version++
+	v.UpdatedAt = now
+	return v, s.write(v)
+}
+
+func attemptSupportsCandidate(attempt Attempt, candidatesByRevision map[string][]SearchCandidate, candidateRevisions []string) bool {
+	for _, candidateRevision := range candidateRevisions {
+		candidates := candidatesByRevision[candidateRevision]
+		if len(candidates) != 1 {
+			continue
+		}
+		candidate := candidates[0]
+		if candidate.Kind == "commit" && attempt.Revision == candidate.Revision {
+			return true
+		}
+		if candidate.Kind == "dependency" {
+			for _, dependency := range attempt.Dependencies {
+				if dependency.RepositoryID == candidate.RepositoryID && dependency.Revision == candidate.Revision {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // Reconcile returns an already-published create before callers re-evaluate
@@ -544,7 +774,7 @@ func valid(v Investigation, actor string) bool {
 func requestDigest(v Investigation, actor string) (string, error) {
 	v.ID, v.RequestDigest, v.CreatedBy, v.Status = "", "", "", ""
 	v.Version, v.CreatedAt, v.UpdatedAt, v.History = 0, time.Time{}, time.Time{}, nil
-	v.Scenarios, v.Attempts = nil, nil
+	v.Scenarios, v.Attempts, v.Searches = nil, nil, nil
 	v.Diagnostics, v.Comparable = nil, false
 	for i := range v.Evidence {
 		v.Evidence[i].ID = ""
