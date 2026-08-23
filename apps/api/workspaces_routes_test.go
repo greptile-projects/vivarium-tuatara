@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/base64"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,8 +11,32 @@ import (
 	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/debugworkspaces"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/workspaces"
 )
+
+func TestConflictRuntimeAuthorizationAcceptsCurrentSourceParticipant(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	catalog, _ := repositories.New(t.TempDir(), gitStore)
+	targetOwner, sourceOwner, participant := strings.Repeat("1", 32), strings.Repeat("2", 32), strings.Repeat("3", 32)
+	target, _ := catalog.Create(targetOwner, "target")
+	source, _ := catalog.Create(sourceOwner, "source")
+	if _, err := catalog.AddCollaborator(sourceOwner, source.ID, participant); err != nil {
+		t.Fatal(err)
+	}
+	workspace := workspaces.Workspace{CreatorID: targetOwner, Participants: []workspaces.WorkspaceParticipant{{PrincipalKind: "human", PrincipalID: participant, Status: "accepted"}}, ConflictContext: &workspaces.ConflictContext{PublicationTarget: []workspaces.ConflictPublication{{RepositoryID: source.ID}, {RepositoryID: target.ID}}}}
+	called := false
+	if err := withConflictRuntimeAuthorization(catalog, workspace, participant, func() error { called = true; return nil }); err != nil || !called {
+		t.Fatalf("source participant runtime authorization called=%v err=%v", called, err)
+	}
+	if err := catalog.RemoveCollaborator(sourceOwner, source.ID, participant); err != nil {
+		t.Fatal(err)
+	}
+	if err := withConflictRuntimeAuthorization(catalog, workspace, participant, func() error { return nil }); !errors.Is(err, repositories.ErrInvalidCollaborator) {
+		t.Fatalf("revoked source participant authorization = %v", err)
+	}
+}
 
 func TestDebuggingReproductionSourceResolvesScenarioAudienceAndRevision(t *testing.T) {
 	store, err := debugworkspaces.New(t.TempDir())

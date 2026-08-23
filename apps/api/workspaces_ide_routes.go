@@ -357,6 +357,10 @@ exec "$@"`
 		return err
 	}
 	var err error
+	if item.ConflictContext != nil && item.HasParticipant(actor.UserID) {
+		err = withConflictRuntimeAuthorization(catalog, item, actor.UserID, operation)
+		return output, err
+	}
 	if mutation {
 		err = catalog.WithCurrentParticipant(actor.UserID, item.RepositoryID, operation)
 	} else {
@@ -364,6 +368,25 @@ exec "$@"`
 	}
 	return output, err
 }
+
+func withConflictRuntimeAuthorization(catalog *repositories.Store, item workspaces.Workspace, actor string, operation func() error) error {
+	if item.ConflictContext == nil || !item.HasParticipant(actor) {
+		return repositories.ErrInvalidCollaborator
+	}
+	repositoryIDs := make([]string, 0, len(item.ConflictContext.PublicationTarget))
+	for _, target := range item.ConflictContext.PublicationTarget {
+		repositoryIDs = append(repositoryIDs, target.RepositoryID)
+	}
+	return catalog.WithCurrentRepositories(repositoryIDs, func(current []repositories.Repository) error {
+		for _, repository := range current {
+			if repository.HasParticipant(actor) {
+				return operation()
+			}
+		}
+		return repositories.ErrInvalidCollaborator
+	})
+}
+
 func workspaceExec(id string, timeout time.Duration, dir string, stdin io.Reader, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()

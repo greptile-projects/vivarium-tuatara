@@ -43,16 +43,39 @@ func registerConflictWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, cat
 			writeAPIError(w, 500, "conflict_workspace_failed", "workspace launch could not be reserved")
 			return
 		}
+		defer release()
 		if reused {
 			if existing.ConflictContext == nil || existing.ConflictContext.CandidateID != in.CandidateID {
 				writeAPIError(w, 409, "conflict_workspace_launch_changed", "launch_id is already bound to different immutable conflict evidence")
 				return
 			}
+			if existing.State == "provisioning" {
+				repo, openErr := git.Open(existing.RepositoryID)
+				if openErr != nil || existing.ConflictContext == nil {
+					writeAPIError(w, 503, "conflict_workspace_recovery_failed", "the immutable workspace foundation is unavailable")
+					return
+				}
+				if cleanupErr := removeWorkspaceRuntime(existing.ID); cleanupErr != nil {
+					writeAPIError(w, 503, "conflict_workspace_recovery_failed", "interrupted workspace compute could not be cleared")
+					return
+				}
+				steps, failed := provisionWorkspace(repo.Path(), workspaceStore.RuntimePath(existing.ID), existing.ID, existing.CommitID, existing.Definition)
+				if !failed {
+					if stageErr := stageConflictHistories(repo.Path(), existing.ID, existing.ConflictContext.Source.CommitID, existing.ConflictContext.Target.CommitID); stageErr != nil {
+						failed = true
+						steps = append(steps, failedSetupStep("preload immutable conflicting histories", nil, stageErr))
+					}
+				}
+				existing, err = workspaceStore.Complete(existing.ID, steps, failed)
+				if err != nil {
+					writeAPIError(w, 500, "conflict_workspace_recovery_failed", "recovered workspace evidence could not be saved")
+					return
+				}
+			}
 			w.Header().Set("Location", "/workspaces/"+existing.ID)
 			writeJSON(w, 200, existing)
 			return
 		}
-		defer release()
 		meta, err := catalog.GetByID(r.PathValue("id"))
 		if writeRepositoryError(w, err) {
 			return

@@ -769,8 +769,7 @@ func (s *Store) ClaimConflictLaunch(repositoryID, pullID, launchID string) (Work
 			return Workspace{}, false, nil, readErr
 		}
 		if item.RepositoryID == repositoryID && item.Source.PullRequestID == pullID && item.Source.ConflictLaunchID == launchID {
-			release()
-			return item, true, func() {}, nil
+			return item, true, release, nil
 		}
 	}
 	return Workspace{}, false, release, nil
