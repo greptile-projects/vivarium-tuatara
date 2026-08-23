@@ -27,17 +27,13 @@ func TestRegressionEvidenceProjectionKeepsUnresolvedSourceUnavailable(t *testing
 }
 
 func TestRegressionSetupFailureUsesRetainedDockerStderr(t *testing.T) {
-	if !regressionSetupFailure("exit status 125", "docker: Error response from daemon: No such image: unavailable:never") {
-		t.Fatal("unavailable image was treated as behavioral evidence")
+	if !regressionSetupFailure("setup") {
+		t.Fatal("structured setup failure was treated as behavioral evidence")
 	}
-	if regressionSetupFailure("exit status 1", "expected behavior differed") {
-		t.Fatal("behavioral failure was treated as setup failure")
-	}
-	if regressionSetupFailure("exit status 1", "working directory fixture was retained; executable file not found in expected output") {
-		t.Fatal("arbitrary behavioral logs were treated as setup failure")
-	}
-	if regressionSetupFailure("exit status 125", "comparison intentionally returned 125") {
-		t.Fatal("unstructured exit 125 was treated as setup failure")
+	for _, kind := range []string{"", "command", "exit status 125: error response from daemon: no such image:"} {
+		if regressionSetupFailure(kind) {
+			t.Fatalf("command-controlled value %q was treated as setup failure", kind)
+		}
 	}
 }
 

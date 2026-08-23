@@ -400,14 +400,11 @@ func registerRegressionInvestigationRoutes(mux *http.ServeMux, git *storage.Stor
 				events, _ := checkStore.Events(current.RepositoryID, "regression-"+current.ID, run.ID, 0)
 				logs := strings.Builder{}
 				output := strings.Builder{}
-				stderr := strings.Builder{}
 				for _, event := range events {
 					if event.Kind == "log" {
 						logs.WriteString(event.Message)
 						if event.Stream == "stdout" {
 							output.WriteString(event.Message)
-						} else if event.Stream == "stderr" {
-							stderr.WriteString(event.Message)
 						}
 					}
 				}
@@ -424,13 +421,13 @@ func registerRegressionInvestigationRoutes(mux *http.ServeMux, git *storage.Stor
 				if run.StartedAt != nil && run.CompletedAt != nil {
 					duration = run.CompletedAt.Sub(*run.StartedAt).Milliseconds()
 				}
-				attempt.Runs = append(attempt.Runs, regressioninvestigations.AttemptRun{RunID: run.ID, State: run.State, ExitCode: run.ExitCode, Failure: run.Failure, Output: output.String(), Logs: logs.String(), Artifacts: artifacts, DurationMS: duration})
+				attempt.Runs = append(attempt.Runs, regressioninvestigations.AttemptRun{RunID: run.ID, State: run.State, ExitCode: run.ExitCode, Failure: run.Failure, FailureKind: run.FailureKind, Output: output.String(), Logs: logs.String(), Artifacts: artifacts, DurationMS: duration})
 				attempt.CostComputeSeconds += float64(duration) / 1000 * attempt.Environment.CPUs
 				if run.State == "succeeded" {
 					passed = true
 				} else {
 					failed = true
-					if regressionSetupFailure(run.Failure, stderr.String()) {
+					if regressionSetupFailure(run.FailureKind) {
 						attempt.Classification, attempt.Diagnostic = "incompatible_setup", strings.TrimSpace(run.Failure+"\n"+logs.String())
 						break
 					}
@@ -464,21 +461,7 @@ func validRegressionDependencyName(v string) bool {
 	return true
 }
 
-func regressionSetupFailure(failure, logs string) bool {
-	if failure == "working directory does not exist" || failure == "verification input is invalid" || failure == "verification archive is invalid" || failure == "verification archive path is invalid" {
-		return true
-	}
-	if failure != "exit status 125" {
-		return false
-	}
-	diagnostic := strings.ToLower(logs)
-	for _, marker := range []string{"no such image:", "unable to find image '", "cannot connect to the docker daemon", "error response from daemon:"} {
-		if strings.Contains(diagnostic, marker) {
-			return true
-		}
-	}
-	return false
-}
+func regressionSetupFailure(failureKind string) bool { return failureKind == "setup" }
 
 func regressionRunActive(state string) bool {
 	return state == "queued" || state == "running" || state == "cleanup_pending"

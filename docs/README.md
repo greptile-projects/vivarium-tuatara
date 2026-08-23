@@ -45,8 +45,9 @@ created. Completion finalizes that identity independently of later investigation
 the reservation and deterministic run names, preventing completed but unattached duplicate work.
 An overlapping exact retry that observes a queued, running, or cleanup-pending check returns the same
 running reservation and never converts that nonterminal state into failure evidence. Environment
-incompatibility derives only from executor setup failures or canonical Docker stderr under its setup exit;
-arbitrary comparison logs cannot change a completed behavioral failure into a setup classification.
+incompatibility derives only from trusted executor setup metadata. The executor verifies the preinstalled
+image before starting the container and marks that failure source structurally; command-controlled stderr
+and exit codes cannot change a completed behavioral failure into a setup classification.
 
 Attempt classifications distinguish `passed`, `failed`, and mixed `flaky` runs from
 `incompatible_setup`, `missing_dependencies`, `unsafe_fixture`, and `untestable_revision`. The latter

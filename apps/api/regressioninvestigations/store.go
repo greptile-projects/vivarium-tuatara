@@ -92,14 +92,15 @@ type AttemptArtifact struct {
 	ContentType string `json:"content_type"`
 }
 type AttemptRun struct {
-	RunID      string            `json:"run_id,omitempty"`
-	State      string            `json:"state"`
-	ExitCode   *int              `json:"exit_code,omitempty"`
-	Failure    string            `json:"failure,omitempty"`
-	Output     string            `json:"output,omitempty"`
-	Logs       string            `json:"logs,omitempty"`
-	Artifacts  []AttemptArtifact `json:"artifacts"`
-	DurationMS int64             `json:"duration_ms"`
+	RunID       string            `json:"run_id,omitempty"`
+	State       string            `json:"state"`
+	ExitCode    *int              `json:"exit_code,omitempty"`
+	Failure     string            `json:"failure,omitempty"`
+	FailureKind string            `json:"failure_kind,omitempty"`
+	Output      string            `json:"output,omitempty"`
+	Logs        string            `json:"logs,omitempty"`
+	Artifacts   []AttemptArtifact `json:"artifacts"`
+	DurationMS  int64             `json:"duration_ms"`
 }
 type Dependency struct {
 	Name          string `json:"name"`

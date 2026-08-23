@@ -91,6 +91,7 @@ type Run struct {
 	State          string     `json:"state"`
 	ExitCode       *int       `json:"exit_code,omitempty"`
 	Failure        string     `json:"failure,omitempty"`
+	FailureKind    string     `json:"failure_kind,omitempty"`
 	CleanupFailure string     `json:"cleanup_failure,omitempty"`
 	CreatedAt      time.Time  `json:"created_at"`
 	StartedAt      *time.Time `json:"started_at,omitempty"`
@@ -979,6 +980,7 @@ func (s *Store) Execute(run Run, repositoryPath string) {
 		err = p
 	}
 	exit := 0
+	setupFailure := err != nil
 	if err == nil {
 		for _, input := range run.Definition.Inputs {
 			clean := filepath.Clean(input.Name)
@@ -986,6 +988,7 @@ func (s *Store) Execute(run Run, repositoryPath string) {
 			sum := sha256.Sum256(raw)
 			if decodeErr != nil || clean == "." || filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) || hex.EncodeToString(sum[:]) != input.SHA256 {
 				err = errors.New("verification input is invalid")
+				setupFailure = true
 				break
 			}
 			var writeErr error
@@ -996,6 +999,7 @@ func (s *Store) Execute(run Run, repositoryPath string) {
 			}
 			if writeErr != nil {
 				err = writeErr
+				setupFailure = true
 				break
 			}
 		}
@@ -1005,10 +1009,12 @@ func (s *Store) Execute(run Run, repositoryPath string) {
 		info, e := os.Stat(dir)
 		if e != nil || !info.IsDir() {
 			err = errors.New("working directory does not exist")
+			setupFailure = true
 		} else {
 			outputDirectory, outputErr := os.MkdirTemp("", "vivarium-output-*")
 			if outputErr != nil {
 				err = outputErr
+				setupFailure = true
 			} else {
 				defer os.RemoveAll(outputDirectory)
 				outputErr = os.Chmod(outputDirectory, 0o777)
@@ -1017,6 +1023,19 @@ func (s *Store) Execute(run Run, repositoryPath string) {
 				err = outputErr
 			}
 			if err != nil {
+				goto executionDone
+			}
+			imageDiagnostic, imageErr := exec.Command("docker", "image", "inspect", run.Definition.Image).CombinedOutput()
+			if imageErr != nil {
+				diagnostic := strings.TrimSpace(string(imageDiagnostic))
+				if len(diagnostic) > 1000 {
+					diagnostic = diagnostic[:1000]
+				}
+				if diagnostic == "" {
+					diagnostic = imageErr.Error()
+				}
+				err = errors.New("container image unavailable: " + diagnostic)
+				setupFailure = true
 				goto executionDone
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), time.Duration(run.Definition.TimeoutSeconds)*time.Second)
@@ -1096,6 +1115,9 @@ func (s *Store) Execute(run Run, repositoryPath string) {
 				if err != nil {
 					run.Failure = err.Error()
 				}
+				if setupFailure {
+					run.FailureKind = "setup"
+				}
 				last := &run.Attempts[len(run.Attempts)-1]
 				last.State, last.ExitCode, last.Failure = "cleanup_pending", run.ExitCode, run.Failure
 				if !s.updatePublished(run) {
@@ -1125,6 +1147,9 @@ executionDone:
 	if err != nil {
 		run.State = "failed"
 		run.Failure = err.Error()
+		if setupFailure {
+			run.FailureKind = "setup"
+		}
 	} else {
 		run.State = "succeeded"
 	}

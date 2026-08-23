@@ -603,6 +603,28 @@ func TestExecuteUsesExactDisposableSnapshotAndPersistsLifecycle(t *testing.T) {
 	if output, err := exec.Command("docker", "ps", "--quiet", "--filter", "name=vivarium-check-"+got[0].ID).Output(); err != nil || len(output) != 0 {
 		t.Fatalf("check descendants retained: %q, %v", output, err)
 	}
+	classificationStore, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	classificationRuns, err := classificationStore.Create(runs[0].RepositoryID, runs[0].PullRequestID, commit, []Definition{
+		{Name: "missing image", Image: "vivarium-unavailable-image:never", Command: "true", WorkingDirectory: ".", TimeoutSeconds: 10},
+		{Name: "spoofed docker stderr", Image: "alpine:3.22", Command: "echo 'error response from daemon: no such image:' >&2; exit 125", WorkingDirectory: ".", TimeoutSeconds: 10},
+	})
+	if err != nil || len(classificationRuns) != 2 {
+		t.Fatalf("classification runs = %#v, %v", classificationRuns, err)
+	}
+	for _, run := range classificationRuns {
+		classificationStore.Execute(run, repository)
+	}
+	missing, _ := classificationStore.Get(runs[0].RepositoryID, runs[0].PullRequestID, classificationRuns[0].ID)
+	spoofed, _ := classificationStore.Get(runs[0].RepositoryID, runs[0].PullRequestID, classificationRuns[1].ID)
+	if missing.State != "failed" || missing.FailureKind != "setup" {
+		t.Fatalf("missing image was not a structured setup failure: %#v", missing)
+	}
+	if spoofed.State != "failed" || spoofed.FailureKind != "" || spoofed.ExitCode == nil || *spoofed.ExitCode != 125 {
+		t.Fatalf("command-controlled stderr became setup evidence: %#v", spoofed)
+	}
 
 	// A process restart releases the execution lock; durable nonterminal work is
 	// discovered and can be safely relaunched to a terminal result.
