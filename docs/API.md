@@ -4362,3 +4362,21 @@ stale only when selected Git blobs differ and redact inaccessible consumer evide
 requires all checks to pass and every audience to have acknowledged, measured zero old-behavior use.
 These endpoints grant no workspace, telemetry, Git, consumer, release, deployment, environment, or
 removal authority.
+# Conflict reconciliation checkpoints
+
+`POST /workspaces/{workspace_id}/conflict-checkpoints` requires live command control and the conflict ledger
+`expected_version`. `criteria` contains one or more entries of every kind `required_check`, `reproduction`,
+`contract`, `schema`, `preview_acceptance`, and `conflict_test`; all server-derived affected required-check
+names must be present. Entries retain `origin` (`source`, `target`, or `both`), command, `exact_criteria`,
+affected-path `coverage`, affected `owner_ids`, optional artifact paths, and cost. Required-check commands must
+match definitions frozen from the exact target revision. Required-check criteria run through the ordinary isolated
+check executor with the complete frozen image/resource/timeout/input/environment contract and retain
+`check_run_id` plus `check_run_scope_id`. Dependency-manifest and effective-policy digests are
+resolved server-side, so clients cannot label freshness. The response is the updated workspace containing the
+immutable candidate and results.
+Dependency resolution uses the exported immutable candidate repository: a successful empty tree lookup is retained
+as absence, while tree or blob read failure returns `conflict_dependency_revision_unavailable` without a checkpoint.
+
+`POST /workspaces/{workspace_id}/conflict-checkpoints/{checkpoint_id}/criteria/{criterion_id}/decision`
+accepts an affected owner's `accepted` or `rejected` decision and rationale at an exact ledger version.
+Stale criteria reject new decisions; prior decisions remain historical.

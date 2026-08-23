@@ -10,9 +10,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 )
 
 var (
@@ -75,18 +78,71 @@ type Source struct {
 // when a reconciliation workspace was launched. It is context, not authority:
 // publication still passes through the named repository's normal controls.
 type ConflictContext struct {
-	Version           int                    `json:"version"`
-	PullRequestID     string                 `json:"pull_request_id"`
-	CandidateID       string                 `json:"candidate_id,omitempty"`
-	BaseCommitID      string                 `json:"base_commit_id"`
-	Source            ConflictRevision       `json:"source"`
-	Target            ConflictRevision       `json:"target"`
-	Files             []ConflictFileEvidence `json:"files"`
-	AffectedChecks    []string               `json:"affected_checks"`
-	Incomplete        []string               `json:"incomplete"`
-	PublicationTarget []ConflictPublication  `json:"publication_targets"`
-	Questions         []ConflictQuestion     `json:"questions"`
-	Resolutions       []ConflictResolution   `json:"resolutions"`
+	Version           int                     `json:"version"`
+	PullRequestID     string                  `json:"pull_request_id"`
+	CandidateID       string                  `json:"candidate_id,omitempty"`
+	BaseCommitID      string                  `json:"base_commit_id"`
+	Source            ConflictRevision        `json:"source"`
+	Target            ConflictRevision        `json:"target"`
+	Files             []ConflictFileEvidence  `json:"files"`
+	AffectedChecks    []string                `json:"affected_checks"`
+	RequiredChecks    []ConflictRequiredCheck `json:"required_checks"`
+	Incomplete        []string                `json:"incomplete"`
+	PublicationTarget []ConflictPublication   `json:"publication_targets"`
+	Questions         []ConflictQuestion      `json:"questions"`
+	Resolutions       []ConflictResolution    `json:"resolutions"`
+	Checkpoints       []ConflictCheckpoint    `json:"checkpoints"`
+}
+type ConflictRequiredCheck struct {
+	Name       string               `json:"name"`
+	Definition checkruns.Definition `json:"definition"`
+}
+
+// ConflictCheckpoint is an immutable verification of one assembled result.
+// Later checkpoints can mark only evidence whose named inputs moved stale;
+// the original commands, output, artifacts, cost, and decision remain intact.
+type ConflictCheckpoint struct {
+	ID                 string                       `json:"id"`
+	CandidateCommitID  string                       `json:"candidate_commit_id"`
+	CandidateTreeID    string                       `json:"candidate_tree_id"`
+	SourceRevision     string                       `json:"source_revision"`
+	TargetRevision     string                       `json:"target_revision"`
+	DependencyRevision string                       `json:"dependency_revision,omitempty"`
+	PolicyRevision     string                       `json:"policy_revision,omitempty"`
+	Criteria           []ConflictCriterion          `json:"criteria"`
+	Decisions          []ConflictCheckpointDecision `json:"decisions"`
+	CreatedBy          ConflictAuthorship           `json:"created_by"`
+	CreatedAt          time.Time                    `json:"created_at"`
+}
+type ConflictCriterion struct {
+	ID              string                       `json:"id"`
+	Kind            string                       `json:"kind"`
+	Name            string                       `json:"name"`
+	Origin          string                       `json:"origin"`
+	Command         string                       `json:"command"`
+	ExactCriteria   []string                     `json:"exact_criteria"`
+	Coverage        []string                     `json:"coverage"`
+	OwnerIDs        []string                     `json:"owner_ids"`
+	State           string                       `json:"state"`
+	ExitCode        int                          `json:"exit_code"`
+	Logs            string                       `json:"logs,omitempty"`
+	Artifacts       []ConflictCheckpointArtifact `json:"artifacts"`
+	Cost            float64                      `json:"cost"`
+	InvalidatedBy   []string                     `json:"invalidated_by,omitempty"`
+	CheckRunID      string                       `json:"check_run_id,omitempty"`
+	CheckRunScopeID string                       `json:"check_run_scope_id,omitempty"`
+}
+type ConflictCheckpointArtifact struct {
+	Path   string `json:"path"`
+	SHA256 string `json:"sha256"`
+	Size   int64  `json:"size"`
+}
+type ConflictCheckpointDecision struct {
+	CriterionID string    `json:"criterion_id"`
+	OwnerID     string    `json:"owner_id"`
+	Decision    string    `json:"decision"`
+	Rationale   string    `json:"rationale"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 type ConflictCitation struct {
@@ -988,6 +1044,111 @@ func (s *Store) AddConflictResolution(id string, expected int, resolution Confli
 	return w, s.write(w)
 }
 
+func (s *Store) AddConflictCheckpoint(id string, expected int, principal string, controlVersion int, checkpoint ConflictCheckpoint) (Workspace, error) {
+	control := s.controlLock(id)
+	control.Lock()
+	defer control.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w, err := s.read(id)
+	if err != nil {
+		return Workspace{}, err
+	}
+	if w.ConflictContext == nil || w.ConflictContext.Version != expected {
+		return Workspace{}, ErrConflict
+	}
+	if w.State != "running" || w.Control.Version != controlVersion || !w.CanControl(principal, "commands", s.now()) {
+		return Workspace{}, ErrControl
+	}
+	checkpoint.ID, err = randomID(12)
+	if err != nil {
+		return Workspace{}, err
+	}
+	checkpoint.CreatedAt = s.now()
+	for i := range checkpoint.Criteria {
+		checkpoint.Criteria[i].ID, err = randomID(12)
+		if err != nil {
+			return Workspace{}, err
+		}
+	}
+	// Staleness is append-only metadata on the old proof. The proof and its
+	// historical decisions are never removed; consumers can see exactly which
+	// changed input stopped each criterion from being current.
+	for i := range w.ConflictContext.Checkpoints {
+		old := &w.ConflictContext.Checkpoints[i]
+		for j := range old.Criteria {
+			criterion := &old.Criteria[j]
+			if old.SourceRevision != checkpoint.SourceRevision && (criterion.Origin == "source" || criterion.Origin == "both") {
+				criterion.InvalidatedBy = appendUnique(criterion.InvalidatedBy, "source_revision")
+			}
+			if old.TargetRevision != checkpoint.TargetRevision && (criterion.Origin == "target" || criterion.Origin == "both") {
+				criterion.InvalidatedBy = appendUnique(criterion.InvalidatedBy, "target_revision")
+			}
+			if old.DependencyRevision != checkpoint.DependencyRevision {
+				criterion.InvalidatedBy = appendUnique(criterion.InvalidatedBy, "dependency_revision")
+			}
+			if old.PolicyRevision != checkpoint.PolicyRevision {
+				criterion.InvalidatedBy = appendUnique(criterion.InvalidatedBy, "policy_revision")
+			}
+		}
+	}
+	w.ConflictContext.Checkpoints = append(w.ConflictContext.Checkpoints, checkpoint)
+	w.ConflictContext.Version++
+	w.UpdatedAt = checkpoint.CreatedAt
+	w.Events = append(w.Events, Event{ID: checkpoint.ID, Kind: "conflict.checkpoint.created", ActorID: checkpoint.CreatedBy.ActorID, Role: "verification", Detail: checkpoint.CandidateCommitID, CreatedAt: checkpoint.CreatedAt})
+	return w, s.write(w)
+}
+
+func appendUnique(values []string, value string) []string {
+	if slices.Contains(values, value) {
+		return values
+	}
+	return append(values, value)
+}
+
+func (s *Store) DecideConflictCheckpoint(id, checkpointID, criterionID string, expected int, decision ConflictCheckpointDecision) (Workspace, error) {
+	control := s.controlLock(id)
+	control.Lock()
+	defer control.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w, err := s.read(id)
+	if err != nil {
+		return Workspace{}, err
+	}
+	if w.ConflictContext == nil || w.ConflictContext.Version != expected {
+		return Workspace{}, ErrConflict
+	}
+	now, found := s.now(), false
+	for i := range w.ConflictContext.Checkpoints {
+		checkpoint := &w.ConflictContext.Checkpoints[i]
+		if checkpoint.ID != checkpointID {
+			continue
+		}
+		for _, criterion := range checkpoint.Criteria {
+			if criterion.ID == criterionID && slices.Contains(criterion.OwnerIDs, decision.OwnerID) && len(criterion.InvalidatedBy) == 0 {
+				found = true
+			}
+		}
+		if found {
+			for _, old := range checkpoint.Decisions {
+				if old.CriterionID == criterionID && old.OwnerID == decision.OwnerID {
+					return Workspace{}, ErrConflict
+				}
+			}
+			decision.CriterionID, decision.CreatedAt = criterionID, now
+			checkpoint.Decisions = append(checkpoint.Decisions, decision)
+		}
+	}
+	if !found {
+		return Workspace{}, ErrInvalid
+	}
+	w.ConflictContext.Version++
+	w.UpdatedAt = now
+	w.Events = append(w.Events, Event{Kind: "conflict.checkpoint." + decision.Decision, ActorID: decision.OwnerID, Role: "decision", Detail: criterionID, CreatedAt: now})
+	return w, s.write(w)
+}
+
 // ActConflictResolution persists a recoverable intent before touching runtime
 // content. An identical retry inspects that intent and either performs the edit
 // or finalizes it, so a failure after the external mutation cannot make the
@@ -1189,6 +1350,7 @@ func (s *Store) Create(w Workspace, definitionBytes []byte) (Workspace, error) {
 		w.ConflictContext.Version = 1
 		w.ConflictContext.Questions = []ConflictQuestion{}
 		w.ConflictContext.Resolutions = []ConflictResolution{}
+		w.ConflictContext.Checkpoints = []ConflictCheckpoint{}
 	}
 	if err := os.MkdirAll(s.RuntimePath(w.ID), 0700); err != nil {
 		return Workspace{}, err

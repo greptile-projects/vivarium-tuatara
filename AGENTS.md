@@ -2,6 +2,19 @@
 
 Guidance for coding agents working in this repository.
 
+Conflict reconciliation resolution checkpoints in the workspace ledger assemble an immutable unreferenced
+two-parent candidate and retain all affected required checks, reproductions, contract/schema scenarios,
+preview acceptance, and repository conflict tests with exact commands, criteria, coverage, logs, artifacts,
+costs, and affected-owner decisions. Each criterion runs from a clean reset of that candidate; successor
+checkpoints append selective source/target/dependency/policy staleness without deleting historical proof or
+granting publication authority. Required-check definitions are frozen from the exact target revision;
+required-check checkpoint criteria run through the same disposable read-only container executor and full image,
+resource, timeout, input, output, environment, and candidate-identity contract as ordinary check runs;
+dependency-manifest and effective-policy revisions are server-derived, and persistence atomically rechecks the
+initiator's live command-control version and running workspace state.
+Dependency freshness fails closed on Git/tree/blob read errors; only a successful candidate tree lookup that omits
+`.vivarium/packages.json` is treated as authoritative manifest absence.
+
 Agent intent at `/repositories/{id}/agent-projects` and the repository `/agents` workspace retains
 immutable reviewed prompts, instructions, tools, models, knowledge, memory/data terms, tasks, outputs,
 prohibitions, budgets, owners, escalation, and deployment boundaries beneath `$AGENT_PROJECT_STORAGE_ROOT`

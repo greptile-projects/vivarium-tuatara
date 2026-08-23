@@ -1483,6 +1483,20 @@ export type DevelopmentWorkspace = {
       target_change: string;
     }[];
     affected_checks: string[];
+    required_checks: {
+      name: string;
+      definition: {
+        name: string;
+        image: string;
+        command: string;
+        working_directory?: string;
+        environment?: Record<string, string>;
+        timeout_seconds?: number;
+        cpus?: number;
+        memory_mb?: number;
+        storage_mb?: number;
+      };
+    }[];
     incomplete: string[];
     publication_targets: {
       repository_id: string;
@@ -1530,6 +1544,48 @@ export type DevelopmentWorkspace = {
       created_at: string;
       applied_at?: string;
       undone_at?: string;
+    }[];
+    checkpoints: {
+      id: string;
+      candidate_commit_id: string;
+      candidate_tree_id: string;
+      source_revision: string;
+      target_revision: string;
+      dependency_revision?: string;
+      policy_revision?: string;
+      created_by: ConflictAuthorship;
+      created_at: string;
+      criteria: {
+        id: string;
+        kind:
+          | "required_check"
+          | "reproduction"
+          | "contract"
+          | "schema"
+          | "preview_acceptance"
+          | "conflict_test";
+        name: string;
+        origin: "source" | "target" | "both";
+        command: string;
+        exact_criteria: string[];
+        coverage: string[];
+        owner_ids: string[];
+        state: "passed" | "failed";
+        exit_code: number;
+        logs?: string;
+        artifacts: { path: string; sha256: string; size: number }[];
+        cost: number;
+        invalidated_by?: string[];
+        check_run_id?: string;
+        check_run_scope_id?: string;
+      }[];
+      decisions: {
+        criterion_id: string;
+        owner_id: string;
+        decision: "accepted" | "rejected";
+        rationale: string;
+        created_at: string;
+      }[];
     }[];
   };
   participants?: {

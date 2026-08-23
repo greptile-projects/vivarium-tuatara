@@ -3,6 +3,29 @@
 Notes on how this project fits together. Mostly empty for now — things get
 written down here as they're decided, not before.
 
+## Meaning-preserving conflict checkpoints
+
+Conflict-reconciliation workspaces can turn a resolved working tree into an unreferenced, immutable
+two-parent Git candidate without moving either contribution. Every checkpoint must cover all affected
+required checks plus a reproduction, contract scenario, schema scenario, preview acceptance, and a
+repository conflict test. Each retained criterion names whether it came from the source, target, or both;
+its exact command and acceptance criteria; affected paths and owners; exit state, bounded logs,
+digest-addressed artifacts, and cost. Each criterion is reset to the candidate before execution so generated
+or modified files from one command cannot change the tree evaluated by another. A required-check name is bound
+to its complete parsed check definition frozen from the exact target revision; callers cannot replace it with a
+weaker command or workspace runtime. Required checks use the ordinary disposable, read-only, network-disabled
+check executor with the frozen image, timeout, resources, inputs, environment, output contract, and injected
+candidate identity, and the checkpoint retains the durable check-run identity. Dependency-manifest and effective-policy digests are resolved by the server, and the
+store rechecks the initiating command lease and running state immediately before retaining evidence.
+Candidate dependency lookup distinguishes a successful missing-path result from Git, storage, or executor failure;
+only the former receives the stable absence digest, while operational uncertainty blocks the checkpoint.
+
+Affected source and target owners can accept or reject individual deliberate behavior results with an
+attributable rationale. A later checkpoint compares source, target, dependency, and policy revision inputs
+and appends staleness only to criteria that consumed a changed input. Historical evidence and decisions stay
+visible, but stale criteria cannot receive a new owner decision. Candidates and checkpoints remain evidence:
+they grant no Git publication, review, merge, release, dependency, policy, workspace, or deployment authority.
+
 ## Repository-reviewed collaboration workflows
 
 Authorized repository collaborators use `/repositories/{id}/collaboration-workflows/preview` or the
