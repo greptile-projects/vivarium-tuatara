@@ -74,6 +74,16 @@ is named as replaced, it must share the finding provenance and every path it cha
 changed by the consumer update. The retained replacement connects both releases and the measured
 usage outcome while leaving each repository and environment independently governed.
 
+`adoption-journey.spec.ts` proves the complete loop through the browser, public API, stock Git, and
+a scoped package client. An independent consumer compares an unsuitable candidate with an exact
+provider release, retains inaccessible evidence as a gap, obtains explicit provider/user consent,
+and has both an approved agent and target user reproduce the fit. The journey rejects a leaked
+credential, records the denied shared-credential exception in the authority-free agreement,
+delivers a reviewed pinned dependency, and retains a failed version-regression rollout. A redacted
+finding survives provider rejection and unavailability before a consumer-authored fork pull is
+reviewed and released by the provider; a separately reviewed, checked, inventoried, and deployed
+consumer update then verifies the provider-native replacement and measured user outcome.
+
 ## Project incubators before repositories
 
 Authenticated collaborators use `/incubators` or the web project-incubator workspace to establish

@@ -312,6 +312,13 @@ whenever dependencies change or the web job fails before it starts.
   must belong to the same workspace and provenance. The provider release must publish one unambiguous
   package version that the consumer release's exact-commit inventory records as a resolved direct
   dependency, and the consumer update must change every path changed by the selected local pull.
+  The connected `adoption-journey.spec.ts` browser/API/stock-Git/package-client journey covers an
+  unsuitable candidate, inaccessible evidence, explicit human consent, agent and target-user
+  reproduction, credential-leak rejection, a denied shared-credential exception, exact reviewed
+  integration, a failed version-regression rollout, provider rejection and unavailability, a
+  consumer-authored fork contribution, provider review/release, and a verified exact-package
+  consumer update with retained costs, support boundaries, authorship, and user outcome. Playwright
+  isolates the adoption-workspace ledger.
 
 - **Project incubators** — `/incubators` and the web `/incubators` workspace provide a
   collaborative home before repository creation beneath `$INCUBATOR_STORAGE_ROOT`
