@@ -12,6 +12,8 @@ required-check checkpoint criteria run through the same disposable read-only con
 resource, timeout, input, output, environment, and candidate-identity contract as ordinary check runs;
 dependency-manifest and effective-policy revisions are server-derived, and persistence atomically rechecks the
 initiator's live command-control version and running workspace state.
+Dependency freshness fails closed on Git/tree/blob read errors; only a successful candidate tree lookup that omits
+`.vivarium/packages.json` is treated as authoritative manifest absence.
 
 Agent intent at `/repositories/{id}/agent-projects` and the repository `/agents` workspace retains
 immutable reviewed prompts, instructions, tools, models, knowledge, memory/data terms, tasks, outputs,

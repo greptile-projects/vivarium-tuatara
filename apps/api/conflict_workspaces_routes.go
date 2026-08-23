@@ -519,9 +519,10 @@ func registerConflictWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, cat
 			}
 			defer removeCheckRepository()
 		}
-		dependencyBody, dependencyErr := workspaceAuthorizedExec(catalog, item, actor, false, time.Minute, "/workspace", nil, "git", "show", candidateParts[0]+":"+packages.InventoryConfigPath)
+		dependencyBody, dependencyErr := readConflictDependencyManifest(checkRepositoryPath, candidateParts[0])
 		if dependencyErr != nil {
-			dependencyBody = []byte("absent")
+			writeAPIError(w, 503, "conflict_dependency_revision_unavailable", "the candidate dependency manifest could not be resolved authoritatively")
+			return
 		}
 		dependencySum := sha256.Sum256(dependencyBody)
 		for _, requested := range in.Criteria {
@@ -700,6 +701,21 @@ func prepareConflictCheckRepository(catalog *repositories.Store, item workspaces
 		return "", func() {}, fmt.Errorf("clone candidate bundle: %w: %s", cloneErr, strings.TrimSpace(string(output)))
 	}
 	return repositoryPath, cleanup, nil
+}
+
+func readConflictDependencyManifest(repositoryPath, candidate string) ([]byte, error) {
+	listing, err := exec.Command("git", "--git-dir="+repositoryPath, "ls-tree", candidate, "--", packages.InventoryConfigPath).Output()
+	if err != nil {
+		return nil, err
+	}
+	if len(strings.TrimSpace(string(listing))) == 0 {
+		return []byte("absent"), nil
+	}
+	body, err := exec.Command("git", "--git-dir="+repositoryPath, "show", candidate+":"+packages.InventoryConfigPath).Output()
+	if err != nil {
+		return nil, err
+	}
+	return body, nil
 }
 
 func conflictAuthorship(actor auth.Credential) workspaces.ConflictAuthorship {

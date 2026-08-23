@@ -4374,6 +4374,8 @@ check executor with the complete frozen image/resource/timeout/input/environment
 `check_run_id` plus `check_run_scope_id`. Dependency-manifest and effective-policy digests are
 resolved server-side, so clients cannot label freshness. The response is the updated workspace containing the
 immutable candidate and results.
+Dependency resolution uses the exported immutable candidate repository: a successful empty tree lookup is retained
+as absence, while tree or blob read failure returns `conflict_dependency_revision_unavailable` without a checkpoint.
 
 `POST /workspaces/{workspace_id}/conflict-checkpoints/{checkpoint_id}/criteria/{criterion_id}/decision`
 accepts an affected owner's `accepted` or `rejected` decision and rationale at an exact ledger version.

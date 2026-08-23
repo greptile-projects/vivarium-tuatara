@@ -17,6 +17,8 @@ weaker command or workspace runtime. Required checks use the ordinary disposable
 check executor with the frozen image, timeout, resources, inputs, environment, output contract, and injected
 candidate identity, and the checkpoint retains the durable check-run identity. Dependency-manifest and effective-policy digests are resolved by the server, and the
 store rechecks the initiating command lease and running state immediately before retaining evidence.
+Candidate dependency lookup distinguishes a successful missing-path result from Git, storage, or executor failure;
+only the former receives the stable absence digest, while operational uncertainty blocks the checkpoint.
 
 Affected source and target owners can accept or reject individual deliberate behavior results with an
 attributable rationale. A later checkpoint compares source, target, dependency, and policy revision inputs
