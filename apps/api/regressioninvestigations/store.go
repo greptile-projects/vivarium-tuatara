@@ -52,6 +52,73 @@ type Entry struct {
 	To        string    `json:"to,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 }
+type ScenarioInput struct {
+	Name   string `json:"name"`
+	SHA256 string `json:"sha256"`
+	Data   string `json:"data,omitempty"`
+	Kind   string `json:"kind"`
+}
+type ScenarioEnvironment struct {
+	Image            string            `json:"image"`
+	WorkingDirectory string            `json:"working_directory"`
+	SetupCommand     string            `json:"setup_command,omitempty"`
+	Command          string            `json:"command"`
+	Environment      map[string]string `json:"environment,omitempty"`
+	TimeoutSeconds   int               `json:"timeout_seconds"`
+	CPUs             float64           `json:"cpus"`
+	MemoryMB         int               `json:"memory_mb"`
+	StorageMB        int               `json:"storage_mb"`
+}
+type EnvironmentVariant struct {
+	Revision    string              `json:"revision"`
+	Environment ScenarioEnvironment `json:"environment"`
+}
+type Scenario struct {
+	ID                  string               `json:"id"`
+	Name                string               `json:"name"`
+	ExpectedBehavior    string               `json:"expected_behavior"`
+	RegressedBehavior   string               `json:"regressed_behavior"`
+	Environment         ScenarioEnvironment  `json:"environment"`
+	EnvironmentVariants []EnvironmentVariant `json:"environment_variants"`
+	Inputs              []ScenarioInput      `json:"inputs"`
+	AcceptanceCriteria  []string             `json:"acceptance_criteria"`
+	CreatedBy           string               `json:"created_by"`
+	CreatedAt           time.Time            `json:"created_at"`
+}
+type AttemptArtifact struct {
+	Path        string `json:"path"`
+	SHA256      string `json:"sha256"`
+	Size        int64  `json:"size"`
+	ContentType string `json:"content_type"`
+}
+type AttemptRun struct {
+	RunID      string            `json:"run_id,omitempty"`
+	State      string            `json:"state"`
+	ExitCode   *int              `json:"exit_code,omitempty"`
+	Failure    string            `json:"failure,omitempty"`
+	Output     string            `json:"output,omitempty"`
+	Logs       string            `json:"logs,omitempty"`
+	Artifacts  []AttemptArtifact `json:"artifacts"`
+	DurationMS int64             `json:"duration_ms"`
+}
+type Attempt struct {
+	ID                  string              `json:"id"`
+	ScenarioID          string              `json:"scenario_id"`
+	TargetKind          string              `json:"target_kind"`
+	TargetID            string              `json:"target_id,omitempty"`
+	Revision            string              `json:"revision,omitempty"`
+	DependencyRevisions map[string]string   `json:"dependency_revisions"`
+	Environment         ScenarioEnvironment `json:"environment"`
+	Inputs              []ScenarioInput     `json:"inputs"`
+	Command             string              `json:"command"`
+	Runs                []AttemptRun        `json:"runs"`
+	Classification      string              `json:"classification"`
+	Diagnostic          string              `json:"diagnostic,omitempty"`
+	CostComputeSeconds  float64             `json:"cost_compute_seconds"`
+	RequestedBy         string              `json:"requested_by"`
+	CreatedAt           time.Time           `json:"created_at"`
+	CompletedAt         time.Time           `json:"completed_at"`
+}
 type Investigation struct {
 	ID                 string     `json:"id"`
 	RequestID          string     `json:"request_id"`
@@ -73,6 +140,8 @@ type Investigation struct {
 	Comparable         bool       `json:"comparable"`
 	Status             string     `json:"status"`
 	History            []Entry    `json:"history"`
+	Scenarios          []Scenario `json:"scenarios"`
+	Attempts           []Attempt  `json:"attempts"`
 	CreatedBy          string     `json:"created_by"`
 	CreatedAt          time.Time  `json:"created_at"`
 	UpdatedAt          time.Time  `json:"updated_at"`
@@ -127,6 +196,7 @@ func (s *Store) Create(v Investigation, actor string) (Investigation, error) {
 		v.Evidence[i].ID = id()
 	}
 	v.History = []Entry{{ID: id(), Kind: "opened", ActorID: actor, To: "open", Message: "Search boundary agreed", CreatedAt: now}}
+	v.Scenarios, v.Attempts = []Scenario{}, []Attempt{}
 	return v, s.write(v)
 }
 
@@ -255,6 +325,104 @@ func (s *Store) Append(repo, wid, actor, kind, message, value string, expected i
 	v.UpdatedAt = now
 	return v, s.write(v)
 }
+func (s *Store) AddScenario(repo, wid, actor string, scenario Scenario, expected int) (Investigation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, e := s.lock()
+	if e != nil {
+		return Investigation{}, e
+	}
+	defer unlock()
+	v, e := s.Get(repo, wid)
+	if e != nil {
+		return Investigation{}, e
+	}
+	if v.Version != expected {
+		return Investigation{}, ErrConflict
+	}
+	if strings.TrimSpace(scenario.ExpectedBehavior) == "" {
+		scenario.ExpectedBehavior = v.ExpectedBehavior
+	}
+	if strings.TrimSpace(scenario.RegressedBehavior) == "" {
+		scenario.RegressedBehavior = v.RegressedBehavior
+	}
+	if len(scenario.AcceptanceCriteria) == 0 {
+		scenario.AcceptanceCriteria = append([]string{}, v.AcceptanceCriteria...)
+	}
+	if !text(scenario.Name) || !text(scenario.ExpectedBehavior) || !text(scenario.RegressedBehavior) || !scenarioEnvironment(scenario.Environment) || len(scenario.AcceptanceCriteria) == 0 || len(scenario.Inputs) > 20 {
+		return Investigation{}, ErrInvalid
+	}
+	for _, input := range scenario.Inputs {
+		if !token(input.Name) || len(input.SHA256) != 64 || (input.Kind != "synthetic" && input.Kind != "privacy_preserving" && input.Kind != "unsafe") {
+			return Investigation{}, ErrInvalid
+		}
+	}
+	seenVariants := map[string]bool{}
+	for _, variant := range scenario.EnvironmentVariants {
+		if len(variant.Revision) != 40 || seenVariants[variant.Revision] || !scenarioEnvironment(variant.Environment) {
+			return Investigation{}, ErrInvalid
+		}
+		seenVariants[variant.Revision] = true
+	}
+	now := s.now()
+	scenario.ID, scenario.CreatedBy, scenario.CreatedAt = id(), actor, now
+	scenario.AcceptanceCriteria = uniq(scenario.AcceptanceCriteria)
+	if scenario.Inputs == nil {
+		scenario.Inputs = []ScenarioInput{}
+	}
+	if scenario.EnvironmentVariants == nil {
+		scenario.EnvironmentVariants = []EnvironmentVariant{}
+	}
+	v.Scenarios = append(v.Scenarios, scenario)
+	v.History = append(v.History, Entry{ID: id(), Kind: "scenario_defined", ActorID: actor, Message: "Bounded historical comparison scenario defined: " + scenario.Name, CreatedAt: now})
+	v.Version++
+	v.UpdatedAt = now
+	return v, s.write(v)
+}
+func (s *Store) RecordAttempt(repo, wid, actor string, attempt Attempt, expected int) (Investigation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, e := s.lock()
+	if e != nil {
+		return Investigation{}, e
+	}
+	defer unlock()
+	v, e := s.Get(repo, wid)
+	if e != nil {
+		return Investigation{}, e
+	}
+	if v.Version != expected {
+		return Investigation{}, ErrConflict
+	}
+	found := false
+	for _, scenario := range v.Scenarios {
+		if scenario.ID == attempt.ScenarioID {
+			found = true
+			break
+		}
+	}
+	if !found || !attemptClassification(attempt.Classification) || !token(actor) {
+		return Investigation{}, ErrInvalid
+	}
+	attempt.ID, attempt.RequestedBy = id(), actor
+	if attempt.CreatedAt.IsZero() {
+		attempt.CreatedAt = s.now()
+	}
+	if attempt.CompletedAt.IsZero() {
+		attempt.CompletedAt = s.now()
+	}
+	if attempt.Runs == nil {
+		attempt.Runs = []AttemptRun{}
+	}
+	if attempt.DependencyRevisions == nil {
+		attempt.DependencyRevisions = map[string]string{}
+	}
+	v.Attempts = append(v.Attempts, attempt)
+	v.History = append(v.History, Entry{ID: id(), Kind: "scenario_attempt", ActorID: actor, Message: "Historical comparison classified as " + attempt.Classification, CreatedAt: attempt.CompletedAt})
+	v.Version++
+	v.UpdatedAt = attempt.CompletedAt
+	return v, s.write(v)
+}
 func valid(v Investigation, actor string) bool {
 	if !(token(v.RepositoryID) && token(v.RequestID) && token(actor) && strings.TrimSpace(v.Title) != "" && len(v.Title) <= 200 && text(v.ExpectedBehavior) && text(v.RegressedBehavior) && boundary(v.KnownGood) && boundary(v.KnownBad) && len(v.Environments) > 0 && len(v.OwnerIDs) > 0 && len(v.AcceptanceCriteria) > 0 && (v.Severity == "low" || v.Severity == "medium" || v.Severity == "high" || v.Severity == "critical") && v.Source.ResourceID != "") {
 		return false
@@ -269,6 +437,7 @@ func valid(v Investigation, actor string) bool {
 func requestDigest(v Investigation, actor string) (string, error) {
 	v.ID, v.RequestDigest, v.CreatedBy, v.Status = "", "", "", ""
 	v.Version, v.CreatedAt, v.UpdatedAt, v.History = 0, time.Time{}, time.Time{}, nil
+	v.Scenarios, v.Attempts = nil, nil
 	v.Diagnostics, v.Comparable = nil, false
 	for i := range v.Evidence {
 		v.Evidence[i].ID = ""
@@ -283,6 +452,35 @@ func requestDigest(v Investigation, actor string) (string, error) {
 	}
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:]), nil
+}
+func scenarioEnvironment(v ScenarioEnvironment) bool {
+	if !text(v.Image) || strings.ContainsAny(v.Image, " \t\r\n@") || !text(v.Command) || (v.SetupCommand != "" && !text(v.SetupCommand)) || len(v.WorkingDirectory) > 300 || v.TimeoutSeconds < 1 || v.TimeoutSeconds > 3600 || v.CPUs <= 0 || v.CPUs > 8 || v.MemoryMB < 32 || v.MemoryMB > 16384 || v.StorageMB < 1 || v.StorageMB > 4096 {
+		return false
+	}
+	for key, value := range v.Environment {
+		if !environmentName(key) || len(value) > 4000 || sensitive(value) {
+			return false
+		}
+	}
+	return true
+}
+func environmentName(v string) bool {
+	if v == "" || len(v) > 100 {
+		return false
+	}
+	for i, r := range v {
+		if !(r == '_' || r >= 'A' && r <= 'Z' || i > 0 && r >= '0' && r <= '9') {
+			return false
+		}
+	}
+	return true
+}
+func attemptClassification(v string) bool {
+	switch v {
+	case "passed", "failed", "flaky", "incompatible_setup", "missing_dependencies", "unsafe_fixture", "untestable_revision":
+		return true
+	}
+	return false
 }
 func boundary(v Boundary) bool {
 	return (v.Kind == "commit" || v.Kind == "release") && len(v.Revision) == 40 && v.Label != ""

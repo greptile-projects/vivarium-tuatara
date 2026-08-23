@@ -29,6 +29,22 @@ compare-and-swap event route with actor and time attribution. This ledger agrees
 search; it grants no Git, private-machine, check execution, environment, deployment, or evidence
 access authority.
 
+Participants and repository-bound agents can define immutable comparison scenarios beneath an
+investigation. A scenario freezes its expected and regressed behavior, acceptance criteria, synthetic
+or privacy-preserving inputs, preinstalled container image, revision-specific setup and exact command,
+working directory, environment, timeout, CPU, memory, and storage limits. Attempts select an exact
+repository commit or attested release and may pin named dependency revisions. The server resolves every
+selected revision, then uses the ordinary credential-free executor: an exact Git archive is mounted
+read-only with no network or Linux capabilities, while only bounded scratch and digest-addressed output
+are writable. One to five clean repeats retain the complete environment, input digests, command, stdout,
+logs, exit state, artifacts, duration, compute cost, actor, and target/dependency provenance.
+
+Attempt classifications distinguish `passed`, `failed`, and mixed `flaky` runs from
+`incompatible_setup`, `missing_dependencies`, `unsafe_fixture`, and `untestable_revision`. The latter
+states are durable gaps rather than behavioral evidence, so collaborators can tell a code regression
+from historical setup, data, dependency, or nondeterminism differences. Scenario records and attempts
+grant no Git, package, network, environment, release, deployment, or general execution authority.
+
 ## Meaning-preserving conflict checkpoints
 
 Conflict-reconciliation workspaces can turn a resolved working tree into an unreferenced, immutable
