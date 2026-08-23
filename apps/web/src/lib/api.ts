@@ -1356,7 +1356,8 @@ export type DevelopmentWorkspace = {
       | "proposal_task"
       | "pull_request"
       | "incident_repair"
-      | "decision_experiment";
+      | "decision_experiment"
+      | "conflict_reconciliation";
     repository_id: string;
     proposal_id?: string;
     task_id?: string;
@@ -1369,7 +1370,28 @@ export type DevelopmentWorkspace = {
     default_definition_sha256?: string;
     upstream_repository_id?: string;
     opportunity_id?: string;
+    conflict_launch_id?: string;
   };
+  conflict_context?: {
+    pull_request_id: string;
+    candidate_id?: string;
+    base_commit_id: string;
+    source: { branch: string; commit_id: string; owner_ids: string[] };
+    target: { branch: string; commit_id: string; owner_ids: string[] };
+    files: { path: string; kinds: string[]; symbols: string[]; source_change: string; target_change: string }[];
+    affected_checks: string[];
+    incomplete: string[];
+    publication_targets: { repository_id: string; branch: string; revision: string; authority: string }[];
+  };
+  participants?: {
+    principal_kind: "human" | "approved_agent";
+    principal_id: string;
+    role: string;
+    status: "pending" | "accepted" | "declined";
+    invited_by: string;
+    invited_at: string;
+    responded_at?: string;
+  }[];
   contributor_context?: {
     opportunity_id: string;
     opportunity_version: number;

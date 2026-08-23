@@ -1360,6 +1360,9 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	}
 	if authStore != nil && repositoryCatalog != nil && workspaceStore != nil {
 		registerWorkspaceRoutes(mux, store, repositoryCatalog, proposalStore, pullRequestStore, incidentStore, issueStore, releaseStore, workspaceStore, authStore, organizationStore, checkRunStore, changeSessionStore, supportThreadStore, knowledgeAnswerStore, debugWorkspaceStore)
+		if pullRequestStore != nil {
+			registerConflictWorkspaceRoutes(mux, store, repositoryCatalog, pullRequestStore, workspaceStore, authStore, organizationStore)
+		}
 	}
 	if authStore != nil && repositoryCatalog != nil && explanationStore != nil {
 		registerExplanationRoutes(mux, store, repositoryCatalog, authStore, explanationStore, proposalStore, pullRequestStore, incidentStore, workspaceStore, checkRunStore, relationshipStore)

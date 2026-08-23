@@ -111,6 +111,62 @@ func TestSharedPresenceDiscussionAndVersionedControlSurviveRestart(t *testing.T)
 	}
 }
 
+func TestConflictParticipantsRequireCreatorInvitationAndExplicitConsent(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	creator, affected, agent := "11111111111111111111111111111111", "22222222222222222222222222222222", "33333333333333333333333333333333"
+	created, err := store.Create(Workspace{RepositoryID: "repo", CommitID: "revision", CreatorID: creator, ConflictContext: &ConflictContext{PullRequestID: "pull", BaseCommitID: "base"}}, []byte("definition"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.Invite(created.ID, affected, "human", affected, "owner"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("non-creator invite = %v", err)
+	}
+	created, err = store.Invite(created.ID, creator, "human", affected, "source owner")
+	if err != nil || created.HasParticipant(affected) {
+		t.Fatalf("pending participant = %#v, %v", created.Participants, err)
+	}
+	created, err = store.RespondInvitation(created.ID, affected, "accepted")
+	if err != nil || !created.HasParticipant(affected) {
+		t.Fatalf("accepted participant = %#v, %v", created.Participants, err)
+	}
+	created, err = store.Invite(created.ID, creator, "approved_agent", agent, "bounded resolver")
+	if err != nil || created.Participants[1].Status != "accepted" {
+		t.Fatalf("agent invitation = %#v, %v", created.Participants, err)
+	}
+	reopened, err := New(store.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	durable, err := reopened.Get(created.ID)
+	if err != nil || !durable.HasParticipant(affected) || len(durable.Participants) != 2 {
+		t.Fatalf("durable participants = %#v, %v", durable.Participants, err)
+	}
+}
+
+func TestConflictLaunchClaimReconcilesOneDurableWorkspace(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, reused, release, err := store.ClaimConflictLaunch("repo", "pull", "stable-launch")
+	if err != nil || reused {
+		t.Fatalf("initial claim reused=%v err=%v", reused, err)
+	}
+	created, err := store.Create(Workspace{RepositoryID: "repo", CommitID: "target", CreatorID: "creator", Source: Source{PullRequestID: "pull", ConflictLaunchID: "stable-launch"}, ConflictContext: &ConflictContext{PullRequestID: "pull", CandidateID: "candidate"}}, []byte("definition"))
+	release()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reconciled, reused, release, err := store.ClaimConflictLaunch("repo", "pull", "stable-launch")
+	release()
+	if err != nil || !reused || reconciled.ID != created.ID {
+		t.Fatalf("reconciled=%#v reused=%v err=%v", reconciled, reused, err)
+	}
+}
+
 func TestControlTransferWaitsForAdmittedMutationAndRejectsStaleActor(t *testing.T) {
 	store, _ := New(t.TempDir())
 	creator := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -175,6 +231,26 @@ func TestControlCanBeExplicitlyReleased(t *testing.T) {
 	expiredStore.now = func() time.Time { return expired.Control.ExpiresAt.Add(time.Second) }
 	if _, err := expiredStore.ReleaseControl(expired.ID, holder, 1); !errors.Is(err, ErrControl) {
 		t.Fatalf("expired holder release = %v", err)
+	}
+}
+
+func TestApprovedAgentUsesScopedControlWithOperatorAttribution(t *testing.T) {
+	store, _ := New(t.TempDir())
+	operator, agent := "11111111111111111111111111111111", "22222222222222222222222222222222"
+	created, err := store.Create(Workspace{RepositoryID: "repo", CommitID: "revision", CreatorID: operator}, []byte("definition"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	controlled, err := store.SetControl(created.ID, operator, "approved_agent", agent, "execute", []string{"files", "commands", "lifecycle"}, 1, 300)
+	if err != nil || !controlled.CanControl(agent, "commands", time.Now()) {
+		t.Fatalf("agent control=%#v err=%v", controlled.Control, err)
+	}
+	if err := store.WithControl(created.ID, agent, "files", func(Workspace) error { return nil }); err != nil {
+		t.Fatalf("agent file control=%v", err)
+	}
+	released, err := store.ReleaseControlAs(created.ID, agent, operator, controlled.Control.Version)
+	if err != nil || released.Control.PrincipalID != "" || released.Control.GrantedBy != operator {
+		t.Fatalf("agent release=%#v err=%v", released.Control, err)
 	}
 }
 
