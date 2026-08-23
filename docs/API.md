@@ -4250,6 +4250,10 @@ design decision, migration, or user behavior as `preserved` or `intentionally_ch
 rationale and exact citations. `POST .../conflict-resolutions/{resolution_id}/apply` and `/undo`
 require the current ledger version and active file-control lease. Control transfer, other ledger
 writes, the runtime edit, and its durable attribution are serialized; stale content fails closed.
+Before touching runtime content, the server persists `applying` or `undoing` intent with the exact
+before and intended digests, prior content needed for undo, original authorship, and start time. An
+identical retry reconciles an unchanged file by performing the edit or an already-edited file by
+finalizing deduplicated provenance. Any third digest fails closed instead of guessing.
 These endpoints grant no Git publication, branch, review, check, merge, secret, or environment
 authority.
 

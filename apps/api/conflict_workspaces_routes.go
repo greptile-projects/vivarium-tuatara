@@ -357,7 +357,9 @@ func registerConflictWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, cat
 			}
 		}
 		applying := r.PathValue("action") == "apply"
-		if resolution == nil || (!applying && r.PathValue("action") != "undo") || (applying && resolution.State != "proposed") || (!applying && resolution.State != "applied") {
+		validApplyState := applying && slices.Contains([]string{"proposed", "applying", "applied"}, resolutionState(resolution))
+		validUndoState := !applying && r.PathValue("action") == "undo" && slices.Contains([]string{"applied", "undoing", "undone"}, resolutionState(resolution))
+		if resolution == nil || (!validApplyState && !validUndoState) {
 			writeAPIError(w, 422, "conflict_resolution_action_invalid", "resolution is not in a state that permits this action")
 			return
 		}
@@ -365,29 +367,40 @@ func registerConflictWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, cat
 		if !valid {
 			return
 		}
-		updated, err := workspaceStore.ActConflictResolution(item.ID, resolution.ID, in.ExpectedVersion, applying, workspacePrincipal(actor), conflictAuthorship(actor), func(current workspaces.Workspace, retained workspaces.ConflictResolution) (string, string, error) {
-			content, expected := retained.ProposedContent, retained.ExpectedSHA256
-			if !applying {
-				content, expected = retained.PreviousContent, retained.AppliedSHA256
-			}
+		inspect := func(current workspaces.Workspace, retained workspaces.ConflictResolution) (string, string, error) {
 			previous, readErr := workspaceAuthorizedExec(catalog, current, actor, false, 10*time.Second, "/workspace", nil, "sh", "-c", "test -f \"$1\" && test ! -L \"$1\" && cat -- \"$1\"", "sh", retained.Path)
 			if readErr != nil {
 				return "", "", readErr
 			}
+			digest := sha256.Sum256(previous)
+			return string(previous), hex.EncodeToString(digest[:]), nil
+		}
+		mutate := func(current workspaces.Workspace, retained workspaces.ConflictResolution, content, expected string) error {
 			_, writeErr := workspaceAuthorizedExec(catalog, current, actor, true, 10*time.Second, filepath.Dir(name), strings.NewReader(content), "sh", "-c", workspaceFileWriteScript, "sh", filepath.Base(name), expected)
-			digest := sha256.Sum256([]byte(content))
-			return string(previous), hex.EncodeToString(digest[:]), writeErr
-		})
+			return writeErr
+		}
+		updated, err := workspaceStore.ActConflictResolution(item.ID, resolution.ID, in.ExpectedVersion, applying, workspacePrincipal(actor), conflictAuthorship(actor), inspect, mutate)
 		if errors.Is(err, workspaces.ErrControl) {
 			writeAPIError(w, 409, "workspace_control_required", "live file control is held by another participant or has expired")
 			return
 		}
-		if err != nil {
+		if errors.Is(err, workspaces.ErrConflict) {
 			writeAPIError(w, 409, "conflict_resolution_changed", "proposed file changed; compare all four versions before retrying")
+			return
+		}
+		if err != nil {
+			writeAPIError(w, 503, "conflict_resolution_pending", "resolution execution was interrupted; refresh and retry the visible pending action to reconcile it")
 			return
 		}
 		writeConflictMutation(w, updated, err)
 	})
+}
+
+func resolutionState(resolution *workspaces.ConflictResolution) string {
+	if resolution == nil {
+		return ""
+	}
+	return resolution.State
 }
 
 func conflictAuthorship(actor auth.Credential) workspaces.ConflictAuthorship {

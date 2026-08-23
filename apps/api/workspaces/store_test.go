@@ -188,20 +188,59 @@ func TestConflictMeaningLedgerRetainsCASAuthorshipAndUndo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	created, err = store.AddConflictResolution(created.ID, 3, ConflictResolution{Path: "service.go", Summary: "Retain both retries", ProposedContent: "resolved", ExpectedSHA256: "old", Preservation: []ConflictPreservation{{Kind: "user_behavior", Reference: "retry", Disposition: "preserved", Citations: []ConflictCitation{citation}}}, Authorship: ConflictAuthorship{ActorID: "operator", AgentID: "agent"}})
+	runtimeContent := "before"
+	created, err = store.AddConflictResolution(created.ID, 3, ConflictResolution{Path: "service.go", Summary: "Retain both retries", ProposedContent: "resolved", ExpectedSHA256: digestContent(runtimeContent), Preservation: []ConflictPreservation{{Kind: "user_behavior", Reference: "retry", Disposition: "preserved", Citations: []ConflictCitation{citation}}}, Authorship: ConflictAuthorship{ActorID: "operator", AgentID: "agent"}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	resolution := created.ConflictContext.Resolutions[0]
-	created, err = store.ActConflictResolution(created.ID, resolution.ID, 4, true, "operator", ConflictAuthorship{ActorID: "operator", AgentID: "agent"}, func(Workspace, ConflictResolution) (string, string, error) { return "before", "after", nil })
+	inspect := func(Workspace, ConflictResolution) (string, string, error) {
+		return runtimeContent, digestContent(runtimeContent), nil
+	}
+	mutate := func(_ Workspace, _ ConflictResolution, content, _ string) error {
+		runtimeContent = content
+		return os.Chmod(filepath.Join(store.root, "provenance"), 0500)
+	}
+	if _, err = store.ActConflictResolution(created.ID, resolution.ID, 4, true, "operator", ConflictAuthorship{ActorID: "operator", AgentID: "agent"}, inspect, mutate); err == nil {
+		t.Fatal("apply unexpectedly finalized without durable provenance")
+	}
+	if chmodErr := os.Chmod(filepath.Join(store.root, "provenance"), 0700); chmodErr != nil {
+		t.Fatal(chmodErr)
+	}
+	pending, _ := store.Get(created.ID)
+	if pending.ConflictContext.Resolutions[0].State != "applying" || runtimeContent != "resolved" {
+		t.Fatalf("recoverable apply = %s / %q", pending.ConflictContext.Resolutions[0].State, runtimeContent)
+	}
+	created, err = store.ActConflictResolution(created.ID, resolution.ID, 4, true, "operator", ConflictAuthorship{ActorID: "different retry"}, inspect, func(Workspace, ConflictResolution, string, string) error {
+		t.Fatal("reconciled apply repeated runtime edit")
+		return nil
+	})
 	if err != nil || created.ConflictContext.Resolutions[0].State != "applied" || created.ConflictContext.Resolutions[0].PreviousContent != "before" {
 		t.Fatalf("apply = %#v, %v", created.ConflictContext.Resolutions[0], err)
 	}
-	created, err = store.ActConflictResolution(created.ID, resolution.ID, 5, false, "operator", ConflictAuthorship{ActorID: "operator"}, func(Workspace, ConflictResolution) (string, string, error) { return "resolved", "before-digest", nil })
+	mutate = func(_ Workspace, _ ConflictResolution, content, _ string) error {
+		runtimeContent = content
+		return os.Chmod(store.root, 0500)
+	}
+	_, err = store.ActConflictResolution(created.ID, resolution.ID, 6, false, "operator", ConflictAuthorship{ActorID: "operator"}, inspect, mutate)
+	if err == nil {
+		t.Fatal("undo finalization unexpectedly survived unwritable workspace store")
+	}
+	if chmodErr := os.Chmod(store.root, 0700); chmodErr != nil {
+		t.Fatal(chmodErr)
+	}
+	pending, _ = store.Get(created.ID)
+	if pending.ConflictContext.Resolutions[0].State != "undoing" || runtimeContent != "before" {
+		t.Fatalf("recoverable undo = %s / %q", pending.ConflictContext.Resolutions[0].State, runtimeContent)
+	}
+	created, err = store.ActConflictResolution(created.ID, resolution.ID, 6, false, "operator", ConflictAuthorship{ActorID: "different retry"}, inspect, func(Workspace, ConflictResolution, string, string) error {
+		t.Fatal("reconciled undo repeated runtime edit")
+		return nil
+	})
 	if err != nil || created.ConflictContext.Resolutions[0].State != "undone" {
 		t.Fatalf("undo = %#v, %v", created.ConflictContext.Resolutions[0], err)
 	}
-	if len(created.Changes) != 2 || created.Changes[0].SHA256 != "after" || created.Changes[1].SHA256 != "before-digest" {
+	if len(created.Changes) != 2 || created.Changes[0].SHA256 != digestContent("resolved") || created.Changes[1].SHA256 != digestContent("before") {
 		t.Fatalf("resolution provenance = %#v", created.Changes)
 	}
 }

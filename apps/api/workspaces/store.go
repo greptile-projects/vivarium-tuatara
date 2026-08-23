@@ -138,6 +138,15 @@ type ConflictResolution struct {
 	CreatedAt       time.Time              `json:"created_at"`
 	AppliedAt       *time.Time             `json:"applied_at,omitempty"`
 	UndoneAt        *time.Time             `json:"undone_at,omitempty"`
+	PendingAction   *ConflictPendingAction `json:"pending_action,omitempty"`
+}
+type ConflictPendingAction struct {
+	Kind           string             `json:"kind"`
+	BeforeContent  string             `json:"before_content"`
+	BeforeSHA256   string             `json:"before_sha256"`
+	IntendedSHA256 string             `json:"intended_sha256"`
+	Authorship     ConflictAuthorship `json:"authorship"`
+	StartedAt      time.Time          `json:"started_at"`
 }
 type ConflictRevision struct {
 	Branch   string   `json:"branch"`
@@ -267,11 +276,12 @@ type Message struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 type Change struct {
-	Path      string    `json:"path"`
-	SHA256    string    `json:"sha256"`
-	Size      int       `json:"size"`
-	ActorID   string    `json:"actor_id"`
-	CreatedAt time.Time `json:"created_at"`
+	Path               string    `json:"path"`
+	SHA256             string    `json:"sha256"`
+	Size               int       `json:"size"`
+	ActorID            string    `json:"actor_id"`
+	CreatedAt          time.Time `json:"created_at"`
+	ResolutionActionID string    `json:"resolution_action_id,omitempty"`
 }
 type Workspace struct {
 	ID                             string                 `json:"id"`
@@ -976,50 +986,11 @@ func (s *Store) AddConflictResolution(id string, expected int, resolution Confli
 	return w, s.write(w)
 }
 
-func (s *Store) CompleteConflictResolution(id, resolutionID string, expected int, applying bool, authorship ConflictAuthorship, previousContent, digest string) (Workspace, error) {
-	control := s.controlLock(id)
-	control.Lock()
-	defer control.Unlock()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	w, err := s.read(id)
-	if err != nil {
-		return Workspace{}, err
-	}
-	if w.ConflictContext == nil || w.ConflictContext.Version != expected {
-		return Workspace{}, ErrConflict
-	}
-	now, found := s.now(), false
-	for i := range w.ConflictContext.Resolutions {
-		r := &w.ConflictContext.Resolutions[i]
-		if r.ID != resolutionID {
-			continue
-		}
-		if applying && r.State == "proposed" {
-			r.State, r.PreviousContent, r.AppliedSHA256, r.AppliedBy, r.AppliedAt = "applied", previousContent, digest, &authorship, &now
-			found = true
-		} else if !applying && r.State == "applied" {
-			r.State, r.UndoneAt = "undone", &now
-			found = true
-		}
-	}
-	if !found {
-		return Workspace{}, ErrInvalid
-	}
-	w.ConflictContext.Version++
-	w.UpdatedAt = now
-	kind := "conflict.resolution.applied"
-	if !applying {
-		kind = "conflict.resolution.undone"
-	}
-	w.Events = append(w.Events, Event{Kind: kind, ActorID: authorship.ActorID, Role: "authorship", Detail: resolutionID, CreatedAt: now})
-	return w, s.write(w)
-}
-
-// ActConflictResolution holds the same lease lock across the final ledger
-// compare, runtime edit, and durable state transition. Questions, proposals,
-// control transfer, and another action cannot interleave with that sequence.
-func (s *Store) ActConflictResolution(id, resolutionID string, expected int, applying bool, principal string, authorship ConflictAuthorship, operation func(Workspace, ConflictResolution) (string, string, error)) (Workspace, error) {
+// ActConflictResolution persists a recoverable intent before touching runtime
+// content. An identical retry inspects that intent and either performs the edit
+// or finalizes it, so a failure after the external mutation cannot make the
+// durable record claim that no action happened.
+func (s *Store) ActConflictResolution(id, resolutionID string, expected int, applying bool, principal string, authorship ConflictAuthorship, inspect func(Workspace, ConflictResolution) (string, string, error), operation func(Workspace, ConflictResolution, string, string) error) (Workspace, error) {
 	control := s.controlLock(id)
 	control.Lock()
 	defer control.Unlock()
@@ -1029,12 +1000,9 @@ func (s *Store) ActConflictResolution(id, resolutionID string, expected int, app
 		s.mu.Unlock()
 		return Workspace{}, err
 	}
-	if w.ConflictContext == nil || w.ConflictContext.Version != expected || !w.CanControl(principal, "files", s.now()) {
+	if w.ConflictContext == nil || !w.CanControl(principal, "files", s.now()) {
 		s.mu.Unlock()
-		if w.ConflictContext != nil && w.ConflictContext.Version == expected {
-			return Workspace{}, ErrControl
-		}
-		return Workspace{}, ErrConflict
+		return Workspace{}, ErrControl
 	}
 	var resolution *ConflictResolution
 	for i := range w.ConflictContext.Resolutions {
@@ -1042,15 +1010,90 @@ func (s *Store) ActConflictResolution(id, resolutionID string, expected int, app
 			resolution = &w.ConflictContext.Resolutions[i]
 		}
 	}
-	if resolution == nil || (applying && resolution.State != "proposed") || (!applying && resolution.State != "applied") {
+	if resolution == nil {
 		s.mu.Unlock()
 		return Workspace{}, ErrInvalid
 	}
+	if (applying && resolution.State == "applied") || (!applying && resolution.State == "undone") {
+		s.mu.Unlock()
+		return w, nil
+	}
+	pendingState := "applying"
+	if !applying {
+		pendingState = "undoing"
+	}
+	if resolution.State != pendingState {
+		if w.ConflictContext.Version != expected || (applying && resolution.State != "proposed") || (!applying && resolution.State != "applied") {
+			s.mu.Unlock()
+			return Workspace{}, ErrConflict
+		}
+		snapshot := *resolution
+		s.mu.Unlock()
+		beforeContent, beforeDigest, inspectErr := inspect(w, snapshot)
+		if inspectErr != nil {
+			return Workspace{}, inspectErr
+		}
+		expectedBefore, intendedDigest := snapshot.ExpectedSHA256, digestContent(snapshot.ProposedContent)
+		if !applying {
+			expectedBefore, intendedDigest = snapshot.AppliedSHA256, digestContent(snapshot.PreviousContent)
+		}
+		if beforeDigest != expectedBefore {
+			return Workspace{}, ErrConflict
+		}
+		s.mu.Lock()
+		w, err = s.read(id)
+		if err != nil {
+			s.mu.Unlock()
+			return Workspace{}, err
+		}
+		for i := range w.ConflictContext.Resolutions {
+			if w.ConflictContext.Resolutions[i].ID == resolutionID {
+				r := &w.ConflictContext.Resolutions[i]
+				r.State = pendingState
+				r.PendingAction = &ConflictPendingAction{Kind: map[bool]string{true: "apply", false: "undo"}[applying], BeforeContent: beforeContent, BeforeSHA256: beforeDigest, IntendedSHA256: intendedDigest, Authorship: authorship, StartedAt: s.now()}
+			}
+		}
+		w.ConflictContext.Version++
+		w.UpdatedAt = s.now()
+		w.Events = append(w.Events, Event{Kind: "conflict.resolution." + pendingState, ActorID: authorship.ActorID, Role: "instruction", Detail: resolutionID, CreatedAt: w.UpdatedAt})
+		if err = s.write(w); err != nil {
+			s.mu.Unlock()
+			return Workspace{}, err
+		}
+	}
+	// From this point the intent is durable. Reload it even on the first request
+	// so retries and uninterrupted execution share exactly the same path.
+	w, err = s.read(id)
+	if err != nil {
+		s.mu.Unlock()
+		return Workspace{}, err
+	}
+	for i := range w.ConflictContext.Resolutions {
+		if w.ConflictContext.Resolutions[i].ID == resolutionID {
+			resolution = &w.ConflictContext.Resolutions[i]
+		}
+	}
 	snapshot := *resolution
 	s.mu.Unlock()
-	previous, digest, err := operation(w, snapshot)
+	currentContent, currentDigest, err := inspect(w, snapshot)
 	if err != nil {
 		return Workspace{}, err
+	}
+	if currentDigest == snapshot.PendingAction.BeforeSHA256 {
+		content := snapshot.ProposedContent
+		if !applying {
+			content = snapshot.PreviousContent
+		}
+		if err = operation(w, snapshot, content, snapshot.PendingAction.BeforeSHA256); err != nil {
+			return Workspace{}, err
+		}
+		currentContent, currentDigest, err = inspect(w, snapshot)
+		if err != nil {
+			return Workspace{}, err
+		}
+	}
+	if currentDigest != snapshot.PendingAction.IntendedSHA256 {
+		return Workspace{}, ErrConflict
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1065,27 +1108,29 @@ func (s *Store) ActConflictResolution(id, resolutionID string, expected int, app
 			continue
 		}
 		if applying {
-			r.State, r.PreviousContent, r.AppliedSHA256, r.AppliedBy, r.AppliedAt = "applied", previous, digest, &authorship, &now
+			r.State, r.PreviousContent, r.AppliedSHA256, r.AppliedBy, r.AppliedAt = "applied", r.PendingAction.BeforeContent, currentDigest, &r.PendingAction.Authorship, &now
 		} else {
 			r.State, r.UndoneAt = "undone", &now
 		}
+		r.PendingAction = nil
 	}
 	w.ConflictContext.Version++
 	w.UpdatedAt = now
-	size := len(snapshot.ProposedContent)
-	if !applying {
-		size = len(snapshot.PreviousContent)
-	}
-	change := Change{Path: snapshot.Path, SHA256: digest, Size: size, ActorID: authorship.ActorID, CreatedAt: now}
+	actionID := resolutionID + ":" + map[bool]string{true: "apply", false: "undo"}[applying]
+	change := Change{Path: snapshot.Path, SHA256: currentDigest, Size: len(currentContent), ActorID: snapshot.PendingAction.Authorship.ActorID, CreatedAt: snapshot.PendingAction.StartedAt, ResolutionActionID: actionID}
 	provenance, provenanceErr := s.readOrSeedProvenance(id, w)
 	if provenanceErr != nil {
 		return Workspace{}, provenanceErr
 	}
-	provenance.Changes = append(provenance.Changes, change)
+	if !hasResolutionChange(provenance.Changes, actionID) {
+		provenance.Changes = append(provenance.Changes, change)
+	}
 	if provenanceErr = s.writeProvenance(id, provenance); provenanceErr != nil {
 		return Workspace{}, provenanceErr
 	}
-	w.Changes = append(w.Changes, change)
+	if !hasResolutionChange(w.Changes, actionID) {
+		w.Changes = append(w.Changes, change)
+	}
 	if len(w.Changes) > 200 {
 		w.Changes = w.Changes[len(w.Changes)-200:]
 	}
@@ -1093,8 +1138,21 @@ func (s *Store) ActConflictResolution(id, resolutionID string, expected int, app
 	if !applying {
 		kind = "conflict.resolution.undone"
 	}
-	w.Events = append(w.Events, Event{Kind: kind, ActorID: authorship.ActorID, Role: "authorship", Detail: resolutionID, CreatedAt: now})
+	w.Events = append(w.Events, Event{Kind: kind, ActorID: snapshot.PendingAction.Authorship.ActorID, Role: "authorship", Detail: resolutionID, CreatedAt: now})
 	return w, s.write(w)
+}
+
+func digestContent(content string) string {
+	sum := sha256.Sum256([]byte(content))
+	return hex.EncodeToString(sum[:])
+}
+func hasResolutionChange(changes []Change, id string) bool {
+	for _, change := range changes {
+		if change.ResolutionActionID == id {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Store) Create(w Workspace, definitionBytes []byte) (Workspace, error) {
