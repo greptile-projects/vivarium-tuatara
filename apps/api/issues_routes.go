@@ -251,7 +251,11 @@ func registerIssueRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *rep
 		}
 		statusRevision := ""
 		if input.Status == "triaged" {
-			statusRevision = workflowRepositoryHead(gitStore, r.PathValue("id"))
+			statusRevision = workflowRepositoryHead(gitStore, r.PathValue("id"), repo.DefaultBranch)
+			if statusRevision == "" {
+				writeAPIError(w, 409, "issue_acceptance_revision_unavailable", "issue acceptance requires a commit on the repository default branch")
+				return
+			}
 		}
 		v, err := store.UpdateStatus(r.PathValue("id"), r.PathValue("issue_id"), actor.UserID, input.Status, input.ExpectedVersion, input.Message, repo.OwnerID == actor.UserID, statusRevision)
 		if errors.Is(err, issues.ErrConflict) && input.Status == "triaged" {

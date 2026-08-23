@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/issues"
@@ -34,6 +35,14 @@ func TestRepositoryIssueReportLifecycleAndPrivateDuplicateBoundary(t *testing.T)
 	created := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"widget"}`, owner.Credential.Token, http.StatusCreated)
 	var repo repositories.Repository
 	decodeResponse(t, created, &repo)
+	bare, err := gitStore.Open(repo.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline := writeCommit(t, bare, time.Now().Unix(), "seed issue acceptance revision")
+	if err = bare.CreateReference(storage.Reference{Name: "refs/heads/" + repo.DefaultBranch, Target: string(baseline)}); err != nil {
+		t.Fatal(err)
+	}
 	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/collaborators", `{"user_id":"`+reporter.User.ID+`"}`, owner.Credential.Token, http.StatusCreated).Body.Close()
 	release, err := releaseStore.Create(releases.Candidate{RepositoryID: repo.ID, Version: "v2.1.0", Notes: "Affected release", CommitID: "0123456789012345678901234567890123456789", CreatedBy: owner.User.ID})
 	if err != nil {
@@ -82,6 +91,41 @@ func TestIssueAttachmentsRejectDisallowedEvidence(t *testing.T) {
 	if err == nil {
 		t.Fatal("unsafe screenshot media type accepted")
 	}
+}
+
+func TestIssueAcceptanceRequiresConfiguredDefaultBranchRevision(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	identities, _ := users.New(t.TempDir())
+	credentials, _ := auth.New(t.TempDir())
+	catalog, _ := repositories.New(t.TempDir(), gitStore)
+	issueStore, _ := issues.New(t.TempDir())
+	server := httptest.NewServer(newPlatformHandlerWithChecks(gitStore, identities, credentials, catalog, nil, nil, nil, nil, nil, issueStore))
+	defer server.Close()
+	owner := createTestAccount(t, server.URL, "revisionless-triage-owner")
+	created := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories", `{"name":"revisionless-triage"}`, owner.Credential.Token, http.StatusCreated)
+	var repo repositories.Repository
+	decodeResponse(t, created, &repo)
+	issueResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/issues", `{"title":"Needs a revision","expected_behavior":"delivery starts","observed_behavior":"no commit exists","severity":"medium","environment":"empty repository","reproduction_steps":["accept before first commit"],"visibility":"repository"}`, owner.Credential.Token, http.StatusCreated)
+	var issue issues.Issue
+	decodeResponse(t, issueResponse, &issue)
+	authenticatedRequest(t, http.MethodPatch, server.URL+"/repositories/"+repo.ID+"/issues/"+issue.ID, `{"status":"triaged","expected_version":`+strconv.Itoa(issue.Version)+`}`, owner.Credential.Token, http.StatusConflict).Body.Close()
+	reloaded := authenticatedRequest(t, http.MethodGet, server.URL+"/repositories/"+repo.ID+"/issues/"+issue.ID, "", owner.Credential.Token, http.StatusOK)
+	decodeResponse(t, reloaded, &issue)
+	if issue.Status != "open" || issue.StatusRevision != "" {
+		t.Fatalf("revisionless acceptance mutated issue = %#v", issue)
+	}
+	bare, err := gitStore.Open(repo.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trunk := writeCommit(t, bare, time.Now().Unix(), "seed trunk")
+	if err = bare.CreateReference(storage.Reference{Name: "refs/heads/trunk", Target: string(trunk)}); err != nil {
+		t.Fatal(err)
+	}
+	if got := workflowRepositoryHead(gitStore, repo.ID, "trunk"); got != string(trunk) {
+		t.Fatalf("configured trunk head = %q, want %q", got, trunk)
+	}
+	authenticatedRequest(t, http.MethodPatch, server.URL+"/repositories/"+repo.ID+"/issues/"+issue.ID, `{"status":"triaged","expected_version":`+strconv.Itoa(issue.Version)+`}`, owner.Credential.Token, http.StatusConflict).Body.Close()
 }
 
 func TestLatestReporterDecisionControlsDeliveryResolution(t *testing.T) {
