@@ -11,7 +11,9 @@ severity, current owners, acceptance criteria, and permitted evidence. Both comm
 known-good must be an ancestor of known-bad; evidence availability is server-resolved and missing or
 stale evidence remains explicit. Caller-stable request identities reconcile ambiguous post-publication
 create retries before mutable source/owner/history validation and reject changed reuse. Read projection
-rechecks the retained source predicate and downgrades evidence whose check or reproduction state moved. CAS history
+rechecks the retained source predicate, downgrades evidence whose check or reproduction state moved, and
+clears projected stale/unavailable state when that same authoritative source recovers; retained creation facts
+remain immutable. CAS history
 retains attributed discussion, hypotheses, scope changes, and status without granting Git, testing,
 workspace, environment, deployment, evidence, or debugging authority.
 

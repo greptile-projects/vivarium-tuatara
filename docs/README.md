@@ -22,6 +22,8 @@ debugging, and Git stores rather than caller visibility prose. Unresolved eviden
 explicit unavailable diagnostic, and later missing revisions are projected as stale without rewriting history.
 Reads also re-evaluate stateful evidence predicates: for example, rerunning a retained failed check
 downgrades that evidence to stale and unavailable rather than preserving its old available projection.
+If the same authoritative source later returns to its required state, projection clears that gap and
+reports it available again without rewriting the retained creation record.
 Discussion, hypotheses, environment scope, and open/bounded/paused/closed status append through a
 compare-and-swap event route with actor and time attribution. This ledger agrees on what history to
 search; it grants no Git, private-machine, check execution, environment, deployment, or evidence

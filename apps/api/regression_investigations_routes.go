@@ -48,20 +48,14 @@ func registerRegressionInvestigationRoutes(mux *http.ServeMux, git *storage.Stor
 		}
 		for i := range v.Evidence {
 			ev := &v.Evidence[i]
-			if !ev.Available {
-				continue
-			}
 			current := false
-			if ev.Kind == "commit" {
+			permitted := ev.Visibility == "repository" || ev.Visibility == "participants"
+			if permitted && ev.Kind == "commit" {
 				current = ev.ResourceID == v.RepositoryID && ev.Revision != "" && exec.Command("git", "--git-dir="+r.Path(), "cat-file", "-e", ev.Revision+"^{commit}").Run() == nil
-			} else {
+			} else if permitted {
 				current = validRegressionSource(regressioninvestigations.Reference{Kind: ev.Kind, ResourceID: ev.ResourceID, Revision: ev.Revision, Label: ev.Label}, v.RepositoryID, issueStore, supportStore, checkStore, releaseStore, deploymentStore, debugStore)
 			}
-			if !current {
-				ev.Available = false
-				ev.Stale = true
-				ev.Diagnostic = "retained evidence no longer resolves to its required source state"
-			}
+			*ev = projectRegressionEvidence(*ev, current)
 		}
 		return v
 	}
@@ -192,6 +186,21 @@ func registerRegressionInvestigationRoutes(mux *http.ServeMux, git *storage.Stor
 		out, e := investigations.Append(r.PathValue("id"), r.PathValue("investigation_id"), actor(c), in.Kind, in.Message, in.Value, in.ExpectedVersion)
 		writeRegressionInvestigation(w, project(out), e, 201)
 	})
+}
+
+func projectRegressionEvidence(evidence regressioninvestigations.Evidence, current bool) regressioninvestigations.Evidence {
+	if current {
+		evidence.Available = true
+		evidence.Stale = false
+		evidence.Diagnostic = ""
+		return evidence
+	}
+	if evidence.Available {
+		evidence.Available = false
+		evidence.Stale = true
+		evidence.Diagnostic = "retained evidence no longer resolves to its required source state"
+	}
+	return evidence
 }
 
 func validRegressionSource(s regressioninvestigations.Reference, repo string, is *issues.Store, ss *supportthreads.Store, cs *checkruns.Store, rs *releases.Store, ds *deployments.Store, dws *debugworkspaces.Store) bool {
