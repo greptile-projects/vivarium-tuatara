@@ -1,0 +1,494 @@
+"use client";
+
+import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { api } from "@/lib/api";
+import { AccessGate, useAuth } from "./auth";
+import { Badge, Button, Card } from "./ui";
+
+type Finding = {
+  id: string;
+  kind: string;
+  summary: string;
+  visibility: string;
+  state: string;
+  provider_status: string;
+  redactions: string[];
+  shared_by: string;
+};
+type Contribution = {
+  id: string;
+  finding_id: string;
+  kind: string;
+  target_repository_id: string;
+  resource_id: string;
+  status: string;
+  resolution: string;
+  authority: string;
+};
+type Update = {
+  id: string;
+  provider_release_id: string;
+  consumer_release_id: string;
+  replaces_contribution_id?: string;
+  verification_kind: string;
+  package_name: string;
+  package_version: string;
+  replaced_paths?: string[];
+  outcome: string;
+  state: string;
+};
+type Workspace = {
+  id: string;
+  version: number;
+  title: string;
+  trials: { id: string; attempts: { id: string }[] }[] | null;
+  deliveries: { id: string }[] | null;
+  shared_findings: Finding[] | null;
+  upstream_contributions: Contribution[] | null;
+  verified_updates: Update[] | null;
+};
+const lines = (value: FormDataEntryValue | null) =>
+  String(value ?? "")
+    .split("\n")
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+export function AdoptionUpstreamPanel() {
+  const { token } = useAuth(),
+    [items, setItems] = useState<Workspace[]>([]),
+    [workspace, setWorkspace] = useState<Workspace>(),
+    [busy, setBusy] = useState(false),
+    [error, setError] = useState("");
+  const load = useCallback(async () => {
+    if (!token) return;
+    try {
+      const out = await api<{ adoption_workspaces: Workspace[] }>(
+        "/adoption-workspaces",
+        {},
+        token,
+      );
+      setItems(out.adoption_workspaces);
+      setWorkspace(
+        (old) =>
+          out.adoption_workspaces.find((item) => item.id === old?.id) ??
+          out.adoption_workspaces[0],
+      );
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "Upstream collaboration could not be loaded.",
+      );
+    }
+  }, [token]);
+  useEffect(() => {
+    void Promise.resolve().then(load);
+  }, [load]);
+  async function submit(path: string, body: object, form?: HTMLFormElement) {
+    if (!token || !workspace) return;
+    setBusy(true);
+    setError("");
+    try {
+      const out = await api<Workspace>(
+        `/adoption-workspaces/${workspace.id}/${path}`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            ...body,
+            expected_version: workspace.version,
+          }),
+        },
+        token,
+      );
+      setWorkspace(out);
+      setItems((old) => old.map((item) => (item.id === out.id ? out : item)));
+      form?.reset();
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "Upstream collaboration could not be retained.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+  function share(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget,
+      f = new FormData(form);
+    void submit(
+      "shared-findings",
+      {
+        kind: f.get("kind"),
+        trial_id: f.get("trial_id"),
+        attempt_id: f.get("attempt_id") || undefined,
+        delivery_id: f.get("delivery_id") || undefined,
+        summary: f.get("summary"),
+        reproduction: lines(f.get("reproduction")),
+        evidence: lines(f.get("evidence")),
+        redactions: lines(f.get("redactions")),
+        visibility: f.get("visibility"),
+        state: f.get("state"),
+      },
+      form,
+    );
+  }
+  function link(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget,
+      f = new FormData(form);
+    void submit(
+      "upstream-contributions",
+      {
+        finding_id: f.get("finding_id"),
+        kind: f.get("kind"),
+        target_repository_id: f.get("target_repository_id"),
+        resource_id: f.get("resource_id"),
+        resolution: f.get("resolution"),
+      },
+      form,
+    );
+  }
+  function verify(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget,
+      f = new FormData(form);
+    void submit(
+      "verified-updates",
+      {
+        contribution_id: f.get("contribution_id"),
+        provider_repository_id: f.get("provider_repository_id"),
+        provider_release_id: f.get("provider_release_id"),
+        consumer_repository_id: f.get("consumer_repository_id"),
+        consumer_pull_request_id: f.get("consumer_pull_request_id"),
+        consumer_release_id: f.get("consumer_release_id"),
+        consumer_deployment_id: f.get("consumer_deployment_id"),
+        replaces_contribution_id:
+          f.get("replaces_contribution_id") || undefined,
+        outcome: f.get("outcome"),
+      },
+      form,
+    );
+  }
+  const findings = workspace?.shared_findings ?? [],
+    contributions = workspace?.upstream_contributions ?? [];
+  return (
+    <AccessGate>
+      <section className="mx-auto max-w-6xl px-6 pb-12">
+        <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[.2em] text-[var(--brand)]">
+              Shared improvement
+            </p>
+            <h2 className="mt-2 text-2xl font-semibold">
+              Return adoption knowledge upstream
+            </h2>
+            <p className="mt-2 max-w-3xl text-sm text-[var(--muted)]">
+              Share only selected redacted evidence. Provider consent controls
+              disclosure; issues, pulls, checks, review, releases, and
+              deployments keep their ordinary authority.
+            </p>
+          </div>
+          <select
+            className="min-h-10 rounded-lg border bg-white px-3"
+            value={workspace?.id ?? ""}
+            onChange={(event) =>
+              setWorkspace(items.find((item) => item.id === event.target.value))
+            }
+          >
+            {items.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.title}
+              </option>
+            ))}
+          </select>
+        </div>
+        {error && (
+          <p
+            role="alert"
+            className="mb-4 rounded-lg bg-[var(--danger-soft)] p-3 text-sm text-[var(--danger)]"
+          >
+            {error}
+          </p>
+        )}
+        {workspace && (
+          <div className="grid gap-5 lg:grid-cols-2">
+            <Card className="p-5">
+              <h3 className="font-semibold">Share a redacted finding</h3>
+              <form className="mt-4 grid gap-3" onSubmit={share}>
+                <Select
+                  name="kind"
+                  label="Knowledge type"
+                  values={[
+                    "trial_finding",
+                    "reproduction",
+                    "support_question",
+                    "compatibility_evidence",
+                    "documentation_feedback",
+                    "usage_outcome",
+                  ]}
+                />
+                <Select
+                  name="trial_id"
+                  label="Source trial"
+                  values={(workspace.trials ?? []).map((item) => item.id)}
+                />
+                <Field name="attempt_id" label="Attempt ID (optional)" />
+                <Field name="delivery_id" label="Delivery ID (optional)" />
+                <Area name="summary" label="Provider-safe summary" />
+                <Area name="reproduction" label="Synthetic reproduction" />
+                <Area name="evidence" label="Compatibility or usage evidence" />
+                <Area name="redactions" label="Applied redactions" />
+                <Select
+                  name="visibility"
+                  label="Visibility after consent"
+                  values={["provider", "participants", "public"]}
+                />
+                <Select
+                  name="state"
+                  label="Disclosure state"
+                  values={["pending_consent", "embargoed"]}
+                />
+                <Button disabled={busy}>Retain sharing request</Button>
+              </form>
+            </Card>
+            <Card className="p-5">
+              <h3 className="font-semibold">Consent and safe paths</h3>
+              <div className="mt-4 space-y-3">
+                {findings.map((finding) => (
+                  <article className="rounded-lg border p-3" key={finding.id}>
+                    <div className="flex flex-wrap justify-between gap-2">
+                      <strong className="text-sm">
+                        {finding.kind.replaceAll("_", " ")}
+                      </strong>
+                      <Badge
+                        tone={
+                          finding.state === "shared"
+                            ? "success"
+                            : finding.state === "embargoed"
+                              ? "warning"
+                              : "neutral"
+                        }
+                      >
+                        {finding.state.replaceAll("_", " ")}
+                      </Badge>
+                    </div>
+                    <p className="mt-2 text-sm">{finding.summary}</p>
+                    <p className="mt-2 text-xs text-[var(--muted)]">
+                      {finding.visibility} · provider{" "}
+                      {finding.provider_status.replaceAll("_", " ")} ·{" "}
+                      {finding.redactions.length} redaction(s)
+                    </p>
+                    {finding.state === "pending_consent" && (
+                      <div className="mt-3 flex gap-2">
+                        <Button
+                          type="button"
+                          disabled={busy}
+                          onClick={() =>
+                            void submit(
+                              `shared-findings/${finding.id}/consent`,
+                              { decision: "accepted" },
+                            )
+                          }
+                        >
+                          Provider accepts
+                        </Button>
+                        <Button
+                          type="button"
+                          disabled={busy}
+                          variant="secondary"
+                          onClick={() =>
+                            void submit(
+                              `shared-findings/${finding.id}/consent`,
+                              { decision: "rejected" },
+                            )
+                          }
+                        >
+                          Keep local
+                        </Button>
+                      </div>
+                    )}
+                  </article>
+                ))}
+                {findings.length === 0 && (
+                  <p className="text-sm text-[var(--muted)]">
+                    No findings have been selected for sharing.
+                  </p>
+                )}
+              </div>
+              <form className="mt-5 grid gap-3 border-t pt-5" onSubmit={link}>
+                <h4 className="font-semibold">Link ordinary issue or pull</h4>
+                <Select
+                  name="finding_id"
+                  label="Finding"
+                  values={findings.map((item) => item.id)}
+                />
+                <Select
+                  name="kind"
+                  label="Resolution path"
+                  values={[
+                    "issue",
+                    "local_pull",
+                    "fork_pull",
+                    "federated_pull",
+                  ]}
+                />
+                <Field
+                  name="target_repository_id"
+                  label="Target repository ID"
+                />
+                <Field name="resource_id" label="Existing issue or pull ID" />
+                <Area name="resolution" label="Local or upstream resolution" />
+                <Button disabled={busy || findings.length === 0}>
+                  Link governed contribution
+                </Button>
+              </form>
+            </Card>
+            <Card className="p-5 lg:col-span-2">
+              <h3 className="font-semibold">
+                Upstream decisions and verified replacement
+              </h3>
+              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                {contributions.map((item) => (
+                  <article className="rounded-lg border p-3" key={item.id}>
+                    <Badge
+                      tone={
+                        item.status === "merged"
+                          ? "success"
+                          : item.status === "local_only"
+                            ? "warning"
+                            : "neutral"
+                      }
+                    >
+                      {item.status.replaceAll("_", " ")}
+                    </Badge>
+                    <p className="mt-2 font-semibold">
+                      {item.kind.replaceAll("_", " ")} · {item.resource_id}
+                    </p>
+                    <p className="mt-1 text-sm text-[var(--muted)]">
+                      {item.resolution}
+                    </p>
+                    <p className="mt-2 text-xs text-[var(--muted)]">
+                      {item.authority.replaceAll("_", " ")}
+                    </p>
+                  </article>
+                ))}
+              </div>
+              <form
+                className="mt-5 grid gap-3 border-t pt-5 md:grid-cols-2"
+                onSubmit={verify}
+              >
+                <Select
+                  name="contribution_id"
+                  label="Merged provider contribution"
+                  values={contributions
+                    .filter((item) => item.status === "merged")
+                    .map((item) => item.id)}
+                />
+                <Select
+                  name="replaces_contribution_id"
+                  label="Local patch replaced (optional)"
+                  values={[
+                    "",
+                    ...contributions
+                      .filter((item) => item.kind === "local_pull")
+                      .map((item) => item.id),
+                  ]}
+                />
+                <Field
+                  name="provider_repository_id"
+                  label="Provider repository ID"
+                />
+                <Field
+                  name="provider_release_id"
+                  label="Accepted provider release ID"
+                />
+                <Field
+                  name="consumer_repository_id"
+                  label="Consumer repository ID"
+                />
+                <Field
+                  name="consumer_pull_request_id"
+                  label="Dependency update pull ID"
+                />
+                <Field name="consumer_release_id" label="Consumer release ID" />
+                <Field
+                  name="consumer_deployment_id"
+                  label="Succeeded deployment ID"
+                />
+                <Area name="outcome" label="Verified usage outcome" />
+                <div>
+                  <Button disabled={busy}>Verify patch replacement</Button>
+                </div>
+              </form>
+              {(workspace.verified_updates ?? []).map((update) => (
+                <p
+                  className="mt-4 rounded-lg bg-[var(--success-soft)] p-3 text-sm"
+                  key={update.id}
+                >
+                  <strong>{update.state}</strong> · provider{" "}
+                  {update.provider_release_id} → consumer{" "}
+                  {update.consumer_release_id}: {update.outcome}
+                  <span className="mt-1 block text-xs text-[var(--muted)]">
+                    {update.verification_kind.replaceAll("_", " ")} · direct{" "}
+                    {update.package_name}@{update.package_version}
+                    {(update.replaced_paths?.length ?? 0) > 0 &&
+                      ` · ${update.replaced_paths?.length} local patch path(s) replaced`}
+                  </span>
+                </p>
+              ))}
+            </Card>
+          </div>
+        )}
+      </section>
+    </AccessGate>
+  );
+}
+function Field({ name, label }: { name: string; label: string }) {
+  return (
+    <label className="text-sm font-semibold">
+      {label}
+      <input
+        className="mt-2 min-h-10 w-full rounded-lg border px-3 font-normal"
+        name={name}
+      />
+    </label>
+  );
+}
+function Area({ name, label }: { name: string; label: string }) {
+  return (
+    <label className="text-sm font-semibold">
+      {label}
+      <textarea
+        className="mt-2 min-h-20 w-full rounded-lg border p-3 font-normal"
+        name={name}
+      />
+    </label>
+  );
+}
+function Select({
+  name,
+  label,
+  values,
+}: {
+  name: string;
+  label: string;
+  values: string[];
+}) {
+  return (
+    <label className="text-sm font-semibold">
+      {label}
+      <select
+        className="mt-2 min-h-10 w-full rounded-lg border bg-white px-3 font-normal"
+        name={name}
+      >
+        {values.map((value) => (
+          <option key={value || "none"} value={value}>
+            {value || "None"}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}

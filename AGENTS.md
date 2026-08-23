@@ -300,6 +300,18 @@ whenever dependencies change or the web job fails before it starts.
   attribution is fixed to the authenticated human; historical checks from other pull revisions do not
   affect current readiness. Restorations bind the selected paused delivery's deployment ID to the
   recovery promotion's server-derived `recovery_of` target.
+  Adoption findings retain one of six closed knowledge kinds, exact trial/attempt or delivery
+  provenance, explicit redactions, provider/participant/public visibility, and pending-consent or
+  embargoed state. A consented human provider maintainer alone accepts wider disclosure; rejection
+  keeps the record local. Accepted findings can link to ordinary issues or local, upstream-fork, or
+  federated pulls only after repository topology and authenticated authorship resolve. Those links
+  grant no issue, Git, review, check, merge, release, or maintainer authority. Embargoed, rejected,
+  or unavailable-provider findings retain local-pull resolution. Verified updates require the
+  merged upstream contribution in an exact provider release and a separate merged, checked consumer
+  update in an exact consumer release with a succeeded deployment; an optional replaced local pull
+  must belong to the same workspace and provenance. The provider release must publish one unambiguous
+  package version that the consumer release's exact-commit inventory records as a resolved direct
+  dependency, and the consumer update must change every path changed by the selected local pull.
 
 - **Project incubators** — `/incubators` and the web `/incubators` workspace provide a
   collaborative home before repository creation beneath `$INCUBATOR_STORAGE_ROOT`
