@@ -537,7 +537,7 @@ export function WorkspaceIDE({
           <ol className="mt-2 max-h-56 space-y-2 overflow-auto text-xs">
             {[...(workspace.events || [])].reverse().map((event, index) => (
               <li
-                key={event.id || `${event.created_at}-${index}`}
+                key={`${event.id || event.created_at}-${index}`}
                 className="flex justify-between gap-3 border-b border-[var(--line)] pb-2"
               >
                 <span>

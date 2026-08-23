@@ -482,7 +482,7 @@ function ConflictReconciliation({
         {context.affected_checks.length} affected check(s) are retained as
         launch evidence.
       </p>
-      {context.incomplete.map((x) => (
+      {(context.incomplete ?? []).map((x) => (
         <p key={x} className="mt-2 text-xs text-[var(--warning)]">
           Incomplete evidence: {x}
         </p>
@@ -739,7 +739,7 @@ function ConflictVerification({
           </p>
           <ul className="mt-2 space-y-2">
             {checkpoint.criteria.map((criterion) => {
-              const decision = checkpoint.decisions.find(
+              const decision = (checkpoint.decisions ?? []).find(
                 (value) =>
                   value.criterion_id === criterion.id &&
                   value.owner_id === user?.id,
