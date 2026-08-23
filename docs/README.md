@@ -50,6 +50,13 @@ event context. Failed or expired attempts remain visible and may be reclaimed on
 retry bound; cancellation revokes outstanding capabilities deterministically. The capability authorizes
 workflow bookkeeping only: invoked platform, repository, organization, agent, embargo, environment,
 approval, review, release, and deployment operations still apply their own current policy.
+Pull-trigger dispatch specifically binds the declared `pull_id` input to a same-repository pull and
+requires its `pull_id` resource revision to equal the server-resolved current source commit; omitted,
+invented, unreachable, and mismatched provenance is rejected. Successful completion retains a digest
+of the exact token and result request, so a retry after an ambiguous rename, directory-sync, or response
+failure returns the already committed execution without double-accounting. When one parallel step
+exhausts its attempts, terminal publication cancels and clears every sibling lease in the same atomic
+record.
 
 ## Evidence-backed software adoption
 

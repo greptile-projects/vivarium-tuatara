@@ -37,6 +37,7 @@ type StepRun struct {
 	Attempt             int            `json:"attempt"`
 	CredentialID        string         `json:"credential_id,omitempty"`
 	CredentialSHA256    string         `json:"credential_sha256,omitempty"`
+	CompletionSHA256    string         `json:"completion_sha256,omitempty"`
 	CredentialExpiresAt *time.Time     `json:"credential_expires_at,omitempty"`
 	StartedAt           *time.Time     `json:"started_at,omitempty"`
 	FinishedAt          *time.Time     `json:"finished_at,omitempty"`
@@ -213,9 +214,6 @@ func (s *Store) CompleteStep(executionID, stepID, token string, actions int, out
 		if err != nil {
 			return err
 		}
-		if ex.Status != "running" {
-			return ErrExecutionBlocked
-		}
 		w, err := s.read(ex.WorkflowID)
 		if err != nil {
 			return err
@@ -226,6 +224,16 @@ func (s *Store) CompleteStep(executionID, stepID, token string, actions int, out
 		}
 		sr := executionStep(&ex, stepID)
 		sum := sha256.Sum256([]byte(token))
+		completion := completionDigest(hex.EncodeToString(sum[:]), actions, outputs, failure)
+		if sr.CompletionSHA256 != "" {
+			if sr.CompletionSHA256 == completion {
+				return nil
+			}
+			return ErrExecutionConflict
+		}
+		if ex.Status != "running" {
+			return ErrExecutionBlocked
+		}
 		if sr.Status != "running" || sr.CredentialSHA256 == "" || sr.CredentialSHA256 != hex.EncodeToString(sum[:]) {
 			return ErrCredential
 		}
@@ -259,6 +267,7 @@ func (s *Store) CompleteStep(executionID, stepID, token string, actions int, out
 		sr.CredentialSHA256 = ""
 		sr.CredentialExpiresAt = nil
 		sr.FinishedAt = &now
+		sr.CompletionSHA256 = completion
 		if failure != "" {
 			sr.Status = "interrupted"
 			if sr.Attempt >= st.Retries+1 {
@@ -439,6 +448,16 @@ func finishExecution(ex *Execution, now time.Time) {
 	if failed {
 		ex.Status = "failed"
 		ex.FinishedAt = &now
+		for i := range ex.Steps {
+			step := &ex.Steps[i]
+			if step.Status == "pending" || step.Status == "running" || step.Status == "interrupted" {
+				step.Status = "cancelled"
+				step.FailureCode = "execution_terminal"
+				step.CredentialSHA256 = ""
+				step.CredentialExpiresAt = nil
+				step.FinishedAt = &now
+			}
+		}
 	} else if all {
 		ex.Status = "succeeded"
 		ex.FinishedAt = &now
@@ -453,6 +472,16 @@ func equalJSON(a, b any) bool {
 	x, _ := json.Marshal(a)
 	y, _ := json.Marshal(b)
 	return string(x) == string(y)
+}
+func completionDigest(tokenDigest string, actions int, outputs map[string]any, failure string) string {
+	b, _ := json.Marshal(struct {
+		TokenDigest string         `json:"token_digest"`
+		Actions     int            `json:"actions"`
+		Outputs     map[string]any `json:"outputs"`
+		Failure     string         `json:"failure"`
+	}{tokenDigest, actions, outputs, failure})
+	h := sha256.Sum256(b)
+	return hex.EncodeToString(h[:])
 }
 func containsCredential(v any) bool {
 	b, e := json.Marshal(v)

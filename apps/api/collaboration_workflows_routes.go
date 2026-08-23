@@ -15,6 +15,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/agentprojects"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/collaborationworkflows"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 )
@@ -28,7 +29,7 @@ type collaborationWorkflowSourceInput struct {
 
 var exactCommit = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
-func registerCollaborationWorkflowRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, workflows *collaborationworkflows.Store, agents *agentprojects.Store) {
+func registerCollaborationWorkflowRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, workflows *collaborationworkflows.Store, agents *agentprojects.Store, pulls *pullrequests.Store) {
 	mux.HandleFunc("GET /repositories/{id}/collaboration-workflows", func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id")); !ok {
 			return
@@ -152,12 +153,13 @@ func registerCollaborationWorkflowRoutes(mux *http.ServeMux, git *storage.Store,
 			writeAPIError(w, 404, "collaboration_workflow_not_found", "collaboration workflow not found")
 			return
 		}
-		// Resource revisions are admitted only when the referenced commits remain reachable from ordinary branches.
-		for _, revision := range in.ResourceRevisions {
-			if !workflowCommitReachable(git, r.PathValue("id"), revision) {
-				writeAPIError(w, 409, "stale_workflow_input", "a permitted resource revision is missing or inaccessible")
-				return
-			}
+		if in.WorkflowVersion < 1 || in.WorkflowVersion != wf.CurrentVersion || in.WorkflowVersion > len(wf.Revisions) {
+			writeAPIError(w, 409, "stale_workflow_input", "workflow revision is no longer current")
+			return
+		}
+		if !workflowResourcesMatch(git, pulls, r.PathValue("id"), wf.Revisions[in.WorkflowVersion-1].Definition.Triggers, in.TriggerKind, in.EventName, in.Inputs, in.ResourceRevisions) {
+			writeAPIError(w, 409, "stale_workflow_input", "trigger resources and revisions must resolve exactly from repository state")
+			return
 		}
 		event := collaborationworkflows.TriggerEvent{ID: in.EventID, Kind: in.TriggerKind, Name: in.EventName, ActorID: actor.UserID, OccurredAt: in.OccurredAt, Inputs: in.Inputs, ResourceRevisions: in.ResourceRevisions}
 		out, err := workflows.StartExecution(wf.ID, in.WorkflowVersion, event)
@@ -263,6 +265,40 @@ func registerCollaborationWorkflowRoutes(mux *http.ServeMux, git *storage.Store,
 		out, err := workflows.CancelExecution(ex.ID, in.Code)
 		writeWorkflowExecution(w, out, err, 200)
 	})
+}
+
+func workflowResourcesMatch(git *storage.Store, pulls *pullrequests.Store, repo string, triggers []collaborationworkflows.Trigger, kind, event string, inputs map[string]any, revisions map[string]string) bool {
+	expected := map[string]string{}
+	matched := false
+	for _, trigger := range triggers {
+		if trigger.Kind != kind || trigger.Event != event {
+			continue
+		}
+		matched = true
+		for _, input := range trigger.Inputs {
+			if input.Source != "event.pull_id" {
+				continue
+			}
+			id, ok := inputs[input.Name].(string)
+			if !ok || id == "" || pulls == nil {
+				return false
+			}
+			pull, err := pulls.Get(repo, id)
+			if err != nil || pull.RepositoryID != repo || pull.SourceCommitID == "" {
+				return false
+			}
+			expected[input.Name] = pull.SourceCommitID
+		}
+	}
+	if !matched || len(expected) != len(revisions) {
+		return false
+	}
+	for key, revision := range expected {
+		if revisions[key] != revision || !workflowCommitReachable(git, repo, revision) {
+			return false
+		}
+	}
+	return true
 }
 
 func workflowCommitReachable(git *storage.Store, repo, revision string) bool {

@@ -280,6 +280,10 @@ whenever dependencies change or the web job fails before it starts.
   deterministic duplicate-event reconciliation bound retries and outage recovery. Runs and token
   digests persist in the workflow store; plaintext step tokens are returned only on claim. Execution
   does not confer underlying action authority, and resource/participant access is rechecked at runtime.
+  Pull triggers require a `pull_id` revision entry that the server derives from that repository pull's
+  current source commit; missing, invented, or mismatched provenance fails closed. Exact completion
+  retries reconcile through a retained request digest, while terminal failure atomically revokes every
+  sibling lease so durable terminal records never advertise unusable live capabilities.
 
 - **Collaborative software adoption** — `/adoption-workspaces` and the web `/adoption`
   workspace retain shared software-fit evaluations beneath `$ADOPTION_WORKSPACE_STORAGE_ROOT`

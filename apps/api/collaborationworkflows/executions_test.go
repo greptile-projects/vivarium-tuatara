@@ -50,6 +50,43 @@ func TestExecutionIsIdempotentRevisionBoundAndDependencyScheduled(t *testing.T) 
 	if err != nil || ex.Status != "succeeded" {
 		t.Fatalf("execution=%#v %v", ex, err)
 	}
+	retry, err = s.CompleteStep(ex.ID, "notify", notify.Token, 1, nil, "")
+	if err != nil || retry.Version != ex.Version || retry.Status != "succeeded" {
+		t.Fatalf("completion retry=%#v %v", retry, err)
+	}
+}
+
+func TestTerminalFailureRevokesConcurrentSiblingLease(t *testing.T) {
+	s, _ := New(t.TempDir())
+	d := validDefinition()
+	d.Steps[1].Needs = nil
+	d.Steps[0].Retries = 0
+	p := s.Preview("repo", d, Source{Revision: strings.Repeat("a", 40)}, func(Invocation) (bool, string) { return true, "" })
+	w, _ := s.Create("repo", "owner", "parallel", p)
+	event := TriggerEvent{ID: "parallel-event", Kind: "repository_event", Name: "pull.opened", ActorID: "owner", OccurredAt: time.Now().UTC(), Inputs: map[string]any{"pull_id": "pull-1"}, ResourceRevisions: map[string]string{"pull_id": strings.Repeat("b", 40)}}
+	ex, err := s.StartExecution(w.ID, 1, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed, err := s.ClaimStep(ex.ID, "classify", ex.Version, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sibling, err := s.ClaimStep(ex.ID, "notify", failed.Execution.Version, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ex, err = s.CompleteStep(ex.ID, "classify", failed.Token, 1, nil, "action_failed")
+	if err != nil || ex.Status != "failed" {
+		t.Fatalf("terminal=%#v %v", ex, err)
+	}
+	other := executionStep(&ex, "notify")
+	if other.Status != "cancelled" || other.CredentialSHA256 != "" || other.CredentialExpiresAt != nil || other.FailureCode != "execution_terminal" {
+		t.Fatalf("sibling lease retained: %#v", other)
+	}
+	if _, err = s.CompleteStep(ex.ID, "notify", sibling.Token, 0, nil, ""); !errorsIs(err, ErrExecutionBlocked) {
+		t.Fatalf("revoked sibling completion=%v", err)
+	}
 }
 
 func TestExecutionRejectsSecretsBudgetDuplicateMutationAndConcurrentRun(t *testing.T) {
