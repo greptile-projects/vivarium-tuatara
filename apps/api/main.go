@@ -1378,7 +1378,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		registerQualityPlanRoutes(mux, repositoryCatalog, authStore, qualityPlanStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && collaborationWorkflowStore != nil && store != nil && agentProjectStore != nil {
-		registerCollaborationWorkflowRoutes(mux, store, repositoryCatalog, authStore, collaborationWorkflowStore, workflowComponentStore, packageStore, federationStore, agentProjectStore, pullRequestStore, activityStore)
+		registerCollaborationWorkflowRoutes(mux, store, repositoryCatalog, authStore, collaborationWorkflowStore, workflowComponentStore, packageStore, federationStore, agentProjectStore, pullRequestStore, issueStore, activityStore)
 	}
 	if workflowComponentStore != nil && packageStore != nil && pullRequestStore != nil && authStore != nil && repositoryCatalog != nil {
 		registerWorkflowComponentRoutes(mux, store, repositoryCatalog, authStore, pullRequestStore, packageStore, federationStore, workflowComponentStore)

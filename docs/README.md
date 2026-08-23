@@ -63,6 +63,12 @@ time, resource identity, and exact source revision. The workflow runtime maps th
 trigger names and derives every `TriggerEvent` field server-side; arbitrary participant-supplied event
 IDs, names, times, actors, inputs, revisions, cross-repository deliveries, unsupported event kinds, and
 deliveries made stale by pull movement all fail closed.
+Repository-owner issue triage similarly emits an idempotency-keyed `issue.accepted` at the then-current
+configured default-branch revision before returning a committed-but-durability-uncertain status mutation.
+A repository without a default-branch commit cannot enter triage. Any later triage retry reconciles the
+retained snapshot even after other issue mutations. Dispatch derives its issue, actor, time, and revision and
+requires the activity to match that reachable snapshot; ordinary branch movement neither rewrites nor strands
+the accepted event, while a mismatched or unreachable revision fails closed.
 
 The workflow workspace and execution reads project a live dependency graph and preserve every attempt's
 timing, resolved inputs, declared redacted outputs, sanitized logs, artifact digest metadata, agent session,
@@ -116,6 +122,11 @@ workflow, stop it for anomalous behavior or changed authority, or select a prior
 These controls prevent new starts and claims while preserving legitimate completed attempts, outputs,
 costs, receipts, interventions, executions, and workflow revisions. Governance records coordinate
 consent only and do not grant authority over the protected action itself.
+
+`collaborative-workflow-journey.spec.ts` connects accepted issue triage, a reviewed bounded repair agent,
+exact workflow activation and execution, human redirection, protected merge/release/deployment decisions,
+retained evidence and receipts, and the browser run graph. It contains duplicate delivery, stale revision,
+interruption, revoked lease, action-budget excess, and non-owner approval before the exact run succeeds.
 
 ## Evidence-backed software adoption
 

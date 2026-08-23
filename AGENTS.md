@@ -288,6 +288,12 @@ whenever dependencies change or the web job fails before it starts.
   version. Pull creation, synchronization, and merge activity retains its exact source revision; the
   runtime derives trigger kind/name, occurrence time, actor, pull input, and revision from that server
   record and rejects stale or unsupported deliveries. Participants cannot supply trigger metadata.
+  Repository-owner issue triage idempotently emits `issue.accepted` at the then-current configured default-
+  branch revision before returning even when the status commit reports uncertain durability; a repository
+  without that commit cannot enter triage. Any later retry reconciles the retained snapshot regardless of
+  subsequent issue versions. Dispatch rejects the delivery if the issue leaves triage, its snapshot and
+  activity disagree, or the exact commit becomes unreachable; ordinary default-branch movement does not
+  rewrite or strand an accepted event.
   Execution reads are public projections: capability and completion digests are never returned, and
   restricted artifact entries are omitted entirely. Each step retains append-only attempts with declared inputs,
   redacted outputs and logs, digest-addressed artifacts, agent-session references, costs, timing,
@@ -303,6 +309,9 @@ whenever dependencies change or the web job fails before it starts.
   policy drift blocks activation. Runs expose expiring owner approval requests and immutable action receipts.
   Owner disablement, anomaly/authority stops, and selection of a prior immutable revision block new starts
   and claims without deleting completed effects, attempts, executions, receipts, or revision history.
+  The connected `collaborative-workflow-journey.spec.ts` browser/API/Git journey retains accepted-issue
+  provenance, a reviewed bounded agent, duplicate and stale dispatch containment, an interrupted and
+  redirected attempt, revoked lease, budget breach, owner-only approvals, receipts, costs, and visible history.
 
 - **Attested workflow components** — `/workflow-components`, repository
   `/workflow-component-installations`, and the `/repositories/{id}/workflows` workspace expose
