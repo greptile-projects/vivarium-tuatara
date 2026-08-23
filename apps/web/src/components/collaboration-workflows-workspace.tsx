@@ -112,6 +112,7 @@ type StepRun = {
 };
 type Execution = {
   id: string;
+  workflow_id: string;
   workflow_version: number;
   status: string;
   version: number;
@@ -207,6 +208,8 @@ export function CollaborationWorkflowsWorkspace({
   useEffect(() => {
     if (!token || !selected) return;
     let cancelled = false;
+    setExecutions([]);
+    setSelectedExecution(undefined);
     const refresh = () =>
       api<{ executions: Execution[] }>(
         `/repositories/${repositoryID}/collaboration-workflows/${selected.id}/executions`,
@@ -290,7 +293,13 @@ export function CollaborationWorkflowsWorkspace({
     step_id = "",
     extra: Record<string, unknown> = {},
   ) {
-    if (!token || !selected || !selectedExecution) return;
+    if (
+      !token ||
+      !selected ||
+      !selectedExecution ||
+      selectedExecution.workflow_id !== selected.id
+    )
+      return;
     setBusy(true);
     setError("");
     try {
@@ -322,11 +331,13 @@ export function CollaborationWorkflowsWorkspace({
     }
   }
   const revision = selected?.revisions.at(-1);
-  const executionRevision = selectedExecution
-    ? selected?.revisions.find(
-        (candidate) => candidate.version === selectedExecution.workflow_version,
-      )
-    : undefined;
+  const executionRevision =
+    selectedExecution && selectedExecution.workflow_id === selected?.id
+      ? selected.revisions.find(
+          (candidate) =>
+            candidate.version === selectedExecution.workflow_version,
+        )
+      : undefined;
   return (
     <main className="mx-auto max-w-6xl space-y-6 p-6">
       <header>
@@ -550,7 +561,7 @@ export function CollaborationWorkflowsWorkspace({
               ))}
             </div>
           )}
-          {selectedExecution && (
+          {selected && selectedExecution?.workflow_id === selected.id && (
             <Card className="space-y-5 p-5">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
