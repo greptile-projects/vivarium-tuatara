@@ -649,13 +649,201 @@ func registerConflictWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, cat
 			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
 			return
 		}
-		if !slices.Contains([]string{"accepted", "rejected"}, in.Decision) || strings.TrimSpace(in.Rationale) == "" || len(in.Rationale) > 1000 {
-			writeAPIError(w, 422, "conflict_checkpoint_decision_invalid", "decision must accept or reject the exact criterion with a rationale")
+		if !slices.Contains([]string{"accepted", "rejected", "withdrawn"}, in.Decision) || strings.TrimSpace(in.Rationale) == "" || len(in.Rationale) > 1000 {
+			writeAPIError(w, 422, "conflict_checkpoint_decision_invalid", "decision must accept, reject, or withdraw acceptance for the exact criterion with a rationale")
 			return
 		}
 		updated, err := workspaceStore.DecideConflictCheckpoint(item.ID, r.PathValue("checkpoint_id"), r.PathValue("criterion_id"), in.ExpectedVersion, workspaces.ConflictCheckpointDecision{OwnerID: actor.UserID, Decision: in.Decision, Rationale: strings.TrimSpace(in.Rationale)})
 		writeConflictMutation(w, updated, err)
 	})
+
+	mux.HandleFunc("POST /workspaces/{workspace_id}/conflict-checkpoints/{checkpoint_id}/publications", func(w http.ResponseWriter, r *http.Request) {
+		item, actor, ok := authorizeWorkspace(w, r, workspaceStore, catalog, authStore, "repositories:write")
+		if !ok {
+			return
+		}
+		var in struct {
+			ExpectedVersion int    `json:"expected_version"`
+			PublicationID   string `json:"publication_id"`
+			Mode            string `json:"mode"`
+			Branch          string `json:"branch"`
+			Title           string `json:"title,omitempty"`
+			Body            string `json:"body,omitempty"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		in.PublicationID, in.Mode, in.Branch = strings.TrimSpace(in.PublicationID), strings.TrimSpace(in.Mode), strings.TrimSpace(in.Branch)
+		if in.PublicationID == "" || len(in.PublicationID) > 100 || !slices.Contains([]string{"source_branch", "resolution_pull"}, in.Mode) || in.Branch == "" || strings.HasPrefix(in.Branch, "refs/") {
+			writeAPIError(w, 422, "conflict_publication_invalid", "publication requires a stable ID, supported mode, and repository branch")
+			return
+		}
+		if item.ConflictContext == nil {
+			writeAPIError(w, 409, "conflict_workspace_changed", "workspace has no conflict evidence")
+			return
+		}
+		var checkpoint *workspaces.ConflictCheckpoint
+		for i := range item.ConflictContext.Checkpoints {
+			if item.ConflictContext.Checkpoints[i].ID == r.PathValue("checkpoint_id") {
+				checkpoint = &item.ConflictContext.Checkpoints[i]
+				break
+			}
+		}
+		if checkpoint == nil {
+			writeAPIError(w, 404, "conflict_checkpoint_not_found", "checkpoint not found")
+			return
+		}
+		pull, err := pulls.Get(item.RepositoryID, item.ConflictContext.PullRequestID)
+		if writePullRequestError(w, err) {
+			return
+		}
+		repositoryID, expectedTip := item.RepositoryID, ""
+		if in.Mode == "source_branch" {
+			repositoryID, in.Branch, expectedTip = pull.SourceRepositoryID, pull.SourceBranch, checkpoint.SourceRevision
+		}
+		publication := workspaces.ConflictPublicationRecord{ID: in.PublicationID, CheckpointID: checkpoint.ID, Mode: in.Mode, RepositoryID: repositoryID, Branch: in.Branch, ExpectedBranchTip: expectedTip, PublishedBy: conflictAuthorship(actor)}
+		_, reserved, err := workspaceStore.ReserveConflictPublication(item.ID, in.ExpectedVersion, publication)
+		if errors.Is(err, workspaces.ErrInvalid) {
+			writeAPIError(w, 409, "conflict_checkpoint_not_accepted", "every current criterion must pass and be accepted by every affected owner")
+			return
+		}
+		if errors.Is(err, workspaces.ErrConflict) {
+			writeAPIError(w, 409, "conflict_workspace_changed", "publication identity or conflict evidence changed")
+			return
+		}
+		if err != nil {
+			writeAPIError(w, 500, "conflict_publication_failed", "publication could not be reserved")
+			return
+		}
+		if reserved.Status == "published" || reserved.Status == "action_required" {
+			writeJSON(w, 200, reserved)
+			return
+		}
+		meta, metaErr := catalog.GetByID(repositoryID)
+		collaborator, collabErr := catalog.HasCollaborator(actor.UserID, repositoryID)
+		if metaErr != nil || collabErr != nil || (actor.UserID != meta.OwnerID && !collaborator) {
+			_, _ = workspaceStore.CompleteConflictPublication(item.ID, in.PublicationID, "", "", "action_required", "current publication-branch permission is required")
+			writeAPIError(w, 403, "conflict_publication_forbidden", "workspace access does not grant publication-branch authority")
+			return
+		}
+		// Recheck both inputs after reserving and before importing or moving a ref.
+		targetRepo, openErr := git.Open(item.RepositoryID)
+		sourceRepo, sourceErr := git.Open(pull.SourceRepositoryID)
+		targetRef, targetErr := targetRepo.ReadReference("refs/heads/" + pull.TargetBranch)
+		sourceRef, sourceRefErr := sourceRepo.ReadReference("refs/heads/" + pull.SourceBranch)
+		if openErr != nil || sourceErr != nil || targetErr != nil || sourceRefErr != nil || targetRef.Target != checkpoint.TargetRevision || sourceRef.Target != checkpoint.SourceRevision || pull.Status != pullrequests.Open || pull.SourceCommitID != checkpoint.SourceRevision {
+			_, _ = workspaceStore.CompleteConflictPublication(item.ID, in.PublicationID, "", "", "action_required", "source, target, or pull snapshot moved; assemble and accept a successor checkpoint")
+			writeAPIError(w, 409, "conflict_publication_stale", "source, target, or pull snapshot changed after verification")
+			return
+		}
+		candidateRepoPath, cleanup, prepErr := prepareConflictCheckRepository(catalog, item, actor, checkpoint.CandidateCommitID)
+		if prepErr != nil {
+			writeAPIError(w, 503, "conflict_publication_failed", "accepted candidate could not be exported")
+			return
+		}
+		defer cleanup()
+		message := conflictPublicationMessage(item, *checkpoint, actor.UserID)
+		cmd := exec.Command("git", "--git-dir="+candidateRepoPath, "commit-tree", checkpoint.CandidateTreeID, "-p", checkpoint.SourceRevision, "-p", checkpoint.TargetRevision)
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME="+actor.UserID, "GIT_AUTHOR_EMAIL="+actor.UserID+"@vivarium.invalid", "GIT_COMMITTER_NAME=Vivarium conflict publication", "GIT_COMMITTER_EMAIL=conflicts@vivarium.invalid")
+		cmd.Stdin = strings.NewReader(message)
+		publishedBytes, commitErr := cmd.Output()
+		publishedCommit := strings.TrimSpace(string(publishedBytes))
+		destination, destinationErr := git.Open(repositoryID)
+		var importErr error
+		if commitErr == nil && destinationErr == nil {
+			importCommand := exec.Command("git", "-c", "fetch.unpackLimit=2147483647", "--git-dir="+destination.Path(), "fetch", "--no-tags", "--no-write-fetch-head", candidateRepoPath, publishedCommit)
+			if output, runErr := importCommand.CombinedOutput(); runErr != nil {
+				importErr = fmt.Errorf("%w: %s", runErr, strings.TrimSpace(string(output)))
+			} else if _, runErr = destination.ReadCommit(storage.ObjectID(publishedCommit)); runErr != nil {
+				importErr = runErr
+			}
+		}
+		if commitErr != nil || destinationErr != nil || importErr != nil {
+			writeAPIError(w, 503, "conflict_publication_failed", "provenance commit could not be imported")
+			return
+		}
+		ref := storage.Reference{Name: "refs/heads/" + in.Branch, Target: publishedCommit}
+		_, err = workspaceStore.PublishConflictBranch(item.ID, in.PublicationID, publishedCommit, func() error {
+			var refErr error
+			if in.Mode == "source_branch" {
+				refErr = destination.UpdateReferenceIfTarget(ref, expectedTip)
+			} else {
+				refErr = destination.CreateReference(ref)
+			}
+			if refErr != nil {
+				if current, readErr := destination.ReadReference(ref.Name); readErr == nil && current.Target == publishedCommit {
+					return nil
+				}
+			}
+			return refErr
+		})
+		if errors.Is(err, workspaces.ErrInvalid) {
+			_, _ = workspaceStore.CompleteConflictPublication(item.ID, in.PublicationID, publishedCommit, "", "action_required", "approval was withdrawn before branch publication; obtain current acceptance")
+			writeAPIError(w, 409, "conflict_publication_approval_withdrawn", "owner acceptance changed before branch publication")
+			return
+		}
+		if err != nil {
+			_, _ = workspaceStore.CompleteConflictPublication(item.ID, in.PublicationID, publishedCommit, "", "action_required", "publication branch was concurrently updated or already exists; choose a current permitted branch and publish a successor checkpoint")
+			writeAPIError(w, 409, "conflict_publication_branch_changed", "publication branch changed concurrently")
+			return
+		}
+		var governedPull pullrequests.PullRequest
+		if in.Mode == "source_branch" {
+			governedPull, err = pulls.SynchronizeSourceAfter(item.RepositoryID, pull.ID, nil)
+		} else {
+			title := strings.TrimSpace(in.Title)
+			if title == "" {
+				title = "Resolve conflicts for " + pull.Title
+			}
+			body := strings.TrimSpace(in.Body)
+			if body == "" {
+				body = "Publishes accepted conflict checkpoint " + checkpoint.ID + " from workspace " + item.ID + "."
+			}
+			governedPull, err = pulls.FindOrCreateRecovery(item.RepositoryID, actor.UserID, title, body, in.Branch, pull.TargetBranch)
+		}
+		if err != nil {
+			_, _ = workspaceStore.CompleteConflictPublication(item.ID, in.PublicationID, publishedCommit, "", "action_required", "branch published; reconcile the ordinary pull request")
+			writeAPIError(w, 409, "conflict_publication_pull_pending", "branch was published but ordinary pull reconciliation is required")
+			return
+		}
+		if checkStore != nil && len(item.ConflictContext.RequiredChecks) > 0 {
+			definitions := make([]checkruns.Definition, 0, len(item.ConflictContext.RequiredChecks))
+			for _, required := range item.ConflictContext.RequiredChecks {
+				definitions = append(definitions, required.Definition)
+			}
+			runs, runErr := checkStore.CreateRequested(item.RepositoryID, governedPull.ID, publishedCommit, definitions, actor.UserID)
+			if runErr == nil {
+				for _, run := range runs {
+					checkStore.Execute(run, destination.Path())
+				}
+			}
+		}
+		updated, finishErr := workspaceStore.CompleteConflictPublication(item.ID, in.PublicationID, publishedCommit, governedPull.ID, "published", "")
+		if finishErr != nil {
+			writeAPIError(w, 503, "conflict_publication_reconciliation_pending", "published contribution is durable but workspace reconciliation remains pending")
+			return
+		}
+		w.Header().Set("Location", "/repositories/"+item.RepositoryID+"/pulls/"+governedPull.ID)
+		writeJSON(w, 201, map[string]any{"workspace": updated, "publication": updated.ConflictContext.Publications[len(updated.ConflictContext.Publications)-1], "pull_request": governedPull})
+	})
+}
+
+func conflictPublicationMessage(item workspaces.Workspace, checkpoint workspaces.ConflictCheckpoint, actor string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Publish accepted conflict resolution\n\nWorkspace: %s\nCheckpoint: %s\nPublished-by: %s\nSource-input: %s\nTarget-input: %s\n", item.ID, checkpoint.ID, actor, checkpoint.SourceRevision, checkpoint.TargetRevision)
+	for _, resolution := range item.ConflictContext.Resolutions {
+		if resolution.State == "applied" {
+			fmt.Fprintf(&b, "Resolution: %s %s by %s\n", resolution.ID, resolution.Path, resolution.Authorship.ActorID)
+		}
+	}
+	for _, criterion := range checkpoint.Criteria {
+		fmt.Fprintf(&b, "Verified-command: %s :: %s\n", criterion.Name, criterion.Command)
+	}
+	for _, decision := range checkpoint.Decisions {
+		fmt.Fprintf(&b, "Approval: %s %s %s\n", decision.OwnerID, decision.CriterionID, decision.Decision)
+	}
+	return b.String()
 }
 
 func resolutionState(resolution *workspaces.ConflictResolution) string {

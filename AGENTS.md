@@ -2932,6 +2932,14 @@ whenever dependencies change or the web job fails before it starts.
   the live control version must equal the intent's frozen version on every retry. Lifecycle or lease
   revocation leaves the pending intent visible without claiming completion, and a newly issued lease
   for the same principal does not implicitly reauthorize it.
+  Accepted checkpoints rejoin ordinary contribution governance through caller-stable publication reservations.
+  Every current criterion must pass and each affected owner's latest decision must be accepted; owners can append
+  withdrawal or reconsideration without rewriting history. A current destination-repository participant may
+  compare-and-swap the verified source branch or create a connected resolution branch and pull. The published
+  two-parent commit records both inputs, applied-resolution authors, exact commands, and decisions, then runs the
+  frozen affected required checks in the ordinary pull scope. Reviews remain revision-bound and protected queues
+  rebuild against the current target. Moved inputs, concurrent or superseded branches, withdrawn approval, and an
+  occupied resolution branch persist as actionable publication state without overwriting either contribution.
   Creators may invite affected current human participants, who explicitly consent, and
   organization-approved agents with separately bounded file/command/lifecycle control. Invitations,
   evidence, or workspace access grant no repository, branch, credential, review, check, merge, or
