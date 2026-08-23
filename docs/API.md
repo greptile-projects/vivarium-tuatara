@@ -51,8 +51,10 @@ participant retain the result of ordinary delivery. The request selects an agree
 release, and staged deployment and supplies bounded policy, rehearsal, support, user-acceptance, and cost
 attestations. The server derives exact provider/pull/merge/release/environment, rollout, and health
 revisions, current human review approvals, exact-commit passing checks, release inclusion, and
-deployment state from repository-owned stores. Succeeded deployments become operating (or linked
-restorations); failed or paused deployments and unmet criteria remain paused. Reads recheck both
+deployment state from repository-owned stores. Each attestation is attributed only to the authenticated
+human submitting it; callers cannot name another attester. Succeeded deployments become operating (or linked
+restorations); failed or paused deployments and unmet criteria remain paused. Historical check runs from
+other pull revisions do not affect current-revision readiness. Reads recheck both
 repository boundaries and redact delivery provenance after access loss. The endpoint records evidence
 only and grants no review, merge, release, deployment, environment, pause, or restoration authority.
 

@@ -779,7 +779,7 @@ func (s *Store) CreateDelivery(workspace string, in AdoptionDelivery, viewer Vie
 	}
 	seenKinds, allSatisfied := map[string]bool{}, true
 	for _, attestation := range in.Attestations {
-		if !map[string]bool{"policy": true, "rehearsal": true, "support": true, "user_acceptance": true, "cost": true}[attestation.Kind] || seenKinds[attestation.Kind] || !safeText(attestation.Statement, 5000) || !text(attestation.AttestedBy, 100) {
+		if !map[string]bool{"policy": true, "rehearsal": true, "support": true, "user_acceptance": true, "cost": true}[attestation.Kind] || seenKinds[attestation.Kind] || !safeText(attestation.Statement, 5000) || attestation.AttestedBy != viewer.PrincipalID {
 			return Workspace{}, ErrInvalid
 		}
 		seenKinds[attestation.Kind], allSatisfied = true, allSatisfied && attestation.Satisfied

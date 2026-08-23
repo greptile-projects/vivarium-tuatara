@@ -33,7 +33,7 @@ const lines = (value: FormDataEntryValue | null) =>
     .map((item) => item.trim())
     .filter(Boolean);
 export function AdoptionDeliveryPanel() {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]),
     [selected, setSelected] = useState(""),
     [pending, setPending] = useState(false),
@@ -67,19 +67,19 @@ export function AdoptionDeliveryPanel() {
     deliveries = workspace?.deliveries ?? [];
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!token || !workspace) return;
+    if (!token || !user || !workspace) return;
     setPending(true);
     setError("");
     const form = new FormData(event.currentTarget);
     try {
       const attestations = lines(form.get("attestations")).map((value) => {
-        const [kind, statement, attested_by, satisfied] = value
+        const [kind, statement, satisfied] = value
           .split("|")
           .map((item) => item.trim());
         return {
           kind,
           statement,
-          attested_by,
+          attested_by: user.id,
           satisfied: satisfied !== "unmet",
         };
       });
@@ -258,7 +258,7 @@ export function AdoptionDeliveryPanel() {
                 rows={3}
                 placeholder={
                   name === "attestations"
-                    ? "policy | Policy passed | human ID | met\nrehearsal | Rollback passed | human ID | met\nsupport | On-call ready | human ID | met\nuser_acceptance | Users accepted | human ID | met\ncost | Within budget | human ID | met"
+                    ? "policy | Policy passed | met\nrehearsal | Rollback passed | met\nsupport | On-call ready | met\nuser_acceptance | Users accepted | met\ncost | Within budget | met"
                     : undefined
                 }
                 className="rounded-lg border border-[var(--line-strong)] bg-white p-3 font-normal"

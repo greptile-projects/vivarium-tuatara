@@ -502,7 +502,7 @@ func registerAdoptionWorkspaceRoutes(mux *http.ServeMux, credentials *auth.Store
 			return
 		}
 		consumer, err := catalog.GetByID(in.ConsumerRepositoryID)
-		if err != nil || !consumer.HasParticipant(actor.UserID) || pullStore == nil || releaseStore == nil || buildStore == nil || deploymentStore == nil {
+		if err != nil || (actor.RepositoryID != "" && actor.RepositoryID != in.ConsumerRepositoryID) || !consumer.HasParticipant(actor.UserID) || pullStore == nil || releaseStore == nil || buildStore == nil || deploymentStore == nil {
 			writeAPIError(w, 403, "consumer_delivery_forbidden", "current consumer repository participation and available ordinary delivery records are required")
 			return
 		}
@@ -543,11 +543,15 @@ func registerAdoptionWorkspaceRoutes(mux *http.ServeMux, credentials *auth.Store
 			}
 		}
 		runs, runErr := buildStore.List(in.ConsumerRepositoryID, pull.ID)
-		checkIDs, checksPassed := []string{}, runErr == nil && len(runs) > 0
+		checkIDs, checksPassed := []string{}, runErr == nil
 		for _, run := range runs {
+			if run.CommitID != pull.SourceCommitID {
+				continue
+			}
 			checkIDs = append(checkIDs, run.ID)
-			checksPassed = checksPassed && run.CommitID == pull.SourceCommitID && run.State == "succeeded"
+			checksPassed = checksPassed && run.State == "succeeded"
 		}
+		checksPassed = checksPassed && len(checkIDs) > 0
 		for _, approval := range promotion.Approvals {
 			approvalIDs = append(approvalIDs, approval.ActorID)
 		}
@@ -556,8 +560,8 @@ func registerAdoptionWorkspaceRoutes(mux *http.ServeMux, credentials *auth.Store
 			return
 		}
 		for _, attestation := range in.Attestations {
-			if _, identityErr := identities.Get(attestation.AttestedBy); identityErr != nil {
-				writeAPIError(w, 422, "invalid_attestation_owner", "delivery attestations require existing human owners")
+			if attestation.AttestedBy != actor.UserID {
+				writeAPIError(w, 422, "invalid_attestation_owner", "delivery attestations must be authored by the authenticated human")
 				return
 			}
 		}
@@ -581,11 +585,20 @@ func registerAdoptionWorkspaceRoutes(mux *http.ServeMux, credentials *auth.Store
 			in.Health = []string{"deployment health: " + promotion.State}
 		}
 		in.PauseReasons = nil
+		unmet := []string{}
+		for _, attestation := range in.Attestations {
+			if !attestation.Satisfied {
+				unmet = append(unmet, "unmet "+attestation.Kind+" attestation")
+			}
+		}
 		switch promotion.State {
 		case "succeeded":
-			in.State = "operating"
-			if promotion.RecoveryOf != "" {
+			if len(unmet) > 0 {
+				in.State, in.PauseReasons = "paused", unmet
+			} else if promotion.RecoveryOf != "" {
 				in.State = "restored"
+			} else {
+				in.State = "operating"
 			}
 		case "failed", "paused", "canceled":
 			in.State = "paused"

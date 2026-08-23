@@ -227,6 +227,12 @@ func TestDeliveryRequiresCompleteAttestationsAndSafeRestore(t *testing.T) {
 	if _, err := s.CreateDelivery(x.ID, bad, v, x.Version); !errorsIs(err, ErrInvalid) {
 		t.Fatalf("unmet operating criteria accepted: %v", err)
 	}
+	forged := base
+	forged.Attestations = append([]DeliveryAttestation(nil), base.Attestations...)
+	forged.Attestations[0].AttestedBy = "unrelated-human"
+	if _, err := s.CreateDelivery(x.ID, forged, v, x.Version); !errorsIs(err, ErrInvalid) {
+		t.Fatalf("forged attestation attribution accepted: %v", err)
+	}
 	paused := base
 	paused.State, paused.PauseReasons = "paused", []string{"failed rollout"}
 	paused.Attestations = bad.Attestations

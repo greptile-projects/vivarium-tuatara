@@ -296,7 +296,9 @@ whenever dependencies change or the web job fails before it starts.
   Unmet attestations and failed/paused rollout remain a safe pause; successful recovery links to the
   paused delivery. Reads recheck both repositories and redact inaccessible provenance. Delivery
   snapshots grant no review, merge, release, deployment, pause, restoration, agent, or provider
-  authority.
+  authority. Repository-bound credentials must match the consumer repository, and attestation
+  attribution is fixed to the authenticated human; historical checks from other pull revisions do not
+  affect current readiness.
 
 - **Project incubators** — `/incubators` and the web `/incubators` workspace provide a
   collaborative home before repository creation beneath `$INCUBATOR_STORAGE_ROOT`
