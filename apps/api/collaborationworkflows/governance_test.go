@@ -65,6 +65,23 @@ func TestExceptionsExpireAndControlPreservesHistory(t *testing.T) {
 	if err != nil || !c.Ready {
 		t.Fatalf("exception = %#v, %v", c, err)
 	}
+	_, err = s.SetGovernancePolicy("repo", "repo-owner", 1, GovernancePolicy{RequiredReviews: 2, ApprovalTTLSeconds: 3600, ProtectedActionClasses: []string{"merge"}, ResourceOwnerIDs: []string{"successor-owner"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, _ = s.GetCandidate(c.ID)
+	if c.Ready || !contains(c.Blockers, "policy_changed") {
+		t.Fatalf("superseded exception remained ready: %#v", c)
+	}
+	c, err = s.EvaluateCandidate("repo", "", "author", 0, governedPreview(t, s))
+	if err != nil {
+		t.Fatal(err)
+	}
+	expires = s.now().Add(time.Hour)
+	c, err = s.DecideCandidate(c.ID, "successor-owner", "exception", "", "", "successor mitigation", &expires)
+	if err != nil || !c.Ready {
+		t.Fatalf("successor exception = %#v, %v", c, err)
+	}
 	s.now = func() time.Time { return expires.Add(time.Second) }
 	c, _ = s.GetCandidate(c.ID)
 	if c.Ready {

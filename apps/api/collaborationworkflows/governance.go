@@ -284,7 +284,7 @@ func projectCandidate(c GovernanceCandidate, p GovernancePolicy, now time.Time) 
 		case "scenario_pass":
 			scenarios[d.ScenarioID] = true
 		case "exception":
-			validException = d.ExpiresAt != nil && d.ExpiresAt.After(now)
+			validException = c.PolicyVersion == p.Version && contains(p.ResourceOwnerIDs, d.ActorID) && d.ExpiresAt != nil && d.ExpiresAt.After(now)
 		}
 	}
 	if len(reviewers) < p.RequiredReviews {
