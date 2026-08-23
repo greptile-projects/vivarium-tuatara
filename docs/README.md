@@ -74,6 +74,34 @@ reviewed optional step, or take over a declared manual step. The immutable inter
 actor, reason, target, time, and resulting version; it accepts neither private terminal streams nor
 credential-shaped content and does not grant authority to the invoked system.
 
+## Attested workflow components
+
+Maintainers publish reusable workflow contracts through `POST
+/repositories/{id}/workflow-components`; authenticated readers inspect every visible immutable version
+through `/workflow-components`. Publication binds the exact component JSON blob and digest to a
+40-character commit reachable from a non-security branch, an active package built from that same
+commit, the package digest and publisher, typed input/output contracts, requested capabilities,
+explicit data-use terms, workflow-format/platform compatibility, passing test digests, and a support
+policy. A federation provenance claim additionally resolves a currently trusted peer. Catalog
+projections keep changed repository ownership, changed package publisher, yanked/deprecated/
+quarantined packages, unavailable or revoked peers, and declared breaking migrations visible instead
+of treating an old attestation as current trust.
+
+Consumers use `/repositories/{id}/workflow-component-installations` or the repository workflow
+workspace to pin an exact semantic version through a current ordinary open pull. The server loads
+`.vivarium/workflow-components/{local_name}.json` from that pull's exact source commit and derives the
+component ID, mappings, configuration, and accepted data uses; callers cannot attach arbitrary terms
+to an unrelated pull. They map every
+requested capability to one repository-local permission, accept each exact data classification and
+purpose, and provide only bounded credential-free local configuration. Compare-and-swap installation
+successors retain the complete earlier pin and pull history. A workflow component invocation names
+`local-installation@version`; activation fails unless that exact pin is current, its publisher ownership,
+package digest/source/publisher/lifecycle, and optional federation-peer trust remain current, and every
+declared authority is one of its local mappings. Existing execution records therefore remain attributable to
+the old workflow revision when a consumer updates, retains, or replaces a component. The ledger
+defaults beneath `$WORKFLOW_COMPONENT_STORAGE_ROOT` (`workflow-components`) and grants no package,
+federation, Git, review, merge, repository, runtime, secret, or publisher authority.
+
 ## Evidence-backed software adoption
 
 Authenticated collaborators use `/adoption-workspaces` or the web adoption workspace to ask whether

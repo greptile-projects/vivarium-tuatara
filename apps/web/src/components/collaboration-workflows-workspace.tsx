@@ -208,8 +208,6 @@ export function CollaborationWorkflowsWorkspace({
   useEffect(() => {
     if (!token || !selected) return;
     let cancelled = false;
-    setExecutions([]);
-    setSelectedExecution(undefined);
     const refresh = () =>
       api<{ executions: Execution[] }>(
         `/repositories/${repositoryID}/collaboration-workflows/${selected.id}/executions`,
