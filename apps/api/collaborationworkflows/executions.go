@@ -161,6 +161,13 @@ func (s *Store) StartExecution(workflowID string, workflowVersion int, event Tri
 		governanceVersion, approvalTTL := 0, 0
 		if policy, policyErr := s.readGovernancePolicy(w.RepositoryID); policyErr == nil {
 			governanceVersion, approvalTTL = policy.Version, policy.ApprovalTTLSeconds
+			candidateWorkflowID := w.ID
+			if workflowVersion == 1 {
+				candidateWorkflowID = ""
+			}
+			if candidateErr := s.requireApprovedCandidateUnlocked(w.RepositoryID, candidateWorkflowID, rev.Source.SHA256, workflowVersion-1); candidateErr != nil {
+				return ErrExecutionBlocked
+			}
 		} else if !errors.Is(policyErr, ErrNotFound) {
 			return policyErr
 		}
@@ -256,11 +263,17 @@ func (s *Store) ClaimStep(executionID, stepID string, expectedVersion int, actor
 		if w.Status != "active" || w.CurrentVersion != ex.WorkflowVersion {
 			return ErrExecutionBlocked
 		}
-		if ex.GovernancePolicyVersion > 0 {
-			policy, policyErr := s.readGovernancePolicy(ex.RepositoryID)
-			if policyErr != nil || policy.Version != ex.GovernancePolicyVersion {
+		policy, policyErr := s.readGovernancePolicy(ex.RepositoryID)
+		if policyErr == nil {
+			candidateWorkflowID := w.ID
+			if ex.WorkflowVersion == 1 {
+				candidateWorkflowID = ""
+			}
+			if policy.Version != ex.GovernancePolicyVersion || s.requireApprovedCandidateUnlocked(ex.RepositoryID, candidateWorkflowID, ex.WorkflowSource.SHA256, ex.WorkflowVersion-1) != nil {
 				return ErrExecutionBlocked
 			}
+		} else if !errors.Is(policyErr, ErrNotFound) || ex.GovernancePolicyVersion != 0 {
+			return ErrExecutionBlocked
 		}
 		def := w.Revisions[ex.WorkflowVersion-1].Definition
 		st, ok := definitionStep(def, stepID)

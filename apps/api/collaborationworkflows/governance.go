@@ -233,6 +233,10 @@ func (s *Store) GetCandidate(id string) (GovernanceCandidate, error) {
 }
 
 func (s *Store) RequireApprovedCandidate(repo, workflowID, sourceSHA string, expectedVersion int) error {
+	return s.requireApprovedCandidateUnlocked(repo, workflowID, sourceSHA, expectedVersion)
+}
+
+func (s *Store) requireApprovedCandidateUnlocked(repo, workflowID, sourceSHA string, expectedVersion int) error {
 	if _, err := s.readGovernancePolicy(repo); errors.Is(err, ErrNotFound) {
 		return nil
 	} else if err != nil {

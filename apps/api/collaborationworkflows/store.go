@@ -152,6 +152,9 @@ func (s *Store) Control(id, actor, kind string, rollbackVersion int) (Workflow, 
 				return ErrInvalid
 			}
 			selected := w.Revisions[rollbackVersion-1]
+			if err := s.requireApprovedCandidateUnlocked(w.RepositoryID, w.ID, selected.Source.SHA256, w.CurrentVersion); err != nil {
+				return err
+			}
 			w.CurrentVersion++
 			selected.Version, selected.ActivatedBy, selected.ActivatedAt = w.CurrentVersion, actor, s.now()
 			w.Revisions = append(w.Revisions, selected)

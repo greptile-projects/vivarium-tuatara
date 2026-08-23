@@ -90,3 +90,58 @@ func TestExceptionsExpireAndControlPreservesHistory(t *testing.T) {
 		t.Fatalf("disabled start = %v", err)
 	}
 }
+
+func TestPolicyCreatedAfterExecutionBlocksFurtherClaims(t *testing.T) {
+	s, w, event := executionFixture(t)
+	ex, err := s.StartExecution(w.ID, 1, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.SetGovernancePolicy("repo", "repo-owner", 0, GovernancePolicy{RequiredReviews: 1, ApprovalTTLSeconds: 3600, ProtectedActionClasses: []string{"merge"}, ResourceOwnerIDs: []string{"owner"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.ClaimStep(ex.ID, "classify", ex.Version, true); !errors.Is(err, ErrExecutionBlocked) {
+		t.Fatalf("claim after policy creation = %v", err)
+	}
+}
+
+func TestGovernedRollbackRequiresExactCurrentCandidate(t *testing.T) {
+	s, _ := New(t.TempDir())
+	first := validDefinition()
+	first.OwnerIDs = []string{"author"}
+	first.Steps[0].OwnerIDs = []string{"author"}
+	first.Steps[1].OwnerIDs = []string{"author"}
+	firstSource := Source{Revision: "0123456789012345678901234567890123456789", Path: ".vivarium/workflow.json", SHA256: "first-source"}
+	w, err := s.Create("repo", "author", "first", s.Preview("repo", first, firstSource, func(Invocation) (bool, string) { return true, "" }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := first
+	second.Outcome = "successor"
+	w, err = s.Revise(w.ID, 1, "author", s.Preview("repo", second, Source{Revision: firstSource.Revision, Path: firstSource.Path, SHA256: "second-source"}, func(Invocation) (bool, string) { return true, "" }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.SetGovernancePolicy("repo", "repo-owner", 0, GovernancePolicy{RequiredReviews: 1, RequiredScenarioIDs: []string{"pull"}, RequireOwnerAcknowledged: true, RequireSeparation: true, ApprovalTTLSeconds: 3600, ResourceOwnerIDs: []string{"resource-owner"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Control(w.ID, "repo-owner", "rollback", 1); !errors.Is(err, ErrGovernanceBlocked) {
+		t.Fatalf("unapproved rollback = %v", err)
+	}
+	c, err := s.EvaluateCandidate("repo", w.ID, "author", 2, s.Preview("repo", first, firstSource, func(Invocation) (bool, string) { return true, "" }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, _ = s.DecideCandidate(c.ID, "reviewer", "review", "", "", "", nil)
+	c, _ = s.DecideCandidate(c.ID, "reviewer", "scenario_pass", "", "pull", "", nil)
+	c, err = s.DecideCandidate(c.ID, "resource-owner", "owner_acknowledgement", "resource-owner", "", "", nil)
+	if err != nil || !c.Ready {
+		t.Fatalf("rollback candidate = %#v, %v", c, err)
+	}
+	w, err = s.Control(w.ID, "repo-owner", "rollback", 1)
+	if err != nil || w.CurrentVersion != 3 || w.Revisions[2].Source.SHA256 != firstSource.SHA256 {
+		t.Fatalf("approved rollback = %#v, %v", w, err)
+	}
+}
