@@ -15,6 +15,19 @@ async function git(cwd: string, ...args: string[]) {
     })
   ).stdout.trim();
 }
+async function authenticatedGit(token: string, cwd: string, ...args: string[]) {
+  return (
+    await run("git", ["-c", "credential.helper=", ...args], {
+      cwd,
+      env: {
+        ...process.env,
+        GIT_ASKPASS: join(__dirname, "git-askpass.sh"),
+        GIT_TERMINAL_PROMPT: "0",
+        VIVARIUM_GIT_TOKEN: token,
+      },
+    })
+  ).stdout.trim();
+}
 async function account(page: Page, suffix: string, name: string) {
   await page.goto("/");
   await page.getByLabel("Display name").fill(name);
@@ -93,6 +106,11 @@ test("independent teams prove adoption and return the missing fit upstream", asy
     run("docker", ["pull", "alpine:3.22"]),
   );
   const copies: string[] = [],
+    gitCredentials: {
+      page: Page;
+      headers: Record<string, string>;
+      id: string;
+    }[] = [],
     temporary = async (prefix: string) => {
       const path = await mkdtemp(join(tmpdir(), prefix));
       copies.push(path);
@@ -167,28 +185,46 @@ test("independent teams prove adoption and return the missing fit upstream", asy
         expires_in: 3600,
       });
     const providerGit = await credential(
-        providerPage,
-        provider.headers,
-        "provider adoption journey",
-      ),
-      consumerGit = await credential(
-        adopterPage,
-        adopter.headers,
-        "consumer adoption journey",
-      );
+      providerPage,
+      provider.headers,
+      "provider adoption journey",
+    );
+    gitCredentials.push({
+      page: providerPage,
+      headers: provider.headers,
+      id: providerGit.id,
+    });
+    const consumerGit = await credential(
+      adopterPage,
+      adopter.headers,
+      "consumer adoption journey",
+    );
+    gitCredentials.push({
+      page: adopterPage,
+      headers: adopter.headers,
+      id: consumerGit.id,
+    });
     const providerCopy = await temporary("vivarium-adoption-provider-"),
       consumerCopy = await temporary("vivarium-adoption-consumer-");
-    await git(
+    await authenticatedGit(
+      providerGit.token,
       tmpdir(),
       "clone",
-      `http://git:${providerGit.token}@localhost:3000/git/${providerRepo.id}.git`,
+      `http://localhost:3000/git/${providerRepo.id}.git`,
       providerCopy,
     );
-    await git(
+    await authenticatedGit(
+      consumerGit.token,
       tmpdir(),
       "clone",
-      `http://git:${consumerGit.token}@localhost:3000/git/${consumerRepo.id}.git`,
+      `http://localhost:3000/git/${consumerRepo.id}.git`,
       consumerCopy,
+    );
+    expect(await git(providerCopy, "remote", "get-url", "origin")).toBe(
+      `http://localhost:3000/git/${providerRepo.id}.git`,
+    );
+    expect(await git(consumerCopy, "remote", "get-url", "origin")).toBe(
+      `http://localhost:3000/git/${consumerRepo.id}.git`,
     );
     for (const [copy, name] of [
       [providerCopy, "Provider Maintainer"],
@@ -223,7 +259,7 @@ test("independent teams prove adoption and return the missing fit upstream", asy
     );
     await git(providerCopy, "add", ".");
     await git(providerCopy, "commit", "-m", "Release strict event codec");
-    await git(providerCopy, "push", "origin", "main");
+    await authenticatedGit(providerGit.token, providerCopy, "push", "origin", "main");
     const providerV1 = await git(providerCopy, "rev-parse", "HEAD");
     const releaseV1 = await json(
       providerPage,
@@ -653,7 +689,7 @@ test("independent teams prove adoption and return the missing fit upstream", asy
     );
     await git(consumerCopy, "add", ".");
     await git(consumerCopy, "commit", "-m", "Prepare consumer adoption base");
-    await git(consumerCopy, "push", "origin", "main");
+    await authenticatedGit(consumerGit.token, consumerCopy, "push", "origin", "main");
     const environment = await json(
       adopterPage,
       "post",
@@ -764,7 +800,7 @@ test("independent teams prove adoption and return the missing fit upstream", asy
       "-m",
       "Adopt exact codec with temporary workaround",
     );
-    await git(consumerCopy, "push", "origin", "adopt-v1");
+    await authenticatedGit(consumerGit.token, consumerCopy, "push", "origin", "adopt-v1");
     const integrationPull = await json(
       adopterPage,
       "post",
@@ -918,7 +954,7 @@ test("independent teams prove adoption and return the missing fit upstream", asy
     });
 
     await git(consumerCopy, "switch", "main");
-    await git(consumerCopy, "pull", "--ff-only", "origin", "main");
+    await authenticatedGit(consumerGit.token, consumerCopy, "pull", "--ff-only", "origin", "main");
     await writeFile(
       join(consumerCopy, "integration.txt"),
       "package=1.0.0\ndiagnostic=local-workaround\nhealth=regressed\nuser=accepted\n",
@@ -930,7 +966,7 @@ test("independent teams prove adoption and return the missing fit upstream", asy
       "-m",
       "Retain observed version regression",
     );
-    await git(consumerCopy, "push", "origin", "main");
+    await authenticatedGit(consumerGit.token, consumerCopy, "push", "origin", "main");
     const regressedRevision = await git(consumerCopy, "rev-parse", "HEAD");
     await json(
       adopterPage,
@@ -1089,10 +1125,11 @@ test("independent teams prove adoption and return the missing fit upstream", asy
       { name: `codec-contribution-${suffix}` },
     );
     const forkCopy = await temporary("vivarium-adoption-fork-");
-    await git(
+    await authenticatedGit(
+      consumerGit.token,
       tmpdir(),
       "clone",
-      `http://git:${consumerGit.token}@localhost:3000/git/${fork.id}.git`,
+      `http://localhost:3000/git/${fork.id}.git`,
       forkCopy,
     );
     await git(forkCopy, "config", "user.name", "Consumer Owner");
@@ -1109,7 +1146,7 @@ test("independent teams prove adoption and return the missing fit upstream", asy
       "-m",
       "Report invalid field in strict diagnostics",
     );
-    await git(forkCopy, "push", "origin", "diagnostic-field");
+    await authenticatedGit(consumerGit.token, forkCopy, "push", "origin", "diagnostic-field");
     const upstreamPull = await json(
       adopterPage,
       "post",
@@ -1151,7 +1188,7 @@ test("independent teams prove adoption and return the missing fit upstream", asy
       provider.headers,
       {},
     );
-    await git(providerCopy, "pull", "--ff-only", "origin", "main");
+    await authenticatedGit(providerGit.token, providerCopy, "pull", "--ff-only", "origin", "main");
     const releaseV11 = await json(
       providerPage,
       "post",
@@ -1208,7 +1245,7 @@ test("independent teams prove adoption and return the missing fit upstream", asy
 
     // A regressed consumer update fails rollout, then a corrected exact update replaces every local-patch path.
     await git(consumerCopy, "switch", "main");
-    await git(consumerCopy, "pull", "--ff-only", "origin", "main");
+    await authenticatedGit(consumerGit.token, consumerCopy, "pull", "--ff-only", "origin", "main");
     await git(consumerCopy, "switch", "-c", "update-v11");
     await writeFile(
       join(consumerCopy, ".vivarium", "packages.json"),
@@ -1242,7 +1279,7 @@ test("independent teams prove adoption and return the missing fit upstream", asy
       "-m",
       "Replace local adapter with provider 1.1",
     );
-    await git(consumerCopy, "push", "origin", "update-v11");
+    await authenticatedGit(consumerGit.token, consumerCopy, "push", "origin", "update-v11");
     const updatePull = await json(
       adopterPage,
       "post",
@@ -1262,7 +1299,7 @@ test("independent teams prove adoption and return the missing fit upstream", asy
     );
     await git(consumerCopy, "add", "integration.txt");
     await git(consumerCopy, "commit", "-m", "Correct 1.1 rollout regression");
-    await git(consumerCopy, "push", "origin", "update-v11");
+    await authenticatedGit(consumerGit.token, consumerCopy, "push", "origin", "update-v11");
     const correctedRevision = await git(consumerCopy, "rev-parse", "HEAD");
     await json(
       adopterPage,
@@ -1436,6 +1473,13 @@ test("independent teams prove adoption and return the missing fit upstream", asy
       ),
     ).toBeVisible();
   } finally {
+    for (const credential of gitCredentials) {
+      const response = await credential.page.request.delete(
+        `/api/auth/credentials/${credential.id}`,
+        { headers: credential.headers },
+      );
+      expect(response.status(), await response.text()).toBe(204);
+    }
     await Promise.all(
       copies.map((path) => rm(path, { recursive: true, force: true })),
     );
