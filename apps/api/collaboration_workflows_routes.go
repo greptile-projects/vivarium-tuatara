@@ -15,6 +15,8 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/agentprojects"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/collaborationworkflows"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/federation"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/packages"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
@@ -30,7 +32,7 @@ type collaborationWorkflowSourceInput struct {
 
 var exactCommit = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
-func registerCollaborationWorkflowRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, workflows *collaborationworkflows.Store, components *workflowcomponents.Store, agents *agentprojects.Store, pulls *pullrequests.Store, deliveries *activities.Store) {
+func registerCollaborationWorkflowRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, workflows *collaborationworkflows.Store, components *workflowcomponents.Store, packageStore *packages.Store, peers *federation.Store, agents *agentprojects.Store, pulls *pullrequests.Store, deliveries *activities.Store) {
 	mux.HandleFunc("GET /repositories/{id}/collaboration-workflows", func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id")); !ok {
 			return
@@ -96,6 +98,9 @@ func registerCollaborationWorkflowRoutes(mux *http.ServeMux, git *storage.Store,
 					}
 					if component.Definition.Compatibility.WorkflowFormat != 1 {
 						return false, "component is incompatible with this workflow format"
+					}
+					if !workflowComponentCurrentlyTrusted(catalog, packageStore, peers, component) {
+						return false, "component publisher, package, or federation trust is no longer current"
 					}
 				case "agent":
 					if agents == nil {

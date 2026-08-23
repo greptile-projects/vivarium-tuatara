@@ -5,8 +5,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"os/exec"
+	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
@@ -120,13 +123,9 @@ func registerWorkflowComponentRoutes(mux *http.ServeMux, git *storage.Store, cat
 			return
 		}
 		var in struct {
-			Name            string                       `json:"name"`
-			ComponentID     string                       `json:"component_id"`
-			PullID          string                       `json:"pull_id"`
-			ExpectedVersion int                          `json:"expected_version"`
-			Mappings        []workflowcomponents.Mapping `json:"mappings"`
-			Configuration   map[string]any               `json:"configuration"`
-			AcceptedDataUse []string                     `json:"accepted_data_use"`
+			Name            string `json:"name"`
+			PullID          string `json:"pull_id"`
+			ExpectedVersion int    `json:"expected_version"`
 		}
 		if decodeJSON(r, &in) != nil {
 			writeAPIError(w, 400, "invalid_request", "a component, ordinary pull, mappings, and configuration are required")
@@ -137,7 +136,16 @@ func registerWorkflowComponentRoutes(mux *http.ServeMux, git *storage.Store, cat
 			writeAPIError(w, 422, "invalid_component_pull", "installation must be reviewed through a current open pull")
 			return
 		}
-		c, err := components.Get(in.ComponentID)
+		declaration, err := readComponentInstallationDeclaration(git, r.PathValue("id"), p.SourceCommitID, in.Name)
+		if err != nil {
+			writeAPIError(w, 422, "invalid_component_declaration", err.Error())
+			return
+		}
+		if !componentInstallationDeclarationChanged(git, r.PathValue("id"), p.TargetCommitID, p.SourceCommitID, in.Name) {
+			writeAPIError(w, 422, "component_declaration_not_reviewed", "the canonical installation declaration must be changed by the selected pull")
+			return
+		}
+		c, err := components.Get(declaration.ComponentID)
 		if err != nil {
 			writeAPIError(w, 404, "workflow_component_not_found", "component not found")
 			return
@@ -151,7 +159,7 @@ func registerWorkflowComponentRoutes(mux *http.ServeMux, git *storage.Store, cat
 			writeAPIError(w, 409, "component_trust_changed", "publisher package is unavailable, replaced, or no longer trusted")
 			return
 		}
-		out, err := components.Install(r.PathValue("id"), in.Name, actor.UserID, p.ID, p.SourceCommitID, c, in.Mappings, in.Configuration, in.AcceptedDataUse, in.ExpectedVersion)
+		out, err := components.Install(r.PathValue("id"), in.Name, actor.UserID, p.ID, p.SourceCommitID, c, declaration.Mappings, declaration.Configuration, declaration.AcceptedDataUse, in.ExpectedVersion)
 		if errors.Is(err, workflowcomponents.ErrConflict) {
 			writeAPIError(w, 409, "stale_component_installation", "installation version changed")
 			return
@@ -178,6 +186,49 @@ func workflowComponentReadable(catalog *repositories.Store, repositoryID, actorI
 	}
 	ok, err := catalog.HasCollaborator(actorID, repositoryID)
 	return err == nil && ok
+}
+
+type componentInstallationDeclaration struct {
+	ComponentID     string                       `json:"component_id"`
+	Mappings        []workflowcomponents.Mapping `json:"mappings"`
+	Configuration   map[string]any               `json:"configuration"`
+	AcceptedDataUse []string                     `json:"accepted_data_use"`
+}
+
+var componentInstallationName = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?$`)
+
+func readComponentInstallationDeclaration(git *storage.Store, repositoryID, revision, name string) (componentInstallationDeclaration, error) {
+	var out componentInstallationDeclaration
+	if git == nil || !exactCommit.MatchString(revision) || !componentInstallationName.MatchString(name) {
+		return out, errors.New("installation name and pull revision are invalid")
+	}
+	repository, err := git.Open(repositoryID)
+	if err != nil {
+		return out, errors.New("pull source is inaccessible")
+	}
+	path := filepath.ToSlash(filepath.Join(".vivarium", "workflow-components", name+".json"))
+	body, err := readGitBlobBounded(repository.Path(), revision, path, 64*1024)
+	if err != nil || json.Unmarshal(body, &out) != nil || strings.TrimSpace(out.ComponentID) == "" || out.Configuration == nil {
+		return componentInstallationDeclaration{}, errors.New("the pull must contain a valid canonical " + path + " declaration")
+	}
+	return out, nil
+}
+
+func componentInstallationDeclarationChanged(git *storage.Store, repositoryID, base, candidate, name string) bool {
+	if git == nil || !exactCommit.MatchString(base) || !exactCommit.MatchString(candidate) || !componentInstallationName.MatchString(name) {
+		return false
+	}
+	repository, err := git.Open(repositoryID)
+	if err != nil {
+		return false
+	}
+	path := filepath.ToSlash(filepath.Join(".vivarium", "workflow-components", name+".json"))
+	cmd := exec.Command("git", "--git-dir="+repository.Path(), "diff", "--quiet", base, candidate, "--", path)
+	err = cmd.Run()
+	if exit, ok := err.(*exec.ExitError); ok {
+		return exit.ExitCode() == 1
+	}
+	return false
 }
 
 func workflowComponentDiagnostics(catalog *repositories.Store, packageStore *packages.Store, peers *federation.Store, c workflowcomponents.Component) []string {
@@ -212,6 +263,28 @@ func workflowComponentDiagnostics(catalog *repositories.Store, packageStore *pac
 	return out
 }
 
+func workflowComponentCurrentlyTrusted(catalog *repositories.Store, packageStore *packages.Store, peers *federation.Store, c workflowcomponents.Component) bool {
+	if catalog == nil || packageStore == nil {
+		return false
+	}
+	repository, err := catalog.GetByID(c.Source.RepositoryID)
+	if err != nil || repository.OwnerID != c.Attestation.PublisherID {
+		return false
+	}
+	pkg, err := packageStore.Get(c.Source.PackageName, c.Source.PackageVersion)
+	if err != nil || pkg.RepositoryID != c.Source.RepositoryID || pkg.SourceCommit != c.Source.Revision || pkg.SHA256 != c.Source.PackageSHA256 || pkg.PublisherID != c.Attestation.PublisherID || pkg.Lifecycle != "active" {
+		return false
+	}
+	if c.Source.Boundary == "federation" {
+		if peers == nil {
+			return false
+		}
+		peer, err := peers.Get(c.Source.PeerID)
+		return err == nil && peer.Status == "trusted"
+	}
+	return c.Source.Boundary == "package"
+}
+
 func readComponentDefinition(git *storage.Store, repo, revision, path string) (workflowcomponents.Definition, workflowcomponents.Source, error) {
 	var d workflowcomponents.Definition
 	var src workflowcomponents.Source
@@ -236,11 +309,35 @@ func readComponentDefinition(git *storage.Store, repo, revision, path string) (w
 	if !reachable {
 		return d, src, errors.New("source commit must remain reachable from a visible branch")
 	}
-	body, e := exec.Command("git", "--git-dir="+r.Path(), "show", revision+":"+path).Output()
-	if e != nil || len(body) > 256*1024 || json.Unmarshal(body, &d) != nil {
+	body, e := readGitBlobBounded(r.Path(), revision, path, 256*1024)
+	if e != nil || json.Unmarshal(body, &d) != nil {
 		return d, src, errors.New("component definition must be a readable JSON blob no larger than 256 KiB")
 	}
 	sum := sha256.Sum256(body)
 	src = workflowcomponents.Source{RepositoryID: repo, Revision: revision, Path: path, SHA256: hex.EncodeToString(sum[:])}
 	return d, src, nil
+}
+
+func readGitBlobBounded(gitDir, revision, path string, limit int64) ([]byte, error) {
+	cmd := exec.Command("git", "--git-dir="+gitDir, "show", revision+":"+path)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	if err = cmd.Start(); err != nil {
+		return nil, err
+	}
+	body, readErr := io.ReadAll(io.LimitReader(stdout, limit+1))
+	if readErr != nil || int64(len(body)) > limit {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		if readErr != nil {
+			return nil, readErr
+		}
+		return nil, errors.New("Git blob exceeds permitted size")
+	}
+	if err = cmd.Wait(); err != nil {
+		return nil, err
+	}
+	return body, nil
 }

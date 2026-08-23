@@ -88,12 +88,16 @@ quarantined packages, unavailable or revoked peers, and declared breaking migrat
 of treating an old attestation as current trust.
 
 Consumers use `/repositories/{id}/workflow-component-installations` or the repository workflow
-workspace to pin an exact semantic version through a current ordinary open pull. They map every
+workspace to pin an exact semantic version through a current ordinary open pull. The server loads
+`.vivarium/workflow-components/{local_name}.json` from that pull's exact source commit and derives the
+component ID, mappings, configuration, and accepted data uses; callers cannot attach arbitrary terms
+to an unrelated pull. They map every
 requested capability to one repository-local permission, accept each exact data classification and
 purpose, and provide only bounded credential-free local configuration. Compare-and-swap installation
 successors retain the complete earlier pin and pull history. A workflow component invocation names
-`local-installation@version`; activation fails unless that exact pin is current and every declared
-authority is one of its local mappings. Existing execution records therefore remain attributable to
+`local-installation@version`; activation fails unless that exact pin is current, its publisher ownership,
+package digest/source/publisher/lifecycle, and optional federation-peer trust remain current, and every
+declared authority is one of its local mappings. Existing execution records therefore remain attributable to
 the old workflow revision when a consumer updates, retains, or replaces a component. The ledger
 defaults beneath `$WORKFLOW_COMPONENT_STORAGE_ROOT` (`workflow-components`) and grants no package,
 federation, Git, review, merge, repository, runtime, secret, or publisher authority.

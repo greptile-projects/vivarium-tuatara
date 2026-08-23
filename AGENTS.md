@@ -308,11 +308,14 @@ whenever dependencies change or the web job fails before it starts.
   repository visibility, publisher ownership, package lifecycle and identity, and peer trust, keeping
   changed, revoked, unreachable, quarantined, and breaking-version diagnostics visible.
   A consumer pins or updates an exact component version only through a current ordinary open pull.
-  Every requested capability must map once to a named local permission, every data-use term must be
-  accepted exactly, and bounded configuration rejects credential-shaped content. Installation
+  The server derives component identity, mappings, configuration, and data acceptance from the pull
+  source commit's canonical `.vivarium/workflow-components/{local_name}.json`; request prose cannot
+  claim an unrelated pull as review. Every requested capability must map once to a named local
+  permission, every data-use term must be accepted exactly, and bounded configuration rejects credential-shaped content. Installation
   successors retain earlier pins and pull revisions, so component replacement does not rewrite
   workflow execution history. Workflow activation resolves `local-name@semantic-version` only from
-  the repository's current installation and admits only its mapped local permissions. Components and
+  the repository's current installation, rechecks current publisher ownership, active package digest/
+  publisher/source, and trusted federation peer, and admits only its mapped local permissions. Components and
   installations grant no source, package, federation, Git, review, merge, workflow, runtime, secret,
   repository, or publisher authority.
 
