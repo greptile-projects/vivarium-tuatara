@@ -115,8 +115,23 @@ func TestConflictAnalysisExplainsExactTextualStructuralAndSemanticCollision(t *t
 	if analysis.Status != "current" || analysis.BaseCommitID != string(base) || len(analysis.Files) != 1 || strings.Join(analysis.Files[0].Kinds, ",") != "semantic,structural,textual" || len(analysis.Semantic) != 1 || analysis.Semantic[0].Symbol != "Apply" || len(analysis.AffectedChecks) != 1 || analysis.AffectedChecks[0].Name != "contract" {
 		t.Fatalf("analysis = %#v", analysis)
 	}
-	if declaredSymbol("name = sourceValue") != "" || declaredSymbol("func (service *Worker) Work(input string) error {") != "Work" {
+	if declaredSymbol("name = sourceValue") != "" || declaredSymbol("    Apply(input)") != "" || declaredSymbol("func (service *Worker) Work(input string) error {") != "Work" {
 		t.Fatalf("semantic declaration detection accepted assignment or lost receiver method")
+	}
+	interfaceSymbols := declaredSymbols("type Contract interface {\n    Apply(string) error\n}\n")
+	if interfaceSymbols["Apply"] != "Apply(string) error" {
+		t.Fatalf("interface symbols = %#v", interfaceSymbols)
+	}
+	callEntry := func(content string) snapshotEntry {
+		id, writeErr := repository.WriteObject(storage.BlobObject, []byte(content))
+		if writeErr != nil {
+			t.Fatal(writeErr)
+		}
+		return snapshotEntry{id: id, mode: "100644"}
+	}
+	callSymbols := sharedChangedSymbols(repository, callEntry("func run() {\n    Apply(base)\n}\n"), callEntry("func run() {\n    Apply(source)\n}\n"), callEntry("func run() {\n    Apply(target)\n}\n"))
+	if len(callSymbols) != 0 {
+		t.Fatalf("call-site edits reported declarations: %v", callSymbols)
 	}
 	if err := os.WriteFile(store.commentsPath(repository.ID(), pull.ID), []byte("invalid"), 0o600); err != nil {
 		t.Fatal(err)

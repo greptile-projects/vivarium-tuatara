@@ -326,8 +326,9 @@ func gitRead(repository *storage.Repository, args ...string) ([]byte, error) {
 var symbolPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`^\s*func\s+\([^)]*\)\s*([A-Za-z_][A-Za-z0-9_]*)\s*\(`),
 	regexp.MustCompile(`^\s*(?:export\s+)?(?:async\s+)?(?:func|function|class|type|interface|const|var|let|def|message|service|enum)\s+([A-Za-z_][A-Za-z0-9_]*)\b`),
-	regexp.MustCompile(`^\s+([A-Za-z_][A-Za-z0-9_]*)\s*\([^)]*\)\s*(?:[A-Za-z_*\[({]|$)`),
 }
+
+var interfaceMethodPattern = regexp.MustCompile(`^\s*([A-Za-z_][A-Za-z0-9_]*)\s*\([^)]*\)\s*(?:[A-Za-z_*\[({]|$)`)
 
 func declaredSymbol(line string) string {
 	for _, pattern := range symbolPatterns {
@@ -336,6 +337,31 @@ func declaredSymbol(line string) string {
 		}
 	}
 	return ""
+}
+
+func declaredSymbols(text string) map[string]string {
+	result := map[string]string{}
+	inInterface := false
+	for _, line := range strings.Split(text, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if symbol := declaredSymbol(line); symbol != "" {
+			result[symbol] = trimmed
+			if strings.Contains(line, "interface") && strings.Contains(line, "{") {
+				inInterface = true
+			}
+			continue
+		}
+		if inInterface {
+			if strings.HasPrefix(trimmed, "}") {
+				inInterface = false
+				continue
+			}
+			if match := interfaceMethodPattern.FindStringSubmatch(line); match != nil {
+				result[match[1]] = trimmed
+			}
+		}
+	}
+	return result
 }
 
 func sharedChangedSymbols(repository *storage.Repository, base, source, target snapshotEntry) []string {
@@ -352,15 +378,9 @@ func sharedChangedSymbols(repository *storage.Repository, base, source, target s
 	baseText, sourceText, targetText := read(base), read(source), read(target)
 	changed := func(before, after string) map[string]bool {
 		result := map[string]bool{}
-		prior := map[string]string{}
-		for _, line := range strings.Split(before, "\n") {
-			if symbol := declaredSymbol(line); symbol != "" {
-				prior[symbol] = strings.TrimSpace(line)
-			}
-		}
-		for _, line := range strings.Split(after, "\n") {
-			symbol := declaredSymbol(line)
-			if symbol != "" && prior[symbol] != strings.TrimSpace(line) {
+		prior, current := declaredSymbols(before), declaredSymbols(after)
+		for symbol, signature := range current {
+			if prior[symbol] != signature {
 				result[symbol] = true
 			}
 		}
