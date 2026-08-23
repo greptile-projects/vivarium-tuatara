@@ -234,6 +234,26 @@ func TestControlCanBeExplicitlyReleased(t *testing.T) {
 	}
 }
 
+func TestApprovedAgentUsesScopedControlWithOperatorAttribution(t *testing.T) {
+	store, _ := New(t.TempDir())
+	operator, agent := "11111111111111111111111111111111", "22222222222222222222222222222222"
+	created, err := store.Create(Workspace{RepositoryID: "repo", CommitID: "revision", CreatorID: operator}, []byte("definition"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	controlled, err := store.SetControl(created.ID, operator, "approved_agent", agent, "execute", []string{"files", "commands", "lifecycle"}, 1, 300)
+	if err != nil || !controlled.CanControl(agent, "commands", time.Now()) {
+		t.Fatalf("agent control=%#v err=%v", controlled.Control, err)
+	}
+	if err := store.WithControl(created.ID, agent, "files", func(Workspace) error { return nil }); err != nil {
+		t.Fatalf("agent file control=%v", err)
+	}
+	released, err := store.ReleaseControlAs(created.ID, agent, operator, controlled.Control.Version)
+	if err != nil || released.Control.PrincipalID != "" || released.Control.GrantedBy != operator {
+		t.Fatalf("agent release=%#v err=%v", released.Control, err)
+	}
+}
+
 func TestCommandEvidenceDoesNotRetainPrivateInput(t *testing.T) {
 	store, _ := New(t.TempDir())
 	created, _ := store.Create(Workspace{RepositoryID: "repository", CommitID: "commit", CreatorID: "actor"}, []byte("definition"))

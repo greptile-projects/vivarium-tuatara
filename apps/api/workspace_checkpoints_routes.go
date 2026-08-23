@@ -376,7 +376,7 @@ func registerWorkspaceCheckpointRoutes(mux *http.ServeMux, git *storage.Store, c
 		}
 		checkpoint, _ := store.CheckpointSnapshot(item.ID, a.CheckpointID)
 		var updated workspaces.Workspace
-		err = store.WithControl(item.ID, actor.UserID, "files", func(current workspaces.Workspace) error {
+		err = store.WithControl(item.ID, workspacePrincipal(actor), "files", func(current workspaces.Workspace) error {
 			fresh, freshErr := analyzeCheckpointRestore(git, store, current, r.PathValue("checkpoint_id"))
 			if freshErr != nil {
 				return freshErr

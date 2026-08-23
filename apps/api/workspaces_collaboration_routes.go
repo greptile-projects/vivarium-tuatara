@@ -92,7 +92,7 @@ func registerWorkspaceCollaborationRoutes(mux *http.ServeMux, catalog *repositor
 		}
 		release := in.PrincipalKind == "" && in.PrincipalID == "" && in.Mode == "observe" && len(in.Scopes) == 0
 		if release {
-			updated, err := store.ReleaseControl(item.ID, actor.UserID, in.ExpectedVersion)
+			updated, err := store.ReleaseControlAs(item.ID, workspacePrincipal(actor), actor.UserID, in.ExpectedVersion)
 			if errors.Is(err, workspaces.ErrControl) {
 				writeAPIError(w, 409, "workspace_control_changed", "control changed since it was observed")
 				return

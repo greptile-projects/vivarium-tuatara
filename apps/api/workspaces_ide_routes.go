@@ -220,7 +220,7 @@ func registerWorkspaceIDERoutes(mux *http.ServeMux, catalog *repositories.Store,
 		}
 		start := time.Now().UTC()
 		var out []byte
-		runErr := store.WithControl(item.ID, actor.UserID, "commands", func(current workspaces.Workspace) error {
+		runErr := store.WithControl(item.ID, workspacePrincipal(actor), "commands", func(current workspaces.Workspace) error {
 			var executeErr error
 			out, executeErr = workspaceAuthorizedExec(catalog, current, actor, true, time.Duration(input.TimeoutSeconds)*time.Second, dir, nil, "sh", "-lc", input.Command)
 			return executeErr
@@ -304,7 +304,7 @@ func registerWorkspaceIDERoutes(mux *http.ServeMux, catalog *repositories.Store,
 }
 
 func workspaceControlledExec(store *workspaces.Store, catalog *repositories.Store, item workspaces.Workspace, actor auth.Credential, scope string, timeout time.Duration, dir string, stdin io.Reader, args ...string) error {
-	return store.WithControl(item.ID, actor.UserID, scope, func(current workspaces.Workspace) error {
+	return store.WithControl(item.ID, workspacePrincipal(actor), scope, func(current workspaces.Workspace) error {
 		_, err := workspaceAuthorizedExec(catalog, current, actor, true, timeout, dir, stdin, args...)
 		return err
 	})
@@ -357,8 +357,8 @@ exec "$@"`
 		return err
 	}
 	var err error
-	if item.ConflictContext != nil && item.HasParticipant(actor.UserID) {
-		err = withConflictRuntimeAuthorization(catalog, item, actor.UserID, operation)
+	if item.ConflictContext != nil && item.HasParticipant(workspacePrincipal(actor)) {
+		err = withConflictRuntimeAuthorization(catalog, item, workspacePrincipal(actor), actor.UserID, actor.RepositoryID, operation)
 		return output, err
 	}
 	if mutation {
@@ -369,8 +369,8 @@ exec "$@"`
 	return output, err
 }
 
-func withConflictRuntimeAuthorization(catalog *repositories.Store, item workspaces.Workspace, actor string, operation func() error) error {
-	if item.ConflictContext == nil || !item.HasParticipant(actor) {
+func withConflictRuntimeAuthorization(catalog *repositories.Store, item workspaces.Workspace, principal, operator, credentialRepository string, operation func() error) error {
+	if item.ConflictContext == nil || !item.HasParticipant(principal) {
 		return repositories.ErrInvalidCollaborator
 	}
 	repositoryIDs := make([]string, 0, len(item.ConflictContext.PublicationTarget))
@@ -379,7 +379,10 @@ func withConflictRuntimeAuthorization(catalog *repositories.Store, item workspac
 	}
 	return catalog.WithCurrentRepositories(repositoryIDs, func(current []repositories.Repository) error {
 		for _, repository := range current {
-			if repository.HasParticipant(actor) {
+			if principal != operator && repository.ID != credentialRepository {
+				continue
+			}
+			if repository.HasParticipant(operator) {
 				return operation()
 			}
 		}

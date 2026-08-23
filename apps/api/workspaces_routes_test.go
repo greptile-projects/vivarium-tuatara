@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/debugworkspaces"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
@@ -27,14 +28,43 @@ func TestConflictRuntimeAuthorizationAcceptsCurrentSourceParticipant(t *testing.
 	}
 	workspace := workspaces.Workspace{CreatorID: targetOwner, Participants: []workspaces.WorkspaceParticipant{{PrincipalKind: "human", PrincipalID: participant, Status: "accepted"}}, ConflictContext: &workspaces.ConflictContext{PublicationTarget: []workspaces.ConflictPublication{{RepositoryID: source.ID}, {RepositoryID: target.ID}}}}
 	called := false
-	if err := withConflictRuntimeAuthorization(catalog, workspace, participant, func() error { called = true; return nil }); err != nil || !called {
+	if err := withConflictRuntimeAuthorization(catalog, workspace, participant, participant, "", func() error { called = true; return nil }); err != nil || !called {
 		t.Fatalf("source participant runtime authorization called=%v err=%v", called, err)
 	}
 	if err := catalog.RemoveCollaborator(sourceOwner, source.ID, participant); err != nil {
 		t.Fatal(err)
 	}
-	if err := withConflictRuntimeAuthorization(catalog, workspace, participant, func() error { return nil }); !errors.Is(err, repositories.ErrInvalidCollaborator) {
+	if err := withConflictRuntimeAuthorization(catalog, workspace, participant, participant, "", func() error { return nil }); !errors.Is(err, repositories.ErrInvalidCollaborator) {
 		t.Fatalf("revoked source participant authorization = %v", err)
+	}
+}
+
+func TestConflictRuntimeAuthorizationUsesInvitedAgentAndOperatorMembership(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	catalog, _ := repositories.New(t.TempDir(), gitStore)
+	owner, operator, agent := strings.Repeat("4", 32), strings.Repeat("5", 32), strings.Repeat("6", 32)
+	repository, _ := catalog.Create(owner, "agent-source")
+	if _, err := catalog.AddCollaborator(owner, repository.ID, operator); err != nil {
+		t.Fatal(err)
+	}
+	workspace := workspaces.Workspace{Participants: []workspaces.WorkspaceParticipant{{PrincipalKind: "approved_agent", PrincipalID: agent, Status: "accepted"}}, ConflictContext: &workspaces.ConflictContext{PublicationTarget: []workspaces.ConflictPublication{{RepositoryID: repository.ID}}}}
+	credential := auth.Credential{UserID: operator, AgentID: agent}
+	credential.RepositoryID = repository.ID
+	if workspacePrincipal(credential) != agent || !conflictParticipantCurrent(catalog, workspace, workspacePrincipal(credential), credential.UserID, credential.RepositoryID) {
+		t.Fatal("agent invitation was not resolved through the operator credential")
+	}
+	called := false
+	if err := withConflictRuntimeAuthorization(catalog, workspace, agent, operator, repository.ID, func() error { called = true; return nil }); err != nil || !called {
+		t.Fatalf("agent runtime called=%v err=%v", called, err)
+	}
+	if conflictParticipantCurrent(catalog, workspace, agent, operator, strings.Repeat("9", 32)) {
+		t.Fatal("unrelated repository credential entered the workspace")
+	}
+	if err := catalog.RemoveCollaborator(owner, repository.ID, operator); err != nil {
+		t.Fatal(err)
+	}
+	if conflictParticipantCurrent(catalog, workspace, agent, operator, repository.ID) {
+		t.Fatal("agent retained access after operator membership was revoked")
 	}
 }
 

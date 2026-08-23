@@ -365,6 +365,10 @@ func (s *Store) SetControl(id, actor, principalKind, principalID, mode string, s
 }
 
 func (s *Store) ReleaseControl(id, actor string, expectedVersion int) (Workspace, error) {
+	return s.ReleaseControlAs(id, actor, actor, expectedVersion)
+}
+
+func (s *Store) ReleaseControlAs(id, principal, actor string, expectedVersion int) (Workspace, error) {
 	control := s.controlLock(id)
 	control.Lock()
 	defer control.Unlock()
@@ -375,7 +379,7 @@ func (s *Store) ReleaseControl(id, actor string, expectedVersion int) (Workspace
 		return Workspace{}, err
 	}
 	now := s.now()
-	if expectedVersion != w.Control.Version || w.Control.PrincipalKind != "human" || w.Control.PrincipalID != actor || !w.Control.ExpiresAt.After(now) {
+	if expectedVersion != w.Control.Version || w.Control.PrincipalID != principal || !w.Control.ExpiresAt.After(now) {
 		return Workspace{}, ErrControl
 	}
 	w.Control = Control{Version: expectedVersion + 1, Mode: "observe", Scopes: []string{}, GrantedBy: actor, GrantedAt: now, ExpiresAt: now}
@@ -515,7 +519,7 @@ func (s *Store) SetContributionState(id, actor, state, reason string, expected i
 }
 
 func (w Workspace) CanControl(actor, scope string, now time.Time) bool {
-	if w.Control.PrincipalKind != "human" || w.Control.PrincipalID != actor || !w.Control.ExpiresAt.After(now) {
+	if (w.Control.PrincipalKind != "human" && w.Control.PrincipalKind != "approved_agent") || w.Control.PrincipalID != actor || !w.Control.ExpiresAt.After(now) {
 		return false
 	}
 	if w.Control.Mode != "execute" && !(w.Control.Mode == "edit" && scope == "files") {
@@ -1011,7 +1015,7 @@ func (s *Store) ListAll() ([]Workspace, error) {
 func (s *Store) Transition(id, actor, expectedFoundation, target string) (Workspace, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.transition(id, actor, expectedFoundation, target, false)
+	return s.transition(id, actor, actor, expectedFoundation, target, false)
 }
 
 func (s *Store) TransitionControlled(id, actor, expectedFoundation, target string) (Workspace, error) {
@@ -1020,10 +1024,19 @@ func (s *Store) TransitionControlled(id, actor, expectedFoundation, target strin
 	defer control.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.transition(id, actor, expectedFoundation, target, true)
+	return s.transition(id, actor, actor, expectedFoundation, target, true)
 }
 
-func (s *Store) transition(id, actor, expectedFoundation, target string, requireControl bool) (Workspace, error) {
+func (s *Store) TransitionControlledAs(id, principal, actor, expectedFoundation, target string) (Workspace, error) {
+	control := s.controlLock(id)
+	control.Lock()
+	defer control.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.transition(id, principal, actor, expectedFoundation, target, true)
+}
+
+func (s *Store) transition(id, principal, actor, expectedFoundation, target string, requireControl bool) (Workspace, error) {
 	w, e := s.read(id)
 	if e != nil {
 		return Workspace{}, e
@@ -1034,7 +1047,7 @@ func (s *Store) transition(id, actor, expectedFoundation, target string, require
 	if (target == "suspended" && w.State != "running") || (target == "running" && w.State != "suspended") {
 		return Workspace{}, ErrConflict
 	}
-	if requireControl && !w.CanControl(actor, "lifecycle", s.now()) {
+	if requireControl && !w.CanControl(principal, "lifecycle", s.now()) {
 		return Workspace{}, ErrControl
 	}
 	now := s.now()
