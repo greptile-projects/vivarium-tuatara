@@ -2785,6 +2785,22 @@ and affected required checks. Live movement never rewrites an earlier candidate
 analysis: the response reports stale or incomplete inputs and leaves both Git
 references unchanged.
 
+An authorized contributor or maintainer can turn that immutable evidence into one durable
+reconciliation environment with `POST /repositories/{id}/pulls/{pull_id}/conflict-workspaces`.
+A caller-stable launch ID reconciles retries to one workspace. The launch freezes the exact base,
+source and target commits, overlapping paths and symbols, affected checks, attributable owners,
+and any incomplete evidence; it uses the target commit's reviewed `.vivarium/workspace.json` and
+preloads a local Git bundle with the complete ancestry exposed as `conflict/source` and
+`conflict/target`. The ordinary workspace surface supplies shared editing, presence, discussion,
+renewable human or approved-agent control, reconnectable commands, and checkpoints.
+
+The creator may invite only affected current human participants or an agent already approved for
+the repository organization. Human invitations require explicit acceptance; an agent receives only
+the separately selected file, command, or lifecycle lease and no ambient repository credential.
+The frozen publication targets explain that source- and target-branch changes still require their
+ordinary repository permissions, review, checks, and merge controls. The reconciliation workspace
+therefore shares context and isolated compute without transferring either side's Git authority.
+
 An owner applies an accepted request through its merge endpoint. The operation
 rechecks readiness, materializes a two-parent merge commit through the storage
 boundary, and compare-and-swaps the live target reference. The durable pull

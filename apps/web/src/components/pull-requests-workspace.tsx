@@ -668,6 +668,23 @@ export function PullRequestDetail({
     }
   }
 
+  async function launchConflictWorkspace() {
+    if (!token || !conflicts) return;
+    setPending(true);
+    setConflictError("");
+    try {
+      const workspace = await api<{ id: string }>(
+        `/repositories/${repositoryID}/pulls/${pullRequestID}/conflict-workspaces`,
+        { method: "POST", body: JSON.stringify({ launch_id: `${conflicts.source.commit_id}-${conflicts.target.commit_id}`, candidate_id: conflicts.candidate_id || "" }) },
+        token,
+      );
+      window.location.assign(`/workspaces/${workspace.id}`);
+    } catch (reason) {
+      setConflictError(errorMessage(reason, "Reconciliation workspace could not be launched."));
+      setPending(false);
+    }
+  }
+
   async function comment(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setPending(true);
@@ -1256,6 +1273,7 @@ export function PullRequestDetail({
               </div>
               <div className="mt-4 space-y-3"><p className="text-xs font-semibold text-[var(--muted)]">Colliding files, symbols, and contracts</p>{conflicts.files.length === 0 ? <p className="text-sm text-[var(--muted)]">No overlapping textual, structural, or detected semantic changes.</p> : conflicts.files.map((file) => <div key={file.path} className="rounded-lg border border-[var(--line)] p-3 text-xs"><div className="flex flex-wrap items-center gap-2"><code className="font-semibold">{file.path}</code>{file.kinds.map((kind) => <Badge key={kind} tone={kind === "textual" ? "danger" : "warning"}>{kind}</Badge>)}</div><p className="mt-2 text-[var(--muted)]">source {file.source_change} · target {file.target_change}{file.schema_or_interface ? " · schema/interface surface" : ""}</p>{file.symbols.length > 0 && <p className="mt-1">Shared changed symbols: {file.symbols.join(", ")}</p>}</div>)}</div>
               {conflicts.affected_checks.length > 0 && <p className="mt-4 text-xs"><strong>Affected checks:</strong> {conflicts.affected_checks.map((check) => check.name).join(", ")}</p>}
+              {participant && conflicts.files.length > 0 && <><Button type="button" className="mt-4" disabled={pending} onClick={() => void launchConflictWorkspace()}>Resolve together in a workspace</Button><p className="mt-2 text-xs text-[var(--muted)]">Launches from these immutable revisions with both Git histories and repository setup preloaded. Publication remains subject to each branch and repository&apos;s ordinary permissions.</p></>}
               {conflicts.candidate_id && <Button type="button" variant="secondary" className="mt-4" onClick={() => void inspectCandidate()}>Return to current revisions</Button>}
             </>}
           </Card>}

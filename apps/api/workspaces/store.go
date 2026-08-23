@@ -68,6 +68,49 @@ type Source struct {
 	AnswerRevisionID        string `json:"answer_revision_id,omitempty"`
 	DebuggingWorkspaceID    string `json:"debugging_workspace_id,omitempty"`
 	ReplayScenarioID        string `json:"replay_scenario_id,omitempty"`
+	ConflictLaunchID        string `json:"conflict_launch_id,omitempty"`
+}
+
+// ConflictContext freezes the two histories and the evidence that was visible
+// when a reconciliation workspace was launched. It is context, not authority:
+// publication still passes through the named repository's normal controls.
+type ConflictContext struct {
+	PullRequestID     string                 `json:"pull_request_id"`
+	CandidateID       string                 `json:"candidate_id,omitempty"`
+	BaseCommitID      string                 `json:"base_commit_id"`
+	Source            ConflictRevision       `json:"source"`
+	Target            ConflictRevision       `json:"target"`
+	Files             []ConflictFileEvidence `json:"files"`
+	AffectedChecks    []string               `json:"affected_checks"`
+	Incomplete        []string               `json:"incomplete"`
+	PublicationTarget []ConflictPublication  `json:"publication_targets"`
+}
+type ConflictRevision struct {
+	Branch   string   `json:"branch"`
+	CommitID string   `json:"commit_id"`
+	OwnerIDs []string `json:"owner_ids"`
+}
+type ConflictFileEvidence struct {
+	Path         string   `json:"path"`
+	Kinds        []string `json:"kinds"`
+	Symbols      []string `json:"symbols"`
+	SourceChange string   `json:"source_change"`
+	TargetChange string   `json:"target_change"`
+}
+type ConflictPublication struct {
+	RepositoryID string `json:"repository_id"`
+	Branch       string `json:"branch"`
+	Revision     string `json:"revision"`
+	Authority    string `json:"authority"`
+}
+type WorkspaceParticipant struct {
+	PrincipalKind string     `json:"principal_kind"`
+	PrincipalID   string     `json:"principal_id"`
+	Role          string     `json:"role"`
+	Status        string     `json:"status"`
+	InvitedBy     string     `json:"invited_by"`
+	InvitedAt     time.Time  `json:"invited_at"`
+	RespondedAt   *time.Time `json:"responded_at,omitempty"`
 }
 
 type ContributorContext struct {
@@ -177,42 +220,44 @@ type Change struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 type Workspace struct {
-	ID                             string              `json:"id"`
-	RepositoryID                   string              `json:"repository_id"`
-	OrganizationID                 string              `json:"organization_id,omitempty"`
-	CommitID                       string              `json:"commit_id"`
-	Definition                     Definition          `json:"definition"`
-	DefinitionSHA256               string              `json:"definition_sha256"`
-	Source                         Source              `json:"source"`
-	CreatorID                      string              `json:"creator_id"`
-	Access                         Access              `json:"effective_access"`
-	State                          string              `json:"state"`
-	Setup                          []SetupStep         `json:"setup_evidence"`
-	Events                         []Event             `json:"events"`
-	Commands                       []CommandOutcome    `json:"command_outcomes"`
-	Changes                        []Change            `json:"changes"`
-	Presence                       []Presence          `json:"presence"`
-	Control                        Control             `json:"control"`
-	Messages                       []Message           `json:"messages"`
-	HeadCheckpointID               string              `json:"head_checkpoint_id,omitempty"`
-	CreatedAt                      time.Time           `json:"created_at"`
-	UpdatedAt                      time.Time           `json:"updated_at"`
-	SuspendedAt                    *time.Time          `json:"suspended_at,omitempty"`
-	ResumedAt                      *time.Time          `json:"resumed_at,omitempty"`
-	Policy                         Policy              `json:"policy"`
-	PolicyScope                    string              `json:"policy_scope"`
-	PolicyVersion                  int                 `json:"policy_version"`
-	LastActivityAt                 time.Time           `json:"last_activity_at"`
-	ExpiresAt                      *time.Time          `json:"expires_at,omitempty"`
-	ExpiryAnnouncedAt              *time.Time          `json:"expiry_announced_at,omitempty"`
-	StoppedAt                      *time.Time          `json:"stopped_at,omitempty"`
-	StoppedBy                      string              `json:"stopped_by,omitempty"`
-	StopReason                     string              `json:"stop_reason,omitempty"`
-	RebuildRequired                bool                `json:"rebuild_required"`
-	RebuildReasons                 []string            `json:"rebuild_reasons"`
-	Reasoning                      *ReasoningContext   `json:"reasoning,omitempty"`
-	ReproductionInputAttachmentIDs []string            `json:"reproduction_input_attachment_ids,omitempty"`
-	ContributorContext             *ContributorContext `json:"contributor_context,omitempty"`
+	ID                             string                 `json:"id"`
+	RepositoryID                   string                 `json:"repository_id"`
+	OrganizationID                 string                 `json:"organization_id,omitempty"`
+	CommitID                       string                 `json:"commit_id"`
+	Definition                     Definition             `json:"definition"`
+	DefinitionSHA256               string                 `json:"definition_sha256"`
+	Source                         Source                 `json:"source"`
+	CreatorID                      string                 `json:"creator_id"`
+	Access                         Access                 `json:"effective_access"`
+	State                          string                 `json:"state"`
+	Setup                          []SetupStep            `json:"setup_evidence"`
+	Events                         []Event                `json:"events"`
+	Commands                       []CommandOutcome       `json:"command_outcomes"`
+	Changes                        []Change               `json:"changes"`
+	Presence                       []Presence             `json:"presence"`
+	Control                        Control                `json:"control"`
+	Messages                       []Message              `json:"messages"`
+	HeadCheckpointID               string                 `json:"head_checkpoint_id,omitempty"`
+	CreatedAt                      time.Time              `json:"created_at"`
+	UpdatedAt                      time.Time              `json:"updated_at"`
+	SuspendedAt                    *time.Time             `json:"suspended_at,omitempty"`
+	ResumedAt                      *time.Time             `json:"resumed_at,omitempty"`
+	Policy                         Policy                 `json:"policy"`
+	PolicyScope                    string                 `json:"policy_scope"`
+	PolicyVersion                  int                    `json:"policy_version"`
+	LastActivityAt                 time.Time              `json:"last_activity_at"`
+	ExpiresAt                      *time.Time             `json:"expires_at,omitempty"`
+	ExpiryAnnouncedAt              *time.Time             `json:"expiry_announced_at,omitempty"`
+	StoppedAt                      *time.Time             `json:"stopped_at,omitempty"`
+	StoppedBy                      string                 `json:"stopped_by,omitempty"`
+	StopReason                     string                 `json:"stop_reason,omitempty"`
+	RebuildRequired                bool                   `json:"rebuild_required"`
+	RebuildReasons                 []string               `json:"rebuild_reasons"`
+	Reasoning                      *ReasoningContext      `json:"reasoning,omitempty"`
+	ReproductionInputAttachmentIDs []string               `json:"reproduction_input_attachment_ids,omitempty"`
+	ContributorContext             *ContributorContext    `json:"contributor_context,omitempty"`
+	ConflictContext                *ConflictContext       `json:"conflict_context,omitempty"`
+	Participants                   []WorkspaceParticipant `json:"participants,omitempty"`
 }
 type ReasoningContext struct {
 	AssessmentID      string                     `json:"assessment_id"`
@@ -693,6 +738,105 @@ func (s *Store) ClaimDecisionExperiment(repositoryID, commitID, creatorID, decis
 		}
 	}
 	return Workspace{}, false, release, nil
+}
+
+// ClaimConflictLaunch gives a caller-stable launch exactly one durable
+// workspace, including across an ambiguous provisioning response.
+func (s *Store) ClaimConflictLaunch(repositoryID, pullID, launchID string) (Workspace, bool, func(), error) {
+	claim, err := os.OpenFile(filepath.Join(s.root, ".conflict-launch.lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return Workspace{}, false, nil, err
+	}
+	if err = syscall.Flock(int(claim.Fd()), syscall.LOCK_EX); err != nil {
+		_ = claim.Close()
+		return Workspace{}, false, nil, err
+	}
+	release := func() { _ = syscall.Flock(int(claim.Fd()), syscall.LOCK_UN); _ = claim.Close() }
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entries, err := os.ReadDir(s.root)
+	if err != nil {
+		release()
+		return Workspace{}, false, nil, err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		item, readErr := s.readName(entry.Name())
+		if readErr != nil {
+			release()
+			return Workspace{}, false, nil, readErr
+		}
+		if item.RepositoryID == repositoryID && item.Source.PullRequestID == pullID && item.Source.ConflictLaunchID == launchID {
+			release()
+			return item, true, func() {}, nil
+		}
+	}
+	return Workspace{}, false, release, nil
+}
+
+func (w Workspace) HasParticipant(actor string) bool {
+	if actor == w.CreatorID {
+		return true
+	}
+	for _, participant := range w.Participants {
+		if participant.PrincipalID == actor && participant.Status == "accepted" {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Store) Invite(id, actor, principalKind, principalID, role string) (Workspace, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w, err := s.read(id)
+	if err != nil {
+		return Workspace{}, err
+	}
+	if w.CreatorID != actor || w.ConflictContext == nil || principalID == "" {
+		return Workspace{}, ErrInvalid
+	}
+	for _, p := range w.Participants {
+		if p.PrincipalKind == principalKind && p.PrincipalID == principalID {
+			return Workspace{}, ErrConflict
+		}
+	}
+	status := "pending"
+	if principalKind == "approved_agent" {
+		status = "accepted"
+	}
+	w.Participants = append(w.Participants, WorkspaceParticipant{PrincipalKind: principalKind, PrincipalID: principalID, Role: role, Status: status, InvitedBy: actor, InvitedAt: s.now()})
+	w.UpdatedAt = s.now()
+	if err = s.write(w); err != nil {
+		return Workspace{}, err
+	}
+	return w, nil
+}
+
+func (s *Store) RespondInvitation(id, actor, status string) (Workspace, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w, err := s.read(id)
+	if err != nil {
+		return Workspace{}, err
+	}
+	if status != "accepted" && status != "declined" {
+		return Workspace{}, ErrInvalid
+	}
+	for i := range w.Participants {
+		if w.Participants[i].PrincipalKind == "human" && w.Participants[i].PrincipalID == actor && w.Participants[i].Status == "pending" {
+			now := s.now()
+			w.Participants[i].Status, w.Participants[i].RespondedAt = status, &now
+			w.UpdatedAt = now
+			if err = s.write(w); err != nil {
+				return Workspace{}, err
+			}
+			return w, nil
+		}
+	}
+	return Workspace{}, ErrInvalid
 }
 
 func (s *Store) Create(w Workspace, definitionBytes []byte) (Workspace, error) {

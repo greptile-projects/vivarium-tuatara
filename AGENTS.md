@@ -2899,6 +2899,19 @@ whenever dependencies change or the web job fails before it starts.
 
   Update it when you change how the apps fit together, not for every change.
 
+- **Conflict reconciliation workspaces** — authorized contributors and maintainers launch one
+  durable isolated workspace from pull conflict analysis through
+  `/repositories/{id}/pulls/{pull_id}/conflict-workspaces`. A caller-stable launch ID reconciles
+  retries. The record freezes the merge base, exact source and target revisions, overlap evidence,
+  affected checks, owners, evidence gaps, and publication boundaries; the target revision's reviewed
+  `.vivarium/workspace.json` provisions compute, while a local Git bundle exposes complete immutable
+  ancestry as `conflict/source` and `conflict/target`. Existing workspace editing, discussion,
+  presence, commands, control leases, reconnect, and checkpoints provide the shared surface.
+  Creators may invite affected current human participants, who explicitly consent, and
+  organization-approved agents with separately bounded file/command/lifecycle control. Invitations,
+  evidence, or workspace access grant no repository, branch, credential, review, check, merge, or
+  publication authority; each side's ordinary source permissions remain decisive.
+
 ## LADDER.md
 
 `/LADDER.md` at the repo root is **not part of this repository**. It is placed

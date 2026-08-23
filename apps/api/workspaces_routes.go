@@ -221,7 +221,7 @@ func registerWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, catalog *re
 		for _, item := range all {
 			meta, metaErr := catalog.GetByID(item.RepositoryID)
 			collaborator, _ := catalog.HasCollaborator(actor.UserID, item.RepositoryID)
-			if metaErr == nil && (meta.OwnerID == actor.UserID || collaborator) {
+			if metaErr == nil && (meta.OwnerID == actor.UserID || collaborator || conflictParticipantCurrent(catalog, item, actor.UserID)) {
 				items = append(items, item)
 			}
 		}
@@ -352,11 +352,29 @@ func authorizeWorkspace(w http.ResponseWriter, r *http.Request, store *workspace
 	}
 	meta, err := catalog.GetByID(item.RepositoryID)
 	collaborator, _ := catalog.HasCollaborator(actor.UserID, item.RepositoryID)
-	if err != nil || (actor.UserID != meta.OwnerID && !collaborator) || (item.Policy.Sharing == "private" && actor.UserID != item.CreatorID && actor.UserID != meta.OwnerID) {
+	invited := conflictParticipantCurrent(catalog, item, actor.UserID)
+	if err != nil || (actor.UserID != meta.OwnerID && !collaborator && !invited) || (item.Policy.Sharing == "private" && actor.UserID != item.CreatorID && actor.UserID != meta.OwnerID && !invited) {
 		writeAPIError(w, 404, "workspace_not_found", "workspace not found")
 		return item, auth.Credential{}, false
 	}
 	return item, actor, true
+}
+
+func conflictParticipantCurrent(catalog *repositories.Store, item workspaces.Workspace, actor string) bool {
+	if !item.HasParticipant(actor) {
+		return false
+	}
+	if item.ConflictContext == nil {
+		return true
+	}
+	for _, target := range item.ConflictContext.PublicationTarget {
+		meta, err := catalog.GetByID(target.RepositoryID)
+		collaborator, _ := catalog.HasCollaborator(actor, target.RepositoryID)
+		if err == nil && (meta.OwnerID == actor || collaborator) {
+			return true
+		}
+	}
+	return false
 }
 func writeWorkspaceTransition(w http.ResponseWriter, item workspaces.Workspace, err error) {
 	if errors.Is(err, workspaces.ErrControl) {
