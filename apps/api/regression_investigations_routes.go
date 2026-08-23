@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/debugworkspaces"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/deployments"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/issues"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/regressioninvestigations"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
@@ -22,7 +24,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/supportthreads"
 )
 
-func registerRegressionInvestigationRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, investigations *regressioninvestigations.Store, issueStore *issues.Store, supportStore *supportthreads.Store, checkStore *checkruns.Store, releaseStore *releases.Store, deploymentStore *deployments.Store, debugStore *debugworkspaces.Store) {
+func registerRegressionInvestigationRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, investigations *regressioninvestigations.Store, issueStore *issues.Store, supportStore *supportthreads.Store, checkStore *checkruns.Store, releaseStore *releases.Store, deploymentStore *deployments.Store, debugStore *debugworkspaces.Store, pullStore *pullrequests.Store) {
 	actor := func(c auth.Credential) string {
 		if c.AgentID != "" {
 			return c.AgentID
@@ -61,6 +63,7 @@ func registerRegressionInvestigationRoutes(mux *http.ServeMux, git *storage.Stor
 			}
 			*ev = projectRegressionEvidence(*ev, current)
 		}
+		v = projectRegressionSearches(v, r.Path(), pullStore)
 		return v
 	}
 	mux.HandleFunc("GET /repositories/{id}/regression-investigations", func(w http.ResponseWriter, r *http.Request) {
@@ -447,6 +450,229 @@ func registerRegressionInvestigationRoutes(mux *http.ServeMux, git *storage.Stor
 		out, e := investigations.FinalizeAttempt(current.RepositoryID, current.ID, actor(c), attempt.ID, attempt)
 		writeRegressionInvestigation(w, project(out), e, 201)
 	})
+	mux.HandleFunc("POST /repositories/{id}/regression-investigations/{investigation_id}/searches", func(w http.ResponseWriter, r *http.Request) {
+		c, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var in struct {
+			ExpectedVersion int                                   `json:"expected_version"`
+			RequestID       string                                `json:"request_id"`
+			ScenarioID      string                                `json:"scenario_id"`
+			Dependencies    []regressioninvestigations.Dependency `json:"dependencies"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "a graph search request is required")
+			return
+		}
+		current, e := investigations.Get(r.PathValue("id"), r.PathValue("investigation_id"))
+		if e != nil {
+			writeRegressionInvestigation(w, current, e, 201)
+			return
+		}
+		gr, e := git.Open(current.RepositoryID)
+		if e != nil {
+			writeAPIError(w, 422, "regression_history_unavailable", "repository history is unavailable")
+			return
+		}
+		output, e := exec.Command("git", "--git-dir="+gr.Path(), "rev-list", "--ancestry-path", "--topo-order", "--reverse", "--parents", current.KnownGood.Revision+".."+current.KnownBad.Revision).Output()
+		if e != nil {
+			writeAPIError(w, 422, "regression_search_incomparable", "eligible commit graph could not be resolved")
+			return
+		}
+		candidates := []regressioninvestigations.SearchCandidate{{Kind: "commit", RepositoryID: current.RepositoryID, Revision: current.KnownGood.Revision, Classification: "working"}}
+		seen := map[string]bool{current.KnownGood.Revision: true}
+		for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) == 0 || seen[fields[0]] {
+				continue
+			}
+			seen[fields[0]] = true
+			candidates = append(candidates, regressioninvestigations.SearchCandidate{Kind: "commit", RepositoryID: current.RepositoryID, Revision: fields[0], Parents: append([]string{}, fields[1:]...), Merge: len(fields) > 2})
+		}
+		if len(candidates) < 2 {
+			writeAPIError(w, 422, "regression_search_empty", "eligible commit graph contains no transition")
+			return
+		}
+		badFound := false
+		for i := range candidates {
+			if candidates[i].Revision == current.KnownBad.Revision {
+				candidates[i].Classification, badFound = "regressed", true
+			}
+		}
+		if !badFound {
+			writeAPIError(w, 422, "regression_search_incomparable", "known-bad revision is absent from the eligible graph")
+			return
+		}
+		for _, dependency := range in.Dependencies {
+			if !validRegressionDependencyName(dependency.Name) || len(dependency.Revision) != 40 {
+				writeAPIError(w, 422, "regression_dependency_invalid", "selected dependency revision is invalid")
+				return
+			}
+			_, _, permitted := authorizeRepositoryRead(w, r, catalog, credentials, dependency.RepositoryID)
+			if !permitted {
+				return
+			}
+			dg, openErr := git.Open(dependency.RepositoryID)
+			if openErr != nil || exec.Command("git", "--git-dir="+dg.Path(), "cat-file", "-e", dependency.Revision+"^{commit}").Run() != nil {
+				writeAPIError(w, 422, "regression_dependency_missing", "selected dependency revision is unavailable")
+				return
+			}
+			candidates = append(candidates, regressioninvestigations.SearchCandidate{Kind: "dependency", RepositoryID: dependency.RepositoryID, Revision: dependency.Revision})
+		}
+		out, e := investigations.CreateSearch(current.RepositoryID, current.ID, actor(c), regressioninvestigations.Search{RequestID: in.RequestID, ScenarioID: in.ScenarioID, Candidates: candidates}, in.ExpectedVersion)
+		writeRegressionInvestigation(w, project(out), e, 201)
+	})
+	mux.HandleFunc("POST /repositories/{id}/regression-investigations/{investigation_id}/searches/{search_id}/guidance", func(w http.ResponseWriter, r *http.Request) {
+		c, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var in struct {
+			ExpectedVersion       int      `json:"expected_version"`
+			ExpectedSearchVersion int      `json:"expected_search_version"`
+			Kind                  string   `json:"kind"`
+			Revision              string   `json:"revision"`
+			Classification        string   `json:"classification"`
+			Reason                string   `json:"reason"`
+			Claim                 string   `json:"claim"`
+			Confidence            string   `json:"confidence"`
+			EvidenceIDs           []string `json:"evidence_ids"`
+			AttemptIDs            []string `json:"attempt_ids"`
+			CandidateRevisions    []string `json:"candidate_revisions"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "attributable search guidance is required")
+			return
+		}
+		out, e := investigations.GuideSearch(r.PathValue("id"), r.PathValue("investigation_id"), r.PathValue("search_id"), actor(c), in.Kind, in.Revision, in.Classification, in.Reason, in.Claim, in.Confidence, in.EvidenceIDs, in.AttemptIDs, in.CandidateRevisions, in.ExpectedVersion, in.ExpectedSearchVersion)
+		writeRegressionInvestigation(w, project(out), e, 201)
+	})
+}
+
+func projectRegressionSearches(v regressioninvestigations.Investigation, gitPath string, pulls *pullrequests.Store) regressioninvestigations.Investigation {
+	linked := []pullrequests.PullRequest{}
+	if pulls != nil {
+		linked, _ = pulls.List(v.RepositoryID)
+	}
+	for si := range v.Searches {
+		s := &v.Searches[si]
+		for ci := range s.Candidates {
+			c := &s.Candidates[ci]
+			c.Selected = false
+			c.AttemptIDs = []string{}
+			c.ChangedPaths = []string{}
+			c.OwnerIDs = []string{}
+			c.PullRequestIDs = []string{}
+			for _, a := range v.Attempts {
+				if a.State == "completed" && a.Revision == c.Revision {
+					c.AttemptIDs = append(c.AttemptIDs, a.ID)
+					if !c.Excluded {
+						if a.Classification == "passed" {
+							c.Classification = "working"
+						} else if a.Classification == "failed" {
+							c.Classification = "regressed"
+						} else if a.Classification == "flaky" {
+							c.Classification = "flaky"
+						}
+					}
+				}
+			}
+			if c.Kind == "commit" {
+				if exec.Command("git", "--git-dir="+gitPath, "cat-file", "-e", c.Revision+"^{commit}").Run() != nil {
+					c.Excluded, c.Exclusion = true, "revision no longer resolves in repository history"
+					continue
+				}
+				if out, e := exec.Command("git", "--git-dir="+gitPath, "show", "-s", "--format=%s", c.Revision).Output(); e == nil {
+					c.Subject = strings.TrimSpace(string(out))
+				}
+				if out, e := exec.Command("git", "--git-dir="+gitPath, "diff-tree", "-m", "--no-commit-id", "--name-only", "-r", c.Revision).Output(); e == nil {
+					c.ChangedPaths = uniqStrings(strings.Fields(string(out)))
+				}
+				if out, e := exec.Command("git", "--git-dir="+gitPath, "show", "-s", "--format=%ae", c.Revision).Output(); e == nil {
+					c.OwnerIDs = []string{strings.TrimSpace(string(out))}
+				}
+				for _, p := range linked {
+					if p.SourceCommitID == c.Revision || (p.MergeCommitID != nil && *p.MergeCommitID == c.Revision) {
+						c.PullRequestIDs = append(c.PullRequestIDs, p.ID)
+					}
+				}
+			}
+		}
+		s.Ranges = deriveCulpritRanges(s.Candidates)
+		unknown := []int{}
+		for i, c := range s.Candidates {
+			if c.Kind == "commit" && !c.Excluded && c.Classification == "" {
+				unknown = append(unknown, i)
+			}
+		}
+		if len(unknown) > 0 {
+			s.Candidates[unknown[len(unknown)/2]].Selected = true
+		}
+		if len(s.Ranges) == 1 && s.Ranges[0].Remaining == 0 && s.Ranges[0].Ambiguity == "" {
+			s.State = "isolated"
+		} else {
+			s.State = "searching"
+		}
+	}
+	return v
+}
+
+func deriveCulpritRanges(candidates []regressioninvestigations.SearchCandidate) []regressioninvestigations.CulpritRange {
+	working, regressed := []int{}, []int{}
+	ambiguity := ""
+	for i, c := range candidates {
+		if c.Excluded {
+			continue
+		}
+		if c.Classification == "working" {
+			working = append(working, i)
+		}
+		if c.Classification == "regressed" {
+			regressed = append(regressed, i)
+		}
+		if c.Classification == "flaky" {
+			ambiguity = "flaky evidence prevents a single-commit verdict"
+		}
+		if c.Merge && c.Classification == "regressed" {
+			ambiguity = "merge ancestry requires parent-specific evidence"
+		}
+	}
+	ranges := []regressioninvestigations.CulpritRange{}
+	for _, w := range working {
+		for _, b := range regressed {
+			if w >= b {
+				continue
+			}
+			remaining := 0
+			for i := w + 1; i < b; i++ {
+				if !candidates[i].Excluded && candidates[i].Classification == "" {
+					remaining++
+				}
+			}
+			confidence := 1.0 / float64(remaining+1)
+			if ambiguity != "" {
+				confidence *= 0.5
+			}
+			ranges = append(ranges, regressioninvestigations.CulpritRange{Kind: candidates[b].Kind, RepositoryID: candidates[b].RepositoryID, WorkingRevision: candidates[w].Revision, RegressedRevision: candidates[b].Revision, Remaining: remaining, Confidence: confidence, Ambiguity: ambiguity})
+		}
+	}
+	sort.Slice(ranges, func(i, j int) bool { return ranges[i].Confidence > ranges[j].Confidence })
+	if len(ranges) > 8 {
+		return ranges[:8]
+	}
+	return ranges
+}
+func uniqStrings(values []string) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, v := range values {
+		if v != "" && !seen[v] {
+			seen[v] = true
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 func validRegressionDependencyName(v string) bool {

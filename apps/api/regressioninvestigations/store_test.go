@@ -169,6 +169,24 @@ func TestScenarioRejectsUnboundedEnvironment(t *testing.T) {
 	}
 }
 
+func TestSearchRetainsGuidanceAndRequiresCitedHypothesisEvidence(t *testing.T) {
+	s, _ := New(t.TempDir())
+	v, _ := s.Create(validInvestigation(), "actor-1")
+	v, _ = s.AddScenario(v.RepositoryID, v.ID, "owner-1", Scenario{Name: "Comparison", Environment: ScenarioEnvironment{Image: "alpine:3.22", WorkingDirectory: ".", Command: "./compare", TimeoutSeconds: 60, CPUs: 1, MemoryMB: 128, StorageMB: 32}}, v.Version)
+	search := Search{RequestID: "search-request-1", ScenarioID: v.Scenarios[0].ID, Candidates: []SearchCandidate{{Kind: "commit", RepositoryID: v.RepositoryID, Revision: commit, Classification: "working"}, {Kind: "commit", RepositoryID: v.RepositoryID, Revision: strings.Repeat("b", 40), Classification: "regressed"}}}
+	v, err := s.CreateSearch(v.RepositoryID, v.ID, "agent-1", search, v.Version)
+	if err != nil || len(v.Searches) != 1 || v.Searches[0].CreatedBy != "agent-1" {
+		t.Fatalf("search = %#v, %v", v.Searches, err)
+	}
+	v, err = s.GuideSearch(v.RepositoryID, v.ID, v.Searches[0].ID, "owner-1", "classify", strings.Repeat("b", 40), "flaky", "Three isolated runs disagreed.", "", "", nil, nil, nil, v.Version, v.Searches[0].Version)
+	if err != nil || v.Searches[0].Candidates[1].Classification != "flaky" {
+		t.Fatalf("guidance = %#v, %v", v.Searches[0], err)
+	}
+	if _, err = s.GuideSearch(v.RepositoryID, v.ID, v.Searches[0].ID, "agent-1", "hypothesis", "", "", "Candidate changes serialization.", "The retained attempt supports this claim.", "medium", nil, []string{"invented"}, []string{strings.Repeat("b", 40)}, v.Version, v.Searches[0].Version); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("invented citation accepted: %v", err)
+	}
+}
+
 func TestAttemptReservationSurvivesConcurrentInvestigationChangesAndReconciles(t *testing.T) {
 	s, _ := New(t.TempDir())
 	v, _ := s.Create(validInvestigation(), "actor-1")

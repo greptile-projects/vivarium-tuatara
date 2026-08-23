@@ -49,3 +49,11 @@ func TestRegressionActiveRetryDoesNotBecomeFailure(t *testing.T) {
 		}
 	}
 }
+
+func TestCulpritRangesKeepFlakyAndMergeAmbiguityExplicit(t *testing.T) {
+	candidates := []regressioninvestigations.SearchCandidate{{Revision: "good", Classification: "working"}, {Revision: "flaky", Classification: "flaky"}, {Revision: "merge", Classification: "regressed", Merge: true}}
+	ranges := deriveCulpritRanges(candidates)
+	if len(ranges) != 1 || ranges[0].Ambiguity == "" || ranges[0].Confidence >= 1 {
+		t.Fatalf("ambiguous range collapsed: %#v", ranges)
+	}
+}
