@@ -327,7 +327,7 @@ func TestEmbargoAndRejectionRetainLocalPatchAndVerifiedReplacement(t *testing.T)
 		t.Fatal(err)
 	}
 	upstream = x.Contributions[1]
-	update := VerifiedUpdate{ContributionID: upstream.ID, ProviderRepositoryID: "provider", ProviderReleaseID: "provider-release", ProviderReleaseRevision: "3333333333333333333333333333333333333333", ConsumerRepositoryID: "consumer", ConsumerPullRequestID: "update-pull", ConsumerPullRevision: "4444444444444444444444444444444444444444", ConsumerReleaseID: "consumer-release", ConsumerReleaseRevision: "5555555555555555555555555555555555555555", ConsumerDeploymentID: "deployment", ReplacesContributionID: x.Contributions[0].ID, Outcome: "provider release replaced the local patch", CheckRunIDs: []string{"check"}, State: "verified"}
+	update := VerifiedUpdate{ContributionID: upstream.ID, ProviderRepositoryID: "provider", ProviderReleaseID: "provider-release", ProviderReleaseRevision: "3333333333333333333333333333333333333333", ConsumerRepositoryID: "consumer", ConsumerPullRequestID: "update-pull", ConsumerPullRevision: "4444444444444444444444444444444444444444", ConsumerReleaseID: "consumer-release", ConsumerReleaseRevision: "5555555555555555555555555555555555555555", ConsumerDeploymentID: "deployment", ReplacesContributionID: x.Contributions[0].ID, VerificationKind: "exact_package_inventory", PackageName: "relay", PackageVersion: "2.1.0", ReplacedPaths: []string{"src/relay-workaround.go"}, Outcome: "provider release replaced the local patch", CheckRunIDs: []string{"check"}, State: "verified"}
 	x, err = s.RecordVerifiedUpdate(x.ID, update, v, x.Version)
 	if err != nil || x.VerifiedUpdates[0].Authority != "no_authority_granted" {
 		t.Fatalf("verified patch replacement not retained: %+v, %v", x.VerifiedUpdates, err)

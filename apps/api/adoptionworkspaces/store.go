@@ -245,6 +245,10 @@ type VerifiedUpdate struct {
 	ConsumerReleaseRevision string    `json:"consumer_release_revision"`
 	ConsumerDeploymentID    string    `json:"consumer_deployment_id"`
 	ReplacesContributionID  string    `json:"replaces_contribution_id,omitempty"`
+	VerificationKind        string    `json:"verification_kind"`
+	PackageName             string    `json:"package_name"`
+	PackageVersion          string    `json:"package_version"`
+	ReplacedPaths           []string  `json:"replaced_paths,omitempty"`
 	Outcome                 string    `json:"outcome"`
 	CheckRunIDs             []string  `json:"check_run_ids"`
 	State                   string    `json:"state"`
@@ -604,6 +608,7 @@ func (s *Store) project(x Workspace, viewer Viewer) Workspace {
 			x.VerifiedUpdates[i].ProviderRepositoryID, x.VerifiedUpdates[i].ProviderReleaseID, x.VerifiedUpdates[i].ProviderReleaseRevision = "restricted", "", ""
 			x.VerifiedUpdates[i].ConsumerRepositoryID, x.VerifiedUpdates[i].ConsumerPullRequestID, x.VerifiedUpdates[i].ConsumerPullRevision, x.VerifiedUpdates[i].ConsumerReleaseID, x.VerifiedUpdates[i].ConsumerReleaseRevision, x.VerifiedUpdates[i].ConsumerDeploymentID = "restricted", "", "", "", "", ""
 			x.VerifiedUpdates[i].CheckRunIDs, x.VerifiedUpdates[i].State = nil, "access_revoked"
+			x.VerifiedUpdates[i].PackageName, x.VerifiedUpdates[i].PackageVersion, x.VerifiedUpdates[i].ReplacedPaths = "", "", nil
 		}
 		x.VerifiedUpdates[i].Authority = "no_authority_granted"
 	}
@@ -909,7 +914,7 @@ func (s *Store) RecordVerifiedUpdate(workspace string, in VerifiedUpdate, viewer
 	for _, contribution := range x.Contributions {
 		replacedFound = replacedFound || contribution.ID == in.ReplacesContributionID && contribution.Kind == "local_pull"
 	}
-	if !contributionFound || !replacedFound || !revision(in.ProviderReleaseRevision) || !revision(in.ConsumerPullRevision) || !revision(in.ConsumerReleaseRevision) || !text(in.ProviderRepositoryID, 100) || !text(in.ProviderReleaseID, 100) || !text(in.ConsumerRepositoryID, 100) || !text(in.ConsumerPullRequestID, 100) || !text(in.ConsumerReleaseID, 100) || !text(in.ConsumerDeploymentID, 100) || !list(in.CheckRunIDs, 100) || !safeText(in.Outcome, 5000) || in.State != "verified" {
+	if !contributionFound || !replacedFound || !revision(in.ProviderReleaseRevision) || !revision(in.ConsumerPullRevision) || !revision(in.ConsumerReleaseRevision) || !text(in.ProviderRepositoryID, 100) || !text(in.ProviderReleaseID, 100) || !text(in.ConsumerRepositoryID, 100) || !text(in.ConsumerPullRequestID, 100) || !text(in.ConsumerReleaseID, 100) || !text(in.ConsumerDeploymentID, 100) || !list(in.CheckRunIDs, 100) || !safeText(in.Outcome, 5000) || in.State != "verified" || in.VerificationKind != "exact_package_inventory" || !text(in.PackageName, 100) || !text(in.PackageVersion, 100) || (in.ReplacesContributionID != "" && !list(in.ReplacedPaths, 100)) {
 		return Workspace{}, ErrInvalid
 	}
 	now := s.now().UTC().Truncate(time.Microsecond)

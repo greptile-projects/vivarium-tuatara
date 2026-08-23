@@ -85,6 +85,46 @@ func storeCanReadRepository(catalog *repositories.Store, viewer adoptionworkspac
 	return ok
 }
 
+func exactAdoptionPackage(versions []packageversions.Version, inventory packageversions.Inventory, providerRepositoryID, providerReleaseID, providerRevision string) (string, string, bool) {
+	name, version := "", ""
+	for _, candidate := range versions {
+		if candidate.RepositoryID != providerRepositoryID || candidate.ReleaseID != providerReleaseID || candidate.SourceCommit != providerRevision {
+			continue
+		}
+		if name != "" && (name != candidate.Name || version != candidate.Version) {
+			return "", "", false
+		}
+		name, version = candidate.Name, candidate.Version
+	}
+	if name == "" {
+		return "", "", false
+	}
+	for _, entry := range inventory.Entries {
+		if entry.Direct && entry.Name == name && entry.Version == version && entry.State == "resolved" {
+			return name, version, true
+		}
+	}
+	return "", "", false
+}
+
+func adoptionPatchCoverage(local, update []pullrequests.FileChange) ([]string, bool) {
+	if len(local) == 0 {
+		return nil, false
+	}
+	updated := map[string]bool{}
+	for _, change := range update {
+		updated[change.Path] = true
+	}
+	paths := make([]string, 0, len(local))
+	for _, change := range local {
+		if !updated[change.Path] {
+			return nil, false
+		}
+		paths = append(paths, change.Path)
+	}
+	return paths, true
+}
+
 func registerAdoptionWorkspaceRoutes(mux *http.ServeMux, credentials *auth.Store, identities *users.Store, catalog *repositories.Store, orgs *organizations.Store, incubatorStore *incubators.Store, federationStore *federation.Store, roadmapStore *roadmaps.Store, supportStore *supportthreads.Store, decisionStore *decisions.Store, packageStore *packageversions.Store, apiStore *apicontracts.Store, releaseStore *releases.Store, buildStore *checkruns.Store, pullStore *pullrequests.Store, issueStore *issues.Store, deploymentStore *deployments.Store, store *adoptionworkspaces.Store) {
 	authn := func(w http.ResponseWriter, r *http.Request) (auth.Credential, bool) {
 		a, ok := authenticateRequest(w, r, credentials, "repositories:read", false)
@@ -765,7 +805,7 @@ func registerAdoptionWorkspaceRoutes(mux *http.ServeMux, credentials *auth.Store
 			writeAPIError(w, 400, "invalid_verified_update", "exact provider and consumer delivery records are required")
 			return
 		}
-		if releaseStore == nil || pullStore == nil || buildStore == nil || deploymentStore == nil {
+		if releaseStore == nil || pullStore == nil || buildStore == nil || deploymentStore == nil || packageStore == nil {
 			writeAPIError(w, 503, "adoption_update_evidence_unavailable", "ordinary release, pull, check, and deployment records are required")
 			return
 		}
@@ -775,14 +815,23 @@ func registerAdoptionWorkspaceRoutes(mux *http.ServeMux, credentials *auth.Store
 		promotion, de := deploymentStore.GetPromotion(in.ConsumerRepositoryID, in.ConsumerDeploymentID)
 		providerIncludes, consumerIncludes := false, false
 		workspace, we := store.Get(r.PathValue("workspace_id"), viewer(actor))
-		contributionResource, contributionRevision := "", ""
+		contributionResource, contributionRevision, contributionFindingID := "", "", ""
 		if we == nil {
 			for _, c := range workspace.Contributions {
 				if c.ID == in.ContributionID && c.Status == "merged" && c.TargetRepositoryID == in.ProviderRepositoryID {
-					contributionResource, contributionRevision = c.ResourceID, c.Revision
+					contributionResource, contributionRevision, contributionFindingID = c.ResourceID, c.Revision, c.FindingID
 				}
 			}
 		}
+		findingProvenance := func(findingID string) string {
+			for _, finding := range workspace.SharedFindings {
+				if finding.ID == findingID {
+					return finding.TrialID + ":" + finding.AttemptID + ":" + finding.DeliveryID
+				}
+			}
+			return ""
+		}
+		contributionProvenance := findingProvenance(contributionFindingID)
 		for _, evidence := range providerRelease.Inclusions.PullEvidence {
 			providerIncludes = providerIncludes || evidence.PullRequestID == contributionResource && evidence.SourceCommitID == contributionRevision
 		}
@@ -798,11 +847,32 @@ func registerAdoptionWorkspaceRoutes(mux *http.ServeMux, credentials *auth.Store
 			}
 		}
 		consumer, catalogErr := catalog.GetByID(in.ConsumerRepositoryID)
-		if pe != nil || ce != nil || re != nil || de != nil || we != nil || catalogErr != nil || !consumer.HasParticipant(actor.UserID) || consumerPull.Status != pullrequests.Merged || consumerPull.MergeCommitID == nil || !providerIncludes || !consumerIncludes || promotion.State != "succeeded" || promotion.ReleaseID != consumerRelease.ID || promotion.CommitID != consumerRelease.CommitID || !passed || len(checkIDs) == 0 {
+		packageName, packageVersion, packageProven := "", "", false
+		versions, versionErr := packageStore.List()
+		inventory, inventoryErr := packageStore.GetInventory(in.ConsumerRepositoryID, consumerRelease.CommitID)
+		if versionErr == nil && inventoryErr == nil {
+			packageName, packageVersion, packageProven = exactAdoptionPackage(versions, inventory, in.ProviderRepositoryID, providerRelease.ID, providerRelease.CommitID)
+		}
+		replacedPaths, localPatchProven := []string{}, in.ReplacesContributionID == ""
+		if in.ReplacesContributionID != "" {
+			localPullID, localRepositoryID := "", ""
+			for _, contribution := range workspace.Contributions {
+				if contribution.ID == in.ReplacesContributionID && contribution.Kind == "local_pull" && contributionProvenance != "" && findingProvenance(contribution.FindingID) == contributionProvenance {
+					localPullID, localRepositoryID = contribution.ResourceID, contribution.TargetRepositoryID
+				}
+			}
+			localChanges, localErr := pullStore.Changes(localRepositoryID, localPullID)
+			consumerChanges, updateErr := pullStore.Changes(in.ConsumerRepositoryID, consumerPull.ID)
+			if localErr == nil && updateErr == nil && localRepositoryID == in.ConsumerRepositoryID {
+				replacedPaths, localPatchProven = adoptionPatchCoverage(localChanges, consumerChanges)
+			}
+		}
+		if pe != nil || ce != nil || re != nil || de != nil || we != nil || catalogErr != nil || versionErr != nil || inventoryErr != nil || !consumer.HasParticipant(actor.UserID) || consumerPull.Status != pullrequests.Merged || consumerPull.MergeCommitID == nil || !providerIncludes || !consumerIncludes || promotion.State != "succeeded" || promotion.ReleaseID != consumerRelease.ID || promotion.CommitID != consumerRelease.CommitID || !passed || len(checkIDs) == 0 || !packageProven || !localPatchProven {
 			writeAPIError(w, 422, "unverified_adoption_update", "accepted provider release and exact checked consumer rollout must resolve through ordinary records")
 			return
 		}
 		in.ProviderReleaseRevision, in.ConsumerPullRevision, in.ConsumerReleaseRevision, in.CheckRunIDs, in.State = providerRelease.CommitID, consumerPull.SourceCommitID, consumerRelease.CommitID, checkIDs, "verified"
+		in.VerificationKind, in.PackageName, in.PackageVersion, in.ReplacedPaths = "exact_package_inventory", packageName, packageVersion, replacedPaths
 		out, createErr := store.RecordVerifiedUpdate(r.PathValue("workspace_id"), in.VerifiedUpdate, viewer(actor), in.ExpectedVersion)
 		writeAdoptionWorkspace(w, out, createErr, 201)
 	})

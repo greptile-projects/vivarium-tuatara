@@ -68,8 +68,11 @@ Provider unavailability, rejection, and embargo therefore preserve a consumer-ow
 path without exposing evidence. When ordinary provider review produces a merged contribution and
 an exact including release, the adopter can verify replacement of that local patch only through a
 separate merged and passing-check consumer update, its including release, and a succeeded staged
-deployment. The retained replacement connects both releases and the measured usage outcome while
-leaving each repository and environment independently governed.
+deployment. The provider release must publish one unambiguous package version and the consumer
+release's exact-commit inventory must resolve that version as a direct dependency. When a local pull
+is named as replaced, it must share the finding provenance and every path it changed must also be
+changed by the consumer update. The retained replacement connects both releases and the measured
+usage outcome while leaving each repository and environment independently governed.
 
 ## Project incubators before repositories
 

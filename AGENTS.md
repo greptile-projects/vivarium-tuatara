@@ -309,7 +309,9 @@ whenever dependencies change or the web job fails before it starts.
   or unavailable-provider findings retain local-pull resolution. Verified updates require the
   merged upstream contribution in an exact provider release and a separate merged, checked consumer
   update in an exact consumer release with a succeeded deployment; an optional replaced local pull
-  must belong to the same workspace.
+  must belong to the same workspace and provenance. The provider release must publish one unambiguous
+  package version that the consumer release's exact-commit inventory records as a resolved direct
+  dependency, and the consumer update must change every path changed by the selected local pull.
 
 - **Project incubators** — `/incubators` and the web `/incubators` workspace provide a
   collaborative home before repository creation beneath `$INCUBATOR_STORAGE_ROOT`
