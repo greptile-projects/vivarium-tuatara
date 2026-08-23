@@ -56,6 +56,11 @@ test("conflicting human and agent intent becomes one verified queued result", as
     const owner = await account(ownerPage, "Conflict Maintainer", `conflict-maintainer-${suffix}`);
     const behavior = await account(behaviorPage, "Behavior Owner", `behavior-owner-${suffix}`);
     const reliability = await account(reliabilityPage, "Reliability Owner", `reliability-owner-${suffix}`);
+    async function trackedCredential(page: Page, headers: Record<string, string>, path: string, data: unknown) {
+      const credential = await json(page, "post", path, headers, data);
+      credentials.push({ page, headers, id: credential.id });
+      return credential;
+    }
 
     const organization = await json(ownerPage, "post", "/organizations", owner.headers, {
       name: `Conflict Guild ${suffix}`, slug: `conflict-guild-${suffix}`, description: "Resolve parallel work without losing intent.",
@@ -75,12 +80,10 @@ test("conflicting human and agent intent becomes one verified queued result", as
     });
     org = await json(ownerPage, "post", `/organizations/${organization.id}/access-requests/${requestState.access_requests.at(-1).id}/decision`, owner.headers, { decision: "approve" });
     const grant = org.access_grants.at(-1);
-    const agentCredential = await json(ownerPage, "post", `/organizations/${organization.id}/access-grants/${grant.id}/credentials`, owner.headers, { agent_id: agent.id, repository_id: repository.id, expires_in: 3600, purpose: "api_read" });
-    credentials.push({ page: ownerPage, headers: owner.headers, id: agentCredential.id });
+    const agentCredential = await trackedCredential(ownerPage, owner.headers, `/organizations/${organization.id}/access-grants/${grant.id}/credentials`, { agent_id: agent.id, repository_id: repository.id, expires_in: 3600, purpose: "api_read" });
     const agentHeaders = { Authorization: `Bearer ${agentCredential.token}` };
 
-    const ownerGit = await json(ownerPage, "post", "/auth/credentials", owner.headers, { kind: "git", name: "conflict journey", scopes: ["git:read", "git:write"], expires_in: 3600 });
-    credentials.push({ page: ownerPage, headers: owner.headers, id: ownerGit.id });
+    const ownerGit = await trackedCredential(ownerPage, owner.headers, "/auth/credentials", { kind: "git", name: "conflict journey", scopes: ["git:read", "git:write"], expires_in: 3600 });
     const copy = await mkdtemp(join(tmpdir(), "vivarium-conflict-owner-")); copies.push(copy);
     await git(tmpdir(), "clone", `http://git:${ownerGit.token}@localhost:3000/git/${repository.id}.git`, copy);
     await git(copy, "config", "user.name", "Conflict Maintainer"); await git(copy, "config", "user.email", "maintainer@example.test");
@@ -93,12 +96,8 @@ test("conflicting human and agent intent becomes one verified queued result", as
     await json(ownerPage, "put", `/repositories/${repository.id}/branches/main/required-checks`, owner.headers, { checks: ["repository safety"] });
     await json(ownerPage, "put", `/repositories/${repository.id}/branches/main/integration-queue`, owner.headers, { enabled: true, concurrency: 2, failure_behavior: "remove" });
 
-    const behaviorGit = await json(behaviorPage, "post", "/auth/credentials", behavior.headers, { kind: "git", name: "behavior work", scopes: ["git:read", "git:write"], expires_in: 3600 });
-    const reliabilityGit = await json(reliabilityPage, "post", "/auth/credentials", reliability.headers, { kind: "git", name: "reliability work", scopes: ["git:read", "git:write"], expires_in: 3600 });
-    credentials.push(
-      { page: behaviorPage, headers: behavior.headers, id: behaviorGit.id },
-      { page: reliabilityPage, headers: reliability.headers, id: reliabilityGit.id },
-    );
+    const behaviorGit = await trackedCredential(behaviorPage, behavior.headers, "/auth/credentials", { kind: "git", name: "behavior work", scopes: ["git:read", "git:write"], expires_in: 3600 });
+    const reliabilityGit = await trackedCredential(reliabilityPage, reliability.headers, "/auth/credentials", { kind: "git", name: "reliability work", scopes: ["git:read", "git:write"], expires_in: 3600 });
     async function contribution(prefix: string, token: string, branch: string, contents: string, author: string) {
       const path = await mkdtemp(join(tmpdir(), prefix)); copies.push(path);
       await git(tmpdir(), "clone", `http://git:${token}@localhost:3000/git/${repository.id}.git`, path);
