@@ -115,6 +115,14 @@ func TestExecutionRejectsSecretsBudgetDuplicateMutationAndConcurrentRun(t *testi
 	if _, err = s.CompleteStep(ex.ID, "classify", lease.Token, 1, map[string]any{"review_id": "token=abcdefghijklmnop"}, ""); !errorsIs(err, ErrInvalid) {
 		t.Fatalf("secret output=%v", err)
 	}
+	secretArtifacts := []StepArtifact{{Name: "password=abcdefghijklmnop", Kind: "report", SHA256: strings.Repeat("c", 64), Size: 12}}
+	if _, err = s.CompleteStepEvidence(ex.ID, "classify", lease.Token, 1, nil, "", nil, secretArtifacts, nil, 0, nil); !errorsIs(err, ErrInvalid) {
+		t.Fatalf("secret artifact name=%v", err)
+	}
+	secretArtifacts[0].Name, secretArtifacts[0].Kind = "sanitized report", "api_key=abcdefghijklmnop"
+	if _, err = s.CompleteStepEvidence(ex.ID, "classify", lease.Token, 1, nil, "", nil, secretArtifacts, nil, 0, nil); !errorsIs(err, ErrInvalid) {
+		t.Fatalf("secret artifact kind=%v", err)
+	}
 }
 
 func TestExecutionCanRetryInterruptedStepAndCancel(t *testing.T) {

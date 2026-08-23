@@ -317,7 +317,7 @@ func (s *Store) CompleteStepEvidence(executionID, stepID, token string, actions 
 		if actions < 0 || actions > st.BudgetActions || ex.ActionsUsed+actions > ex.BudgetActions || cost < 0 {
 			return ErrExecutionBlocked
 		}
-		if containsCredential(logs) || containsCredential(provenance) || containsCredential(session) {
+		if containsCredential(logs) || containsCredential(artifacts) || containsCredential(provenance) || containsCredential(session) {
 			return ErrInvalid
 		}
 		for _, l := range logs {
