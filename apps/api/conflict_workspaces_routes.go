@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -14,7 +15,9 @@ import (
 	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/packages"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
@@ -132,6 +135,30 @@ func registerConflictWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, cat
 		}
 		for _, check := range analysis.AffectedChecks {
 			context.AffectedChecks = append(context.AffectedChecks, check.Name)
+		}
+		if len(context.AffectedChecks) > 0 {
+			definitionBytes, definitionErr := exec.Command("git", "--git-dir="+repo.Path(), "show", analysis.Target.CommitID+":"+checkruns.ConfigPath).Output()
+			if definitionErr != nil {
+				writeAPIError(w, 422, "conflict_required_checks_unavailable", "the exact target revision does not define every affected required check")
+				return
+			}
+			config, configErr := checkruns.ParseConfig(definitionBytes)
+			if configErr != nil {
+				writeAPIError(w, 422, "conflict_required_checks_unavailable", "the exact target revision has an invalid required-check definition")
+				return
+			}
+			byName := map[string]checkruns.Definition{}
+			for _, definition := range config.Checks {
+				byName[definition.Name] = definition
+			}
+			for _, name := range context.AffectedChecks {
+				definition, found := byName[name]
+				if !found {
+					writeAPIError(w, 422, "conflict_required_checks_unavailable", "the exact target revision does not define every affected required check")
+					return
+				}
+				context.RequiredChecks = append(context.RequiredChecks, workspaces.ConflictRequiredCheck{Name: name, Command: definition.Command, WorkingDirectory: definition.WorkingDirectory, Environment: definition.Environment})
+			}
 		}
 		role := "collaborator"
 		if owner {
@@ -407,10 +434,8 @@ func registerConflictWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, cat
 			return
 		}
 		var in struct {
-			ExpectedVersion    int    `json:"expected_version"`
-			DependencyRevision string `json:"dependency_revision"`
-			PolicyRevision     string `json:"policy_revision"`
-			Criteria           []struct {
+			ExpectedVersion int `json:"expected_version"`
+			Criteria        []struct {
 				Kind          string   `json:"kind"`
 				Name          string   `json:"name"`
 				Origin        string   `json:"origin"`
@@ -433,11 +458,24 @@ func registerConflictWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, cat
 		allowedKinds := []string{"required_check", "reproduction", "contract", "schema", "preview_acceptance", "conflict_test"}
 		criteria := make([]workspaces.ConflictCriterion, 0, len(in.Criteria))
 		seenKinds, seenRequired := map[string]bool{}, map[string]bool{}
+		requiredDefinitions := map[string]workspaces.ConflictRequiredCheck{}
+		for _, definition := range item.ConflictContext.RequiredChecks {
+			requiredDefinitions[definition.Name] = definition
+		}
 		affectedOwners := append(append([]string{}, item.ConflictContext.Source.OwnerIDs...), item.ConflictContext.Target.OwnerIDs...)
 		for _, requested := range in.Criteria {
 			seenKinds[requested.Kind] = true
 			if requested.Kind == "required_check" {
+				if seenRequired[requested.Name] {
+					writeAPIError(w, 422, "conflict_checkpoint_invalid", "each affected required check must appear exactly once")
+					return
+				}
 				seenRequired[requested.Name] = true
+				definition, found := requiredDefinitions[requested.Name]
+				if !found || requested.Command != definition.Command {
+					writeAPIError(w, 422, "conflict_checkpoint_required_check_changed", "required-check commands must match the immutable repository definition")
+					return
+				}
 			}
 		}
 		for _, kind := range allowedKinds {
@@ -461,6 +499,11 @@ func registerConflictWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, cat
 			writeAPIError(w, 422, "conflict_candidate_invalid", "workspace must form a clean immutable Git candidate before evidence can be retained")
 			return
 		}
+		dependencyBody, dependencyErr := workspaceAuthorizedExec(catalog, item, actor, false, time.Minute, "/workspace", nil, "git", "show", candidateParts[0]+":"+packages.InventoryConfigPath)
+		if dependencyErr != nil {
+			dependencyBody = []byte("absent")
+		}
+		dependencySum := sha256.Sum256(dependencyBody)
 		for _, requested := range in.Criteria {
 			if !slices.Contains(allowedKinds, requested.Kind) || !slices.Contains([]string{"source", "target", "both"}, requested.Origin) || strings.TrimSpace(requested.Name) == "" || strings.TrimSpace(requested.Command) == "" || len(requested.Command) > 4000 || len(requested.ExactCriteria) == 0 || len(requested.ExactCriteria) > 20 || len(requested.Coverage) == 0 || len(requested.OwnerIDs) == 0 || requested.Cost < 0 {
 				writeAPIError(w, 422, "conflict_checkpoint_invalid", "each bounded criterion needs a supported kind, source, command, exact criteria, coverage, owners, and non-negative cost")
@@ -479,7 +522,28 @@ func registerConflictWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, cat
 				}
 			}
 			started := time.Now()
-			output, runErr := workspaceAuthorizedExec(catalog, item, actor, true, 30*time.Minute, "/workspace", nil, "sh", "-c", "git reset --hard --quiet \"$1\" && git clean -fdx --quiet && sh -lc \"$2\"", "sh", candidateParts[0], requested.Command)
+			workingDirectory, environment := "/workspace", []string{}
+			if requested.Kind == "required_check" {
+				definition := requiredDefinitions[requested.Name]
+				if definition.WorkingDirectory != "" {
+					var valid bool
+					workingDirectory, valid = workspacePath(w, definition.WorkingDirectory)
+					if !valid {
+						return
+					}
+				}
+				keys := make([]string, 0, len(definition.Environment))
+				for key := range definition.Environment {
+					keys = append(keys, key)
+				}
+				slices.Sort(keys)
+				for _, key := range keys {
+					environment = append(environment, key+"="+definition.Environment[key])
+				}
+			}
+			arguments := []string{"sh", "-c", "candidate=$1; workdir=$2; command=$3; shift 3; git reset --hard --quiet \"$candidate\" && git clean -fdx --quiet && cd -- \"$workdir\" && env \"$@\" sh -lc \"$command\"", "sh", candidateParts[0], workingDirectory, requested.Command}
+			arguments = append(arguments, environment...)
+			output, runErr := workspaceAuthorizedExec(catalog, item, actor, true, 30*time.Minute, "/workspace", nil, arguments...)
 			if len(output) > workspaceOutputLimit {
 				output = output[:workspaceOutputLimit]
 			}
@@ -512,12 +576,23 @@ func registerConflictWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, cat
 			}
 			criteria = append(criteria, workspaces.ConflictCriterion{Kind: requested.Kind, Name: strings.TrimSpace(requested.Name), Origin: requested.Origin, Command: requested.Command, ExactCriteria: requested.ExactCriteria, Coverage: requested.Coverage, OwnerIDs: requested.OwnerIDs, State: state, ExitCode: exitCode, Logs: string(output), Artifacts: artifacts, Cost: requested.Cost + time.Since(started).Seconds()/3600})
 		}
+		currentPolicy, policyErr := currentConflictPolicy(workspaceStore, item)
+		if policyErr != nil {
+			writeAPIError(w, 503, "workspace_policy_unavailable", "current effective workspace policy could not be resolved")
+			return
+		}
+		policyBody, _ := json.Marshal(currentPolicy)
+		policySum := sha256.Sum256(policyBody)
 		if _, verifyErr := workspaceAuthorizedExec(catalog, item, actor, true, time.Minute, "/workspace", nil, "sh", "-c", "git reset --hard --quiet \"$1\" && git clean -fdx --quiet && test \"$(git write-tree)\" = \"$2\"", "sh", candidateParts[0], candidateParts[1]); verifyErr != nil {
 			writeAPIError(w, 409, "conflict_candidate_changed", "verification did not leave the immutable candidate reproducible")
 			return
 		}
-		checkpoint := workspaces.ConflictCheckpoint{CandidateCommitID: candidateParts[0], CandidateTreeID: candidateParts[1], SourceRevision: item.ConflictContext.Source.CommitID, TargetRevision: item.ConflictContext.Target.CommitID, DependencyRevision: strings.TrimSpace(in.DependencyRevision), PolicyRevision: strings.TrimSpace(in.PolicyRevision), Criteria: criteria, CreatedBy: conflictAuthorship(actor)}
-		updated, err := workspaceStore.AddConflictCheckpoint(item.ID, in.ExpectedVersion, checkpoint)
+		checkpoint := workspaces.ConflictCheckpoint{CandidateCommitID: candidateParts[0], CandidateTreeID: candidateParts[1], SourceRevision: item.ConflictContext.Source.CommitID, TargetRevision: item.ConflictContext.Target.CommitID, DependencyRevision: hex.EncodeToString(dependencySum[:]), PolicyRevision: hex.EncodeToString(policySum[:]), Criteria: criteria, CreatedBy: conflictAuthorship(actor)}
+		updated, err := workspaceStore.AddConflictCheckpoint(item.ID, in.ExpectedVersion, principal, item.Control.Version, checkpoint)
+		if errors.Is(err, workspaces.ErrControl) {
+			writeAPIError(w, 409, "workspace_control_required", "workspace stopped or command control changed before checkpoint persistence")
+			return
+		}
 		writeConflictMutation(w, updated, err)
 	})
 
@@ -549,6 +624,21 @@ func resolutionState(resolution *workspaces.ConflictResolution) string {
 		return ""
 	}
 	return resolution.State
+}
+
+func currentConflictPolicy(store *workspaces.Store, item workspaces.Workspace) (workspaces.Policy, error) {
+	policy, err := store.GetPolicy("repository", item.RepositoryID)
+	if err != nil {
+		return workspaces.Policy{}, err
+	}
+	if item.OrganizationID == "" {
+		return policy, nil
+	}
+	organizationPolicy, err := store.GetPolicy("organization", item.OrganizationID)
+	if err != nil {
+		return workspaces.Policy{}, err
+	}
+	return workspaces.Constrain(organizationPolicy, policy), nil
 }
 
 func conflictAuthorship(actor auth.Credential) workspaces.ConflictAuthorship {

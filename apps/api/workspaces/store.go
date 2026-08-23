@@ -76,19 +76,26 @@ type Source struct {
 // when a reconciliation workspace was launched. It is context, not authority:
 // publication still passes through the named repository's normal controls.
 type ConflictContext struct {
-	Version           int                    `json:"version"`
-	PullRequestID     string                 `json:"pull_request_id"`
-	CandidateID       string                 `json:"candidate_id,omitempty"`
-	BaseCommitID      string                 `json:"base_commit_id"`
-	Source            ConflictRevision       `json:"source"`
-	Target            ConflictRevision       `json:"target"`
-	Files             []ConflictFileEvidence `json:"files"`
-	AffectedChecks    []string               `json:"affected_checks"`
-	Incomplete        []string               `json:"incomplete"`
-	PublicationTarget []ConflictPublication  `json:"publication_targets"`
-	Questions         []ConflictQuestion     `json:"questions"`
-	Resolutions       []ConflictResolution   `json:"resolutions"`
-	Checkpoints       []ConflictCheckpoint   `json:"checkpoints"`
+	Version           int                     `json:"version"`
+	PullRequestID     string                  `json:"pull_request_id"`
+	CandidateID       string                  `json:"candidate_id,omitempty"`
+	BaseCommitID      string                  `json:"base_commit_id"`
+	Source            ConflictRevision        `json:"source"`
+	Target            ConflictRevision        `json:"target"`
+	Files             []ConflictFileEvidence  `json:"files"`
+	AffectedChecks    []string                `json:"affected_checks"`
+	RequiredChecks    []ConflictRequiredCheck `json:"required_checks"`
+	Incomplete        []string                `json:"incomplete"`
+	PublicationTarget []ConflictPublication   `json:"publication_targets"`
+	Questions         []ConflictQuestion      `json:"questions"`
+	Resolutions       []ConflictResolution    `json:"resolutions"`
+	Checkpoints       []ConflictCheckpoint    `json:"checkpoints"`
+}
+type ConflictRequiredCheck struct {
+	Name             string            `json:"name"`
+	Command          string            `json:"command"`
+	WorkingDirectory string            `json:"working_directory,omitempty"`
+	Environment      map[string]string `json:"environment,omitempty"`
 }
 
 // ConflictCheckpoint is an immutable verification of one assembled result.
@@ -1035,7 +1042,7 @@ func (s *Store) AddConflictResolution(id string, expected int, resolution Confli
 	return w, s.write(w)
 }
 
-func (s *Store) AddConflictCheckpoint(id string, expected int, checkpoint ConflictCheckpoint) (Workspace, error) {
+func (s *Store) AddConflictCheckpoint(id string, expected int, principal string, controlVersion int, checkpoint ConflictCheckpoint) (Workspace, error) {
 	control := s.controlLock(id)
 	control.Lock()
 	defer control.Unlock()
@@ -1047,6 +1054,9 @@ func (s *Store) AddConflictCheckpoint(id string, expected int, checkpoint Confli
 	}
 	if w.ConflictContext == nil || w.ConflictContext.Version != expected {
 		return Workspace{}, ErrConflict
+	}
+	if w.State != "running" || w.Control.Version != controlVersion || !w.CanControl(principal, "commands", s.now()) {
+		return Workspace{}, ErrControl
 	}
 	checkpoint.ID, err = randomID(12)
 	if err != nil {

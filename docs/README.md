@@ -11,7 +11,10 @@ required checks plus a reproduction, contract scenario, schema scenario, preview
 repository conflict test. Each retained criterion names whether it came from the source, target, or both;
 its exact command and acceptance criteria; affected paths and owners; exit state, bounded logs,
 digest-addressed artifacts, and cost. Each criterion is reset to the candidate before execution so generated
-or modified files from one command cannot change the tree evaluated by another.
+or modified files from one command cannot change the tree evaluated by another. A required-check name is bound
+to its command, working directory, and environment frozen from the exact target revision; callers cannot replace
+it with a weaker command. Dependency-manifest and effective-policy digests are resolved by the server, and the
+store rechecks the initiating command lease and running state immediately before retaining evidence.
 
 Affected source and target owners can accept or reject individual deliberate behavior results with an
 attributable rationale. A later checkpoint compares source, target, dependency, and policy revision inputs

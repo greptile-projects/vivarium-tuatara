@@ -259,8 +259,16 @@ func TestConflictCheckpointRetainsExactEvidenceAndAffectedOwnerDecision(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
+	created, err = store.Complete(created.ID, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err = store.SetControl(created.ID, "operator", "human", "operator", "execute", []string{"commands"}, created.Control.Version, 300)
+	if err != nil {
+		t.Fatal(err)
+	}
 	checkpoint := ConflictCheckpoint{CandidateCommitID: "candidate", CandidateTreeID: "tree", SourceRevision: "source", TargetRevision: "target", PolicyRevision: "policy-v1", CreatedBy: ConflictAuthorship{ActorID: "operator"}, Criteria: []ConflictCriterion{{Kind: "conflict_test", Name: "both retry contracts", Origin: "both", Command: "go test ./...", ExactCriteria: []string{"source and target retry semantics pass"}, Coverage: []string{"service.go"}, OwnerIDs: []string{"source-owner", "target-owner"}, State: "passed", Logs: "ok", Cost: 0.25, Artifacts: []ConflictCheckpointArtifact{{Path: "report.json", SHA256: strings.Repeat("a", 64), Size: 12}}}}}
-	created, err = store.AddConflictCheckpoint(created.ID, 1, checkpoint)
+	created, err = store.AddConflictCheckpoint(created.ID, 1, "operator", created.Control.Version, checkpoint)
 	if err != nil || created.ConflictContext.Version != 2 || created.ConflictContext.Checkpoints[0].Criteria[0].Logs != "ok" {
 		t.Fatalf("checkpoint=%#v err=%v", created.ConflictContext, err)
 	}
@@ -273,9 +281,16 @@ func TestConflictCheckpointRetainsExactEvidenceAndAffectedOwnerDecision(t *testi
 		t.Fatalf("unaffected owner decision error=%v", err)
 	}
 	checkpoint.PolicyRevision = "policy-v2"
-	created, err = store.AddConflictCheckpoint(created.ID, 3, checkpoint)
+	created, err = store.AddConflictCheckpoint(created.ID, 3, "operator", created.Control.Version, checkpoint)
 	if err != nil || !slices.Contains(created.ConflictContext.Checkpoints[0].Criteria[0].InvalidatedBy, "policy_revision") || len(created.ConflictContext.Checkpoints[0].Decisions) != 1 {
 		t.Fatalf("selective staleness=%#v err=%v", created.ConflictContext.Checkpoints, err)
+	}
+	stopped, err := store.Stop(created.ID, "operator", "verification revoked", "stopped")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.AddConflictCheckpoint(created.ID, stopped.ConflictContext.Version, "operator", created.Control.Version, checkpoint); !errors.Is(err, ErrControl) {
+		t.Fatalf("stopped checkpoint error=%v", err)
 	}
 }
 

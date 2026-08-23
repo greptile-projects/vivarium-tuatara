@@ -1483,6 +1483,12 @@ export type DevelopmentWorkspace = {
       target_change: string;
     }[];
     affected_checks: string[];
+    required_checks: {
+      name: string;
+      command: string;
+      working_directory?: string;
+      environment?: Record<string, string>;
+    }[];
     incomplete: string[];
     publication_targets: {
       repository_id: string;

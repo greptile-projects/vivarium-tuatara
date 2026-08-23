@@ -4368,8 +4368,10 @@ removal authority.
 `expected_version`. `criteria` contains one or more entries of every kind `required_check`, `reproduction`,
 `contract`, `schema`, `preview_acceptance`, and `conflict_test`; all server-derived affected required-check
 names must be present. Entries retain `origin` (`source`, `target`, or `both`), command, `exact_criteria`,
-affected-path `coverage`, affected `owner_ids`, optional artifact paths, and cost. The response is the updated
-workspace containing the immutable candidate and results.
+affected-path `coverage`, affected `owner_ids`, optional artifact paths, and cost. Required-check commands must
+match definitions frozen from the exact target revision. Dependency-manifest and effective-policy digests are
+resolved server-side, so clients cannot label freshness. The response is the updated workspace containing the
+immutable candidate and results.
 
 `POST /workspaces/{workspace_id}/conflict-checkpoints/{checkpoint_id}/criteria/{criterion_id}/decision`
 accepts an affected owner's `accepted` or `rejected` decision and rationale at an exact ledger version.

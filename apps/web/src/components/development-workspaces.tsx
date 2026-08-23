@@ -653,8 +653,6 @@ function ConflictVerification({
             method: "POST",
             body: JSON.stringify({
               expected_version: context.version,
-              dependency_revision: String(data.get("dependency_revision")),
-              policy_revision: String(data.get("policy_revision")),
               criteria,
             }),
           },
@@ -811,16 +809,6 @@ function ConflictVerification({
         </article>
       ))}
       <form className="mt-4 grid gap-2" onSubmit={checkpoint}>
-        <input
-          className="input"
-          name="dependency_revision"
-          placeholder="Exact dependency revision (optional)"
-        />
-        <input
-          className="input"
-          name="policy_revision"
-          placeholder="Exact policy revision (optional)"
-        />
         <textarea
           className="input min-h-48 font-mono text-xs"
           name="criteria"

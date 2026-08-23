@@ -7,7 +7,9 @@ two-parent candidate and retain all affected required checks, reproductions, con
 preview acceptance, and repository conflict tests with exact commands, criteria, coverage, logs, artifacts,
 costs, and affected-owner decisions. Each criterion runs from a clean reset of that candidate; successor
 checkpoints append selective source/target/dependency/policy staleness without deleting historical proof or
-granting publication authority.
+granting publication authority. Required-check definitions are frozen from the exact target revision;
+dependency-manifest and effective-policy revisions are server-derived, and persistence atomically rechecks the
+initiator's live command-control version and running workspace state.
 
 Agent intent at `/repositories/{id}/agent-projects` and the repository `/agents` workspace retains
 immutable reviewed prompts, instructions, tools, models, knowledge, memory/data terms, tasks, outputs,
