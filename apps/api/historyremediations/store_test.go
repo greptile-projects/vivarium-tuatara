@@ -154,3 +154,30 @@ func TestFailedExposureReplacementPreservesLiveRecord(t *testing.T) {
 		t.Fatalf("temporary replacements remain: %v", matches)
 	}
 }
+
+func TestRewriteCandidateAndRehearsalAreCASVersionedAndRetryStable(t *testing.T) {
+	s, _ := New(t.TempDir())
+	created, err := s.Create(fixture(), "maintainer", "digest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := RewriteCandidate{RequestID: "candidate-1", Rules: []RewriteRule{{ID: "rule", AffectedObjectID: "blob-1", Action: "remove", Reason: "Remove affected blob"}}, SelectedRefs: []RewriteRef{{Name: "refs/heads/main", ExpectedTip: strings.Repeat("a", 40)}}, CandidateRefs: []CandidateRef{{Name: "refs/heads/main", OldTip: strings.Repeat("a", 40), NewTip: strings.Repeat("b", 40)}}, CommitMap: []CommitMapping{{OldCommitID: strings.Repeat("a", 40), NewCommitID: strings.Repeat("b", 40), Changed: true}}, ObjectMap: []ObjectMapping{{OldObjectID: "blob-1", Action: "remove"}}, RollbackLimit: "Old copies can restore the lineage.", CollaboratorActions: []string{"replace local branches"}}
+	updated, err := s.AddRewriteCandidate("repo", created.ID, 1, candidate, "maintainer")
+	if err != nil || updated.Version != 2 || len(updated.RewriteCandidates) != 1 {
+		t.Fatalf("candidate = %#v, %v", updated, err)
+	}
+	retry, err := s.AddRewriteCandidate("repo", created.ID, 1, candidate, "maintainer")
+	if err != nil || retry.Version != 2 {
+		t.Fatalf("retry = %#v, %v", retry, err)
+	}
+	kinds := []string{"repository_integrity", "build", "check", "release", "dependency", "clone", "fetch"}
+	run := Rehearsal{RequestID: "run-1"}
+	for _, kind := range kinds {
+		run.Scenarios = append(run.Scenarios, RehearsalScenario{ID: kind, Kind: kind, Expectation: "usable", TimeoutSeconds: 10})
+		run.Outcomes = append(run.Outcomes, RehearsalOutcome{ScenarioID: kind, Kind: kind, State: "passed"})
+	}
+	finished, err := s.AddRehearsal("repo", created.ID, updated.RewriteCandidates[0].ID, 2, run, "maintainer")
+	if err != nil || finished.Version != 3 || finished.RewriteCandidates[0].Rehearsals[0].State != "passed" {
+		t.Fatalf("rehearsal = %#v, %v", finished, err)
+	}
+}

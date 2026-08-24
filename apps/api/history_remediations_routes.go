@@ -29,19 +29,7 @@ func registerHistoryRemediationRoutes(mux *http.ServeMux, git *storage.Store, ca
 		}
 		return c.UserID
 	}
-	public := func(v historyremediations.Remediation) historyremediations.Remediation {
-		v.RequestDigest = ""
-		for i := range v.ExposureMap {
-			if v.ExposureMap[i].Restricted {
-				v.ExposureMap[i].ResourceID = "restricted-copy"
-				v.ExposureMap[i].RepositoryID = ""
-				v.ExposureMap[i].CitationResourceID = "restricted-citation"
-				v.ExposureMap[i].Note = ""
-				v.ExposureMap[i].Uncertainty = "Details are restricted by the independently controlled system."
-			}
-		}
-		return v
-	}
+	public := historyRemediationPublic
 	mux.HandleFunc("GET /repositories/{id}/history-remediations", func(w http.ResponseWriter, r *http.Request) {
 		c, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id"))
 		if !ok {
@@ -212,6 +200,20 @@ func registerHistoryRemediationRoutes(mux *http.ServeMux, git *storage.Store, ca
 			writeJSON(w, 201, public(out))
 		}
 	})
+}
+
+func historyRemediationPublic(v historyremediations.Remediation) historyremediations.Remediation {
+	v.RequestDigest = ""
+	for i := range v.ExposureMap {
+		if v.ExposureMap[i].Restricted {
+			v.ExposureMap[i].ResourceID = "restricted-copy"
+			v.ExposureMap[i].RepositoryID = ""
+			v.ExposureMap[i].CitationResourceID = "restricted-citation"
+			v.ExposureMap[i].Note = ""
+			v.ExposureMap[i].Uncertainty = "Details are restricted by the independently controlled system."
+		}
+	}
+	return v
 }
 
 func historyRemediationCanSee(v historyremediations.Remediation, actor string) bool {

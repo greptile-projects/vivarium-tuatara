@@ -82,26 +82,100 @@ type ExposureFinding struct {
 	AttributedTo            string    `json:"attributed_to"`
 	CreatedAt               time.Time `json:"created_at"`
 }
+
+// RewriteRule is immutable remediation intent. Object IDs are retained only in
+// the remediation's restricted projection and never published as Git refs.
+type RewriteRule struct {
+	ID                  string `json:"id"`
+	AffectedObjectID    string `json:"affected_object_id"`
+	Action              string `json:"action"`
+	ReplacementObjectID string `json:"replacement_object_id,omitempty"`
+	Reason              string `json:"reason"`
+}
+type RewriteRef struct {
+	Name        string `json:"name"`
+	ExpectedTip string `json:"expected_tip"`
+}
+type CommitMapping struct {
+	OldCommitID string `json:"old_commit_id"`
+	NewCommitID string `json:"new_commit_id"`
+	Changed     bool   `json:"changed"`
+}
+type ObjectMapping struct {
+	OldObjectID string `json:"old_object_id"`
+	NewObjectID string `json:"new_object_id,omitempty"`
+	Action      string `json:"action"`
+}
+type CandidateRef struct {
+	Name   string `json:"name"`
+	OldTip string `json:"old_tip"`
+	NewTip string `json:"new_tip"`
+}
+type RewriteCandidate struct {
+	ID                  string          `json:"id"`
+	RequestID           string          `json:"request_id"`
+	Rules               []RewriteRule   `json:"rules"`
+	SelectedRefs        []RewriteRef    `json:"selected_refs"`
+	CandidateRefs       []CandidateRef  `json:"candidate_refs"`
+	CommitMap           []CommitMapping `json:"commit_map"`
+	ObjectMap           []ObjectMapping `json:"object_map"`
+	BrokenSignatures    []string        `json:"broken_signatures"`
+	BrokenLinks         []string        `json:"broken_links"`
+	Unrewritable        []string        `json:"unrewritable_resources"`
+	OriginalBytes       int64           `json:"original_bytes"`
+	CandidateBytes      int64           `json:"candidate_bytes"`
+	RollbackLimit       string          `json:"rollback_limit"`
+	CollaboratorActions []string        `json:"collaborator_actions"`
+	CreatedBy           string          `json:"created_by"`
+	CreatedAt           time.Time       `json:"created_at"`
+	Rehearsals          []Rehearsal     `json:"rehearsals"`
+}
+type RehearsalScenario struct {
+	ID             string `json:"id"`
+	Kind           string `json:"kind"`
+	Command        string `json:"command,omitempty"`
+	Expectation    string `json:"expectation"`
+	TimeoutSeconds int    `json:"timeout_seconds"`
+}
+type RehearsalOutcome struct {
+	ScenarioID string `json:"scenario_id"`
+	Kind       string `json:"kind"`
+	State      string `json:"state"`
+	ExitCode   int    `json:"exit_code"`
+	Output     string `json:"output,omitempty"`
+}
+type Rehearsal struct {
+	ID             string              `json:"id"`
+	RequestID      string              `json:"request_id"`
+	CandidateID    string              `json:"candidate_id"`
+	Scenarios      []RehearsalScenario `json:"scenarios"`
+	Outcomes       []RehearsalOutcome  `json:"outcomes"`
+	State          string              `json:"state"`
+	CreatedBy      string              `json:"created_by"`
+	CreatedAt      time.Time           `json:"created_at"`
+	ComputeSeconds int64               `json:"compute_seconds"`
+}
 type Remediation struct {
-	ID                 string            `json:"id"`
-	RepositoryID       string            `json:"repository_id"`
-	RequestID          string            `json:"request_id"`
-	RequestDigest      string            `json:"request_digest,omitempty"`
-	Title              string            `json:"title"`
-	Source             Source            `json:"source"`
-	ContentDescription string            `json:"content_description"`
-	Reason             string            `json:"reason"`
-	Scopes             []Scope           `json:"scopes"`
-	Evidence           []Evidence        `json:"discovery_evidence"`
-	Constraints        []Constraint      `json:"constraints"`
-	AudienceIDs        []string          `json:"audience_ids"`
-	OwnerIDs           []string          `json:"owner_ids"`
-	RequiredApprovals  []Approval        `json:"required_approvals"`
-	CreatedBy          string            `json:"created_by"`
-	CreatedAt          time.Time         `json:"created_at"`
-	Authority          string            `json:"authority"`
-	Version            int               `json:"version"`
-	ExposureMap        []ExposureFinding `json:"exposure_map"`
+	ID                 string             `json:"id"`
+	RepositoryID       string             `json:"repository_id"`
+	RequestID          string             `json:"request_id"`
+	RequestDigest      string             `json:"request_digest,omitempty"`
+	Title              string             `json:"title"`
+	Source             Source             `json:"source"`
+	ContentDescription string             `json:"content_description"`
+	Reason             string             `json:"reason"`
+	Scopes             []Scope            `json:"scopes"`
+	Evidence           []Evidence         `json:"discovery_evidence"`
+	Constraints        []Constraint       `json:"constraints"`
+	AudienceIDs        []string           `json:"audience_ids"`
+	OwnerIDs           []string           `json:"owner_ids"`
+	RequiredApprovals  []Approval         `json:"required_approvals"`
+	CreatedBy          string             `json:"created_by"`
+	CreatedAt          time.Time          `json:"created_at"`
+	Authority          string             `json:"authority"`
+	Version            int                `json:"version"`
+	ExposureMap        []ExposureFinding  `json:"exposure_map"`
+	RewriteCandidates  []RewriteCandidate `json:"rewrite_candidates"`
 }
 type Store struct {
 	root          string
@@ -177,6 +251,7 @@ func (s *Store) Create(v Remediation, actor, digest string) (Remediation, error)
 	v.Authority = "coordination record only; grants no inspection, Git, object deletion, ref rewrite, package, artifact, release, environment, disclosure, or delivery authority"
 	v.Version = 1
 	v.ExposureMap = []ExposureFinding{}
+	v.RewriteCandidates = []RewriteCandidate{}
 	if err := os.MkdirAll(filepath.Dir(s.path(v.RepositoryID, v.ID)), 0700); err != nil {
 		return Remediation{}, err
 	}
@@ -185,6 +260,168 @@ func (s *Store) Create(v Remediation, actor, digest string) (Remediation, error)
 		return Remediation{}, err
 	}
 	return v, nil
+}
+
+func validCandidate(v RewriteCandidate, remediation Remediation) bool {
+	if v.RequestID == "" || len(v.Rules) == 0 || len(v.SelectedRefs) == 0 || len(v.CandidateRefs) != len(v.SelectedRefs) || len(v.CommitMap) == 0 || v.RollbackLimit == "" || len(v.CollaboratorActions) == 0 {
+		return false
+	}
+	allowed := map[string]bool{}
+	for _, scope := range remediation.Scopes {
+		allowed[scope.ObjectID] = true
+	}
+	seen := map[string]bool{}
+	affected := map[string]bool{}
+	for _, rule := range v.Rules {
+		if rule.ID == "" || seen[rule.ID] || affected[rule.AffectedObjectID] || !allowed[rule.AffectedObjectID] || !map[string]bool{"remove": true, "replace": true}[rule.Action] || (rule.Action == "replace") != (rule.ReplacementObjectID != "") || rule.Reason == "" || len(rule.Reason) > 500 {
+			return false
+		}
+		seen[rule.ID] = true
+		affected[rule.AffectedObjectID] = true
+	}
+	refs := map[string]bool{}
+	for _, ref := range v.SelectedRefs {
+		if ref.Name == "" || len(ref.ExpectedTip) != 40 || refs[ref.Name] {
+			return false
+		}
+		refs[ref.Name] = true
+	}
+	b, err := json.Marshal(v)
+	return err == nil && !credentialPattern.Match(b)
+}
+
+// AddRewriteCandidate appends an already assembled, unreferenced candidate
+// under CAS. Assembly and Git validation remain route-owned.
+func (s *Store) AddRewriteCandidate(repo, id string, expected int, in RewriteCandidate, actor string) (Remediation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	b, err := os.ReadFile(s.path(repo, id))
+	if os.IsNotExist(err) {
+		return Remediation{}, ErrNotFound
+	}
+	if err != nil {
+		return Remediation{}, err
+	}
+	var v Remediation
+	if err = json.Unmarshal(b, &v); err != nil {
+		return Remediation{}, err
+	}
+	if v.Version == 0 {
+		v.Version = 1
+	}
+	for _, existing := range v.RewriteCandidates {
+		if existing.RequestID == in.RequestID {
+			a, z := existing, in
+			a.ID = ""
+			a.CreatedBy = ""
+			a.CreatedAt = time.Time{}
+			a.Rehearsals = nil
+			z.ID = ""
+			z.CreatedBy = ""
+			z.CreatedAt = time.Time{}
+			z.Rehearsals = nil
+			ab, _ := json.Marshal(a)
+			zb, _ := json.Marshal(z)
+			if string(ab) != string(zb) {
+				return Remediation{}, ErrConflict
+			}
+			return v, nil
+		}
+	}
+	if expected != v.Version {
+		return Remediation{}, ErrVersionConflict
+	}
+	if !validCandidate(in, v) {
+		return Remediation{}, ErrInvalid
+	}
+	in.ID = randomID()
+	in.CreatedBy = actor
+	in.CreatedAt = s.now()
+	in.Rehearsals = []Rehearsal{}
+	v.RewriteCandidates = append(v.RewriteCandidates, in)
+	v.Version++
+	out, _ := json.MarshalIndent(v, "", "  ")
+	if err = atomicWrite(s.path(repo, id), out, s.beforeReplace); err != nil {
+		return Remediation{}, err
+	}
+	return v, nil
+}
+
+func validRehearsal(v Rehearsal) bool {
+	if v.RequestID == "" || len(v.Scenarios) < 7 || len(v.Outcomes) != len(v.Scenarios) {
+		return false
+	}
+	kinds := map[string]bool{"repository_integrity": true, "build": true, "check": true, "release": true, "dependency": true, "clone": true, "fetch": true}
+	seen := map[string]string{}
+	for _, x := range v.Scenarios {
+		if x.ID == "" || seen[x.ID] != "" || !kinds[x.Kind] || x.Expectation == "" || x.TimeoutSeconds < 1 || x.TimeoutSeconds > 600 {
+			return false
+		}
+		seen[x.ID] = x.Kind
+	}
+	outcomes := map[string]bool{}
+	for _, x := range v.Outcomes {
+		if seen[x.ScenarioID] != x.Kind || outcomes[x.ScenarioID] || !map[string]bool{"passed": true, "failed": true, "unsupported": true}[x.State] || len(x.Output) > 2000 {
+			return false
+		}
+		outcomes[x.ScenarioID] = true
+	}
+	b, err := json.Marshal(v)
+	return err == nil && !credentialPattern.Match(b)
+}
+func (s *Store) AddRehearsal(repo, id, candidateID string, expected int, in Rehearsal, actor string) (Remediation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	b, err := os.ReadFile(s.path(repo, id))
+	if os.IsNotExist(err) {
+		return Remediation{}, ErrNotFound
+	}
+	if err != nil {
+		return Remediation{}, err
+	}
+	var v Remediation
+	if err = json.Unmarshal(b, &v); err != nil {
+		return Remediation{}, err
+	}
+	if v.Version == 0 {
+		v.Version = 1
+	}
+	for ci := range v.RewriteCandidates {
+		c := &v.RewriteCandidates[ci]
+		if c.ID != candidateID {
+			continue
+		}
+		for _, existing := range c.Rehearsals {
+			if existing.RequestID == in.RequestID {
+				return v, nil
+			}
+		}
+		if expected != v.Version {
+			return Remediation{}, ErrVersionConflict
+		}
+		in.CandidateID = candidateID
+		if !validRehearsal(in) {
+			return Remediation{}, ErrInvalid
+		}
+		in.ID = randomID()
+		in.CreatedBy = actor
+		in.CreatedAt = s.now()
+		in.State = "passed"
+		for _, o := range in.Outcomes {
+			if o.State != "passed" {
+				in.State = "failed"
+				break
+			}
+		}
+		c.Rehearsals = append(c.Rehearsals, in)
+		v.Version++
+		out, _ := json.MarshalIndent(v, "", "  ")
+		if err = atomicWrite(s.path(repo, id), out, s.beforeReplace); err != nil {
+			return Remediation{}, err
+		}
+		return v, nil
+	}
+	return Remediation{}, ErrNotFound
 }
 
 func validFinding(v ExposureFinding, remediation Remediation) bool {
