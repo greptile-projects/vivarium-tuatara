@@ -3,6 +3,23 @@
 Notes on how this project fits together. Mostly empty for now — things get
 written down here as they're decided, not before.
 
+## Propagation campaigns
+
+An authorized repository collaborator opens a durable shared delivery boundary through `POST
+/repositories/{id}/propagation-campaigns` or the repository's Propagation campaigns page. The
+campaign freezes its source kind and resource, every exact source commit, the intended proven
+outcome, acceptance criteria, repository release lines and package lines, accountable target
+owners, deadlines, target dependencies, and an all-target, minimum-target, or ordered completion
+policy. A caller-stable `request_id` reconciles ambiguous create retries and rejects changed reuse.
+
+List and detail reads project each target against current repository facts. Missing repositories and
+release lines, unsupported package equivalence, revoked collaborator access, invalid current target
+ownership, and a target whose tip already has the source outcome's exact Git tree remain distinct
+states. This lets collaborators retain targets they cannot currently resolve instead of silently
+dropping them. The retained authority statement is deliberately narrow: a campaign agrees what must
+travel and in what order, but grants no branch, Git, package, review, merge, release, deployment, or
+cross-repository authority.
+
 ## Shared regression search boundaries
 
 Repository collaborators open regression investigations through `POST

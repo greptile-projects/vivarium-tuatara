@@ -253,6 +253,7 @@ export function RepositoryBrowser({ id }: { id: string }) {
             <Link href={`/repositories/${id}/capabilities`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Capability inventory</Link>
             <Link href={`/repositories/${id}/debugging`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Production debugging</Link>
             <Link href={`/repositories/${id}/regressions`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Regression investigations</Link>
+            <Link href={`/repositories/${id}/propagation`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Propagation campaigns</Link>
             <Link href={`/repositories/${id}/recovery`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Recovery commitments</Link>
             <Link href={`/repositories/${id}/locales`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Locale coverage</Link>
             <Link href={`/repositories/${id}/reliability`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Service objectives</Link>

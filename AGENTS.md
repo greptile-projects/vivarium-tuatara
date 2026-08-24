@@ -2,6 +2,17 @@
 
 Guidance for coding agents working in this repository.
 
+Propagation campaigns at `/repositories/{id}/propagation-campaigns` and the repository
+`/propagation` workspace freeze an exact source outcome from a merged pull, security repair,
+regression correction, policy change, package release, or interface evolution. A caller-stable
+request identity retains its commits, intent, acceptance criteria, repository/package release-line
+targets, current owners, deadlines, dependency order, and all/minimum/ordered completion policy
+beneath `$PROPAGATION_CAMPAIGN_STORAGE_ROOT` (`propagation-campaigns`). Reads re-project target
+repository access, ownership, branch availability, and exact Git-tree equivalence so unknown,
+unsupported, inaccessible, and already-equivalent targets remain explicit without rewriting the
+campaign. Campaigns record provenance and coordination only and grant no Git, package, branch,
+release, review, merge, deployment, repository, or delivery authority.
+
 Regression investigations at `/repositories/{id}/regression-investigations` and the repository
 `/regressions` workspace turn a suspected regression from an issue, support thread, failed check,
 release, deployment, or demonstrated reproduction into a durable shared search boundary beneath
