@@ -202,7 +202,10 @@ and federated relationships. Each entry names an owner, exact source revision, p
 remaining or divided destination, citation, and a resolved, inaccessible, ambiguous, or shared
 state; gaps are first-class inventory rather than omitted from a successful plan. Humans and
 repository-bound read-only agents can append version-bound findings only against retained inventory
-items and with citations. This is a review and coordination boundary: it creates no repository,
+items and with citations. Resolved identities must match their authoritative resource store and
+applicable exact revision; unavailable identities remain explicit gaps. Catalog participation is
+held through persistence, and a filesystem-wide ledger lock preserves finding CAS across API
+processes. This is a review and coordination boundary: it creates no repository,
 moves no Git or collaboration record, changes no owner/visibility/policy, and grants no source or
 destination write authority.
 

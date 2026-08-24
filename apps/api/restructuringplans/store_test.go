@@ -3,6 +3,7 @@ package restructuringplans
 import (
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 )
@@ -15,6 +16,46 @@ func completePlan() Plan {
 		items = append(items, InventoryItem{ID: fmt.Sprintf("i-%d", i), Kind: k, RepositoryID: "source", ResourceID: fmt.Sprintf("resource-%d", i), Revision: rev, OwnerIDs: []string{"owner"}, DestinationIDs: []string{"core"}, Disposition: "move", State: "resolved", Summary: "reviewed impact", Citation: "source record at exact revision"})
 	}
 	return Plan{RequestID: "request-1", RepositoryID: "source", Title: "Extract core", Intent: "Give the shared core an independent boundary.", Sources: []SourceRepository{{RepositoryID: "source", Revision: rev, Role: "primary"}}, Destinations: []Destination{{ID: "core", Name: "core", OwnerIDs: []string{"owner"}, Visibility: "public", DefaultBranch: "main"}}, Mappings: []ContentMapping{{ID: "map", SourceRepositoryID: "source", SourcePath: "src/core", DestinationID: "core", DestinationPath: "src", HistoryMode: "full", RetainIdentity: true, Disposition: "move"}}, Inventory: items, Deadline: time.Now().UTC().Add(24 * time.Hour), SuccessCriteria: []string{"owners agree on authority"}, RollbackLimits: []string{"before destination publication"}}
+}
+func TestIndependentStoresSerializeFindingCAS(t *testing.T) {
+	root := t.TempDir()
+	first, _ := New(root)
+	second, _ := New(root)
+	p, err := first.Create(completePlan(), "owner", "digest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	var wg sync.WaitGroup
+	for i, s := range []*Store{first, second} {
+		wg.Add(1)
+		go func(i int, s *Store) {
+			defer wg.Done()
+			<-start
+			_, e := s.AddFinding("source", p.ID, fmt.Sprintf("actor-%d", i), "human", Finding{RequestID: fmt.Sprintf("race-%d", i), Version: 1, InventoryItemIDs: []string{"i-0"}, Body: "concurrent cited finding", Citations: []string{"citation"}})
+			results <- e
+		}(i, s)
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	successes, versions := 0, 0
+	for e := range results {
+		if e == nil {
+			successes++
+		}
+		if errors.Is(e, ErrVersion) {
+			versions++
+		}
+	}
+	if successes != 1 || versions != 1 {
+		t.Fatalf("successes=%d version conflicts=%d", successes, versions)
+	}
+	out, err := first.Get("source", p.ID)
+	if err != nil || len(out.Findings) != 1 || out.Version != 2 {
+		t.Fatalf("persisted = %#v %v", out, err)
+	}
 }
 func TestCreateRetryAndCitedAgentFinding(t *testing.T) {
 	s, e := New(t.TempDir())

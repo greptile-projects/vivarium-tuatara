@@ -3102,6 +3102,10 @@ names, owners, visibility, default branches, retained identities, content/histor
 deadlines, success criteria, and rollback limits. Every plan explicitly accounts for refs, pulls,
 issues, tasks, releases, packages, documentation, policies, workspaces, automation, consumers, and
 federated relationships as resolved, inaccessible, ambiguous, or shared at a source revision.
+Resolved identities must match their authoritative Git, pull, issue, proposal-task, release,
+package, documentation, governance, workspace, workflow, relationship, or federation store;
+unavailable identities remain explicit gaps. Source and finding participation stay locked through
+persistence, and a filesystem-wide ledger lock preserves finding CAS across API processes.
 CAS-versioned human or repository-bound read-only-agent findings must cite retained inventory
 items and evidence. Plans are coordination records only and grant no repository creation, Git,
 resource migration, ownership, visibility, policy, or destination authority.

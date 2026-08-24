@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -107,6 +108,11 @@ func (s *Store) Create(v Plan, actor, digest string) (Plan, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	unlock, err := s.lockRoot()
+	if err != nil {
+		return Plan{}, err
+	}
+	defer unlock()
 	xs, err := s.list(v.RepositoryID)
 	if err != nil {
 		return Plan{}, err
@@ -130,11 +136,21 @@ func (s *Store) Create(v Plan, actor, digest string) (Plan, error) {
 func (s *Store) Get(repo, id string) (Plan, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	unlock, err := s.lockRoot()
+	if err != nil {
+		return Plan{}, err
+	}
+	defer unlock()
 	return s.read(repo, id)
 }
 func (s *Store) Reconcile(repo, requestID, digest string) (Plan, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	unlock, err := s.lockRoot()
+	if err != nil {
+		return Plan{}, false, err
+	}
+	defer unlock()
 	xs, err := s.list(repo)
 	if err != nil {
 		return Plan{}, false, err
@@ -152,6 +168,11 @@ func (s *Store) Reconcile(repo, requestID, digest string) (Plan, bool, error) {
 func (s *Store) List(repo string) ([]Plan, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	unlock, err := s.lockRoot()
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	xs, e := s.list(repo)
 	sort.Slice(xs, func(i, j int) bool { return xs[i].CreatedAt.After(xs[j].CreatedAt) })
 	return xs, e
@@ -159,6 +180,11 @@ func (s *Store) List(repo string) ([]Plan, error) {
 func (s *Store) AddFinding(repo, id, actor, kind string, in Finding) (Plan, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	unlock, err := s.lockRoot()
+	if err != nil {
+		return Plan{}, err
+	}
+	defer unlock()
 	v, e := s.read(repo, id)
 	if e != nil {
 		return Plan{}, e
@@ -259,6 +285,17 @@ func bounded(s string, min, max int) bool {
 func randomID() string                       { b := make([]byte, 16); _, _ = rand.Read(b); return hex.EncodeToString(b) }
 func (s *Store) dir(repo string) string      { return filepath.Join(s.root, repo) }
 func (s *Store) path(repo, id string) string { return filepath.Join(s.dir(repo), id+".json") }
+func (s *Store) lockRoot() (func(), error) {
+	f, err := os.OpenFile(filepath.Join(s.root, ".lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, err
+	}
+	if err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	return func() { _ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN); _ = f.Close() }, nil
+}
 func (s *Store) write(v Plan) error {
 	if e := os.MkdirAll(s.dir(v.RepositoryID), 0700); e != nil {
 		return e

@@ -358,6 +358,40 @@ func (s *Store) WithCurrentReadAccess(actorID string, repositoryIDs []string, fn
 	return fn()
 }
 
+// WithCurrentParticipation holds the catalog mutation boundary while proving
+// the actor remains an owner or collaborator in every selected repository.
+// Unlike read access, public visibility does not satisfy this predicate.
+func (s *Store) WithCurrentParticipation(actorID string, repositoryIDs []string, fn func() error) error {
+	if !validID(actorID) || len(repositoryIDs) == 0 || fn == nil {
+		return ErrInvalidCollaborator
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lockRoot()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	seen := map[string]bool{}
+	for _, id := range repositoryIDs {
+		if !validID(id) || seen[id] {
+			continue
+		}
+		seen[id] = true
+		repository, readErr := s.read(id)
+		if readErr != nil {
+			return ErrNotFound
+		}
+		if repository.OwnerID != actorID && !slices.Contains(collaboratorIDs(repository), actorID) {
+			return ErrInvalidCollaborator
+		}
+	}
+	if s.afterReadAuthorization != nil {
+		s.afterReadAuthorization()
+	}
+	return fn()
+}
+
 // WithCurrentRepositories resolves repository snapshots and holds their
 // existence, visibility, ownership, and collaborator state stable while fn
 // commits a dependent cross-store record. It deliberately grants no access.
