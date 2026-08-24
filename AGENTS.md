@@ -3150,7 +3150,7 @@ evidence. Creation holds both the proposer and named owner's current source-repo
 persistence, and event writes revalidate the retained owner under the same catalog boundary, so access loss
 blocks progress rather than stranding a falsely actionable owner. Unavailable, rejected, stale-credential, and unmigrated consumers remain visible. Optional
 human/agent propagation references point at ordinary task/pull/release work and grant no consumer authority.
-Cutover control starts only from a gap-free candidate whose latest complete rehearsal passed and whose active
+Cutover control starts only from a candidate whose gaps are absent or explicitly dispositioned, whose latest complete rehearsal passed, and whose active
 collaboration mappings are approved or deliberately archived. Every destination owner separately approves before
 the human plan creator binds exact pre-created repositories, imports retained candidate tips, publishes default
 refs, and activates the source write boundary. The ledger exposes source/destination health, active pause kinds,
@@ -3168,5 +3168,18 @@ Cleanup requires current passing build, release, permission, link, supported-con
 evidence keyed to every destination plus adoption of every dependent. Residual traffic and late writes block read-only/archive/removal policy
 completion. Rollback restores source authority without deleting evidence or candidates, and the ledger grants no
 general repository, Git, policy, collaboration, release, dependent, or cleanup authority.
+Candidate gaps remain immutable evidence, but a current affected human owner or the human plan creator can append a
+version-bound `retain_external`, `recreate`, `exclude`, or `accept_shared` disposition with a bounded rationale. A
+complete set of retained dispositions satisfies the cutover decision boundary without relabeling the original
+uncertainty. Path collisions and missing cross-repository links cannot be dispositioned because they describe invalid
+or incomplete candidate material and require a corrected successor candidate. `accept_shared` applies only to a gap
+retained in the `shared` state. Agent credentials cannot make these decisions, and catalog participation is held from
+the retained-owner check through decision persistence so concurrent revocation wins before or after the whole write.
+The connected `restructuring-journey.spec.ts` browser/API/stock-Git journey extracts shared history from a monorepo
+into independently owned application and component repositories, divides an exact open pull into connected
+contributions, rehearses the complete two-destination matrix, carries human/agent dependent work and an unavailable
+federated follower through explicit owner adoption, rejects a concurrent source push during cutover, delivers through
+the new component remote, verifies both destination matrices, and retires compatibility by archiving the source.
+Playwright isolates the restructuring ledger for repeatable execution.
 
 Sensitive history remediations at `/repositories/{id}/history-remediations` and the repository

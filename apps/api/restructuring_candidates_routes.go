@@ -128,7 +128,63 @@ func registerRestructuringCandidateRoutes(mux *http.ServeMux, git *storage.Store
 		}
 		writeJSON(w, 201, out)
 	})
+	mux.HandleFunc("POST /repositories/{id}/restructuring-plans/{plan_id}/candidate-sets/{candidate_id}/gap-decisions", func(w http.ResponseWriter, r *http.Request) {
+		c, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		if c.AgentID != "" {
+			writeAPIError(w, 403, "restructuring_gap_decision_human_required", "a human collaborator must disposition a candidate gap")
+			return
+		}
+		var body struct {
+			ExpectedVersion int                                     `json:"expected_version"`
+			Decision        restructuringplans.CandidateGapDecision `json:"decision"`
+		}
+		if decodeJSON(r, &body) != nil {
+			writeAPIError(w, 400, "invalid_restructuring_gap_decision", "a candidate gap decision is required")
+			return
+		}
+		var out restructuringplans.Plan
+		err := catalog.WithCurrentParticipant(c.UserID, r.PathValue("id"), func() error {
+			plan, readErr := plans.Get(r.PathValue("id"), r.PathValue("plan_id"))
+			if readErr != nil {
+				return readErr
+			}
+			authorized := plan.CreatedBy == c.UserID
+			for _, item := range plan.Inventory {
+				if item.Kind == body.Decision.GapKind && item.ResourceID == body.Decision.ResourceID && contains(item.OwnerIDs, c.UserID) {
+					authorized = true
+				}
+			}
+			if !authorized {
+				return errRestructuringGapDecisionForbidden
+			}
+			var mutationErr error
+			out, mutationErr = plans.DecideCandidateGap(r.PathValue("id"), r.PathValue("plan_id"), r.PathValue("candidate_id"), c.UserID, body.ExpectedVersion, body.Decision)
+			return mutationErr
+		})
+		if errors.Is(err, repositories.ErrInvalidCollaborator) || errors.Is(err, repositories.ErrNotFound) || errors.Is(err, errRestructuringGapDecisionForbidden) {
+			writeAPIError(w, 403, "restructuring_gap_decision_forbidden", "only a current plan creator or retained affected owner may disposition this gap")
+			return
+		}
+		if errors.Is(err, restructuringplans.ErrVersion) || errors.Is(err, restructuringplans.ErrConflict) {
+			writeAPIError(w, 409, "restructuring_candidate_changed", "refresh before deciding the candidate gap")
+			return
+		}
+		if errors.Is(err, restructuringplans.ErrInvalid) {
+			writeAPIError(w, 422, "restructuring_gap_decision_invalid", "the exact non-collision gap, bounded rationale, and supported disposition are required")
+			return
+		}
+		if err != nil {
+			writeAPIError(w, 404, "restructuring_candidate_not_found", "candidate gap could not be found")
+			return
+		}
+		writeJSON(w, 201, out)
+	})
 }
+
+var errRestructuringGapDecisionForbidden = errors.New("restructuring gap decision forbidden")
 
 func assembleRestructuringCandidate(git *storage.Store, plans *restructuringplans.Store, plan restructuringplans.Plan, candidateID, digest string, in restructuringCandidateInput) (restructuringplans.CandidateSet, error) {
 	out := restructuringplans.CandidateSet{ID: candidateID, RequestID: in.RequestID, RequestDigest: digest, CrossRepositoryLinks: in.CrossRepositoryLinks}

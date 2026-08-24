@@ -648,6 +648,13 @@ func restructuringInventoryOwners(item restructuringplans.InventoryItem, catalog
 		return nil, err
 	}
 	owners := []string{repo.OwnerID}
+	// An unavailable/ambiguous/shared citation deliberately has no readable
+	// authoritative resource record. Its source repository owner remains the
+	// conservative accountable owner; requiring the unavailable store to
+	// resolve would make explicit gaps impossible to admit or disposition.
+	if item.State != "resolved" {
+		return owners, nil
+	}
 	switch item.Kind {
 	case "pull_request":
 		v, e := pulls.Get(item.RepositoryID, item.ResourceID)

@@ -90,18 +90,28 @@ type CandidateGap struct {
 	Summary          string `json:"summary"`
 	RequiredDecision string `json:"required_decision"`
 }
+type CandidateGapDecision struct {
+	RequestID  string    `json:"request_id"`
+	GapKind    string    `json:"gap_kind"`
+	ResourceID string    `json:"resource_id"`
+	Decision   string    `json:"decision"`
+	Rationale  string    `json:"rationale"`
+	ActorID    string    `json:"actor_id"`
+	CreatedAt  time.Time `json:"created_at"`
+}
 type CandidateSet struct {
-	ID                   string                `json:"id"`
-	RequestID            string                `json:"request_id"`
-	RequestDigest        string                `json:"request_digest,omitempty"`
-	PlanVersion          int                   `json:"plan_version"`
-	Repositories         []CandidateRepository `json:"repositories"`
-	CrossRepositoryLinks []string              `json:"cross_repository_links,omitempty"`
-	Gaps                 []CandidateGap        `json:"gaps,omitempty"`
-	CreatedBy            string                `json:"created_by"`
-	CreatedAt            time.Time             `json:"created_at"`
-	Authority            string                `json:"authority"`
-	Rehearsals           []Rehearsal           `json:"rehearsals,omitempty"`
+	ID                   string                 `json:"id"`
+	RequestID            string                 `json:"request_id"`
+	RequestDigest        string                 `json:"request_digest,omitempty"`
+	PlanVersion          int                    `json:"plan_version"`
+	Repositories         []CandidateRepository  `json:"repositories"`
+	CrossRepositoryLinks []string               `json:"cross_repository_links,omitempty"`
+	Gaps                 []CandidateGap         `json:"gaps,omitempty"`
+	GapDecisions         []CandidateGapDecision `json:"gap_decisions,omitempty"`
+	CreatedBy            string                 `json:"created_by"`
+	CreatedAt            time.Time              `json:"created_at"`
+	Authority            string                 `json:"authority"`
+	Rehearsals           []Rehearsal            `json:"rehearsals,omitempty"`
 }
 type Scenario struct {
 	ID             string `json:"id"`
@@ -315,7 +325,7 @@ func (s *Store) StartCutover(repo, id, actor string, expected int, in Cutover) (
 			candidate = &v.CandidateSets[i]
 		}
 	}
-	if candidate == nil || len(candidate.Gaps) != 0 || len(candidate.Rehearsals) == 0 || candidate.Rehearsals[len(candidate.Rehearsals)-1].State != "passed" {
+	if candidate == nil || !allCandidateGapsDecided(*candidate) || len(candidate.Rehearsals) == 0 || candidate.Rehearsals[len(candidate.Rehearsals)-1].State != "passed" {
 		return Plan{}, ErrInvalid
 	}
 	for _, m := range v.CollaborationMappings {
@@ -346,6 +356,99 @@ func (s *Store) StartCutover(repo, id, actor string, expected int, in Cutover) (
 	v.Cutover = &in
 	v.Version++
 	return v, s.write(v)
+}
+
+func allCandidateGapsDecided(candidate CandidateSet) bool {
+	for _, gap := range candidate.Gaps {
+		decided := false
+		for _, decision := range candidate.GapDecisions {
+			if decision.GapKind == gap.Kind && decision.ResourceID == gap.ResourceID && validCandidateGapDecision(gap, decision.Decision) {
+				decided = true
+				break
+			}
+		}
+		if !decided {
+			return false
+		}
+	}
+	return true
+}
+
+func validCandidateGapDecision(gap CandidateGap, decision string) bool {
+	// These gaps describe incomplete candidate material. A decision cannot
+	// supply the missing link or repair the colliding tree, so a successor
+	// candidate is required.
+	if gap.Kind == "path_collision" || gap.Kind == "cross_repository_link" {
+		return false
+	}
+	switch gap.State {
+	case "shared":
+		return decision == "accept_shared" || decision == "recreate" || decision == "exclude"
+	case "inaccessible":
+		return decision == "retain_external" || decision == "recreate" || decision == "exclude"
+	case "ambiguous", "missing", "blocked", "unknown":
+		return decision == "recreate" || decision == "exclude"
+	case "resolved":
+		return decision == "retain_external" || decision == "recreate" || decision == "exclude"
+	default:
+		return false
+	}
+}
+
+func (s *Store) DecideCandidateGap(repo, id, candidateID, actor string, expected int, in CandidateGapDecision) (Plan, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lockRoot()
+	if err != nil {
+		return Plan{}, err
+	}
+	defer unlock()
+	v, err := s.read(repo, id)
+	if err != nil {
+		return Plan{}, err
+	}
+	if expected != v.Version {
+		return Plan{}, ErrVersion
+	}
+	for i := range v.CandidateSets {
+		candidate := &v.CandidateSets[i]
+		if candidate.ID != candidateID {
+			continue
+		}
+		for _, decision := range candidate.GapDecisions {
+			if decision.RequestID == in.RequestID {
+				if decision.ActorID == actor && decision.GapKind == in.GapKind && decision.ResourceID == in.ResourceID && decision.Decision == in.Decision && decision.Rationale == in.Rationale {
+					return v, nil
+				}
+				return Plan{}, ErrConflict
+			}
+			if decision.GapKind == in.GapKind && decision.ResourceID == in.ResourceID {
+				return Plan{}, ErrConflict
+			}
+		}
+		found := false
+		for _, gap := range candidate.Gaps {
+			if gap.Kind == in.GapKind && gap.ResourceID == in.ResourceID {
+				found = true
+				break
+			}
+		}
+		var retainedGap CandidateGap
+		for _, gap := range candidate.Gaps {
+			if gap.Kind == in.GapKind && gap.ResourceID == in.ResourceID {
+				retainedGap = gap
+				break
+			}
+		}
+		if !found || !validCandidateGapDecision(retainedGap, in.Decision) || !bounded(in.RequestID, 1, 200) || !bounded(in.Rationale, 1, 1000) {
+			return Plan{}, ErrInvalid
+		}
+		in.ActorID, in.CreatedAt = actor, s.now()
+		candidate.GapDecisions = append(candidate.GapDecisions, in)
+		v.Version++
+		return v, s.write(v)
+	}
+	return Plan{}, ErrNotFound
 }
 
 func (s *Store) ApproveCutover(repo, id, actor string, expected int, in CutoverApproval) (Plan, error) {
