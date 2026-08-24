@@ -60,37 +60,28 @@ func registerRestructuringCandidateRoutes(mux *http.ServeMux, git *storage.Store
 		sum := sha256.Sum256(body)
 		digest := hex.EncodeToString(sum[:])
 		candidateID := digest[:32]
-		for _, existing := range plan.CandidateSets {
-			if existing.RequestID == in.RequestID {
-				if existing.RequestDigest != digest {
-					writeAPIError(w, 409, "restructuring_candidate_request_conflict", "request_id was already used for another candidate")
-					return
-				}
-				writeJSON(w, 200, plan)
-				return
-			}
-		}
-		if in.ExpectedVersion != plan.Version {
-			writeAPIError(w, 409, "restructuring_plan_changed", "refresh the plan before assembling candidates")
-			return
-		}
 		sourceIDs := make([]string, 0, len(plan.Sources))
 		for _, s := range plan.Sources {
 			sourceIDs = append(sourceIDs, s.RepositoryID)
 		}
-		var candidate restructuringplans.CandidateSet
+		var out restructuringplans.Plan
 		err = catalog.WithCurrentReadAccess(c.UserID, sourceIDs, func() error {
-			var e error
-			candidate, e = assembleRestructuringCandidate(git, plans, plan, candidateID, digest, in)
-			return e
+			var createErr error
+			out, createErr = plans.CreateCandidateSet(plan.RepositoryID, plan.ID, c.UserID, in.ExpectedVersion, in.RequestID, digest, func(current restructuringplans.Plan) (restructuringplans.CandidateSet, error) {
+				return assembleRestructuringCandidate(git, plans, current, candidateID, digest, in)
+			})
+			return createErr
 		})
 		if err != nil {
+			if errors.Is(err, restructuringplans.ErrConflict) {
+				writeAPIError(w, 409, "restructuring_candidate_request_conflict", "request_id was already used for another candidate")
+				return
+			}
+			if errors.Is(err, restructuringplans.ErrVersion) {
+				writeAPIError(w, 409, "restructuring_plan_changed", "refresh the plan before assembling candidates")
+				return
+			}
 			writeAPIError(w, 422, "restructuring_candidate_failed", err.Error())
-			return
-		}
-		out, err := plans.AddCandidateSet(plan.RepositoryID, plan.ID, c.UserID, in.ExpectedVersion, candidate)
-		if err != nil {
-			writeAPIError(w, 409, "restructuring_plan_changed", "candidate assembly overlapped another plan change; retry with the current version")
 			return
 		}
 		writeJSON(w, 201, out)
@@ -297,13 +288,31 @@ func assembleRestructuringCandidate(git *storage.Store, plans *restructuringplan
 			return out, e
 		}
 		if _, e = os.Stat(final); errors.Is(e, os.ErrNotExist) {
-			if b, e := exec.Command("git", "clone", "-q", "--bare", "--no-local", stage, final).CombinedOutput(); e != nil {
+			publishing, tempErr := os.MkdirTemp(filepath.Dir(final), ".candidate-publishing-")
+			if tempErr != nil {
+				return out, tempErr
+			}
+			if tempErr = os.Remove(publishing); tempErr != nil {
+				return out, tempErr
+			}
+			if b, cloneErr := exec.Command("git", "clone", "-q", "--bare", "--no-local", stage, publishing).CombinedOutput(); cloneErr != nil {
+				_ = os.RemoveAll(publishing)
 				return out, fmt.Errorf("publish candidate: %s", b)
+			}
+			if renameErr := os.Rename(publishing, final); renameErr != nil {
+				_ = os.RemoveAll(publishing)
+				if _, statErr := os.Stat(final); statErr != nil {
+					return out, renameErr
+				}
 			}
 		}
 		fsck, e := exec.Command("git", "--git-dir="+final, "fsck", "--full").CombinedOutput()
 		if e != nil {
 			return out, fmt.Errorf("candidate integrity: %s", fsck)
+		}
+		publishedTip, tipErr := exec.Command("git", "--git-dir="+final, "rev-parse", "--verify", "refs/heads/"+dst.DefaultBranch).Output()
+		if tipErr != nil || strings.TrimSpace(string(publishedTip)) != tip {
+			return out, errors.New("published candidate does not match the deterministic assembled tip")
 		}
 		countBody, _ := exec.Command("git", "--git-dir="+final, "rev-list", "--objects", "--all").Output()
 		size := int64(0)
@@ -343,8 +352,9 @@ func pathComponents(path string) int {
 var restructuringScenarioKinds = []string{"repository_integrity", "clone", "fetch", "push", "build", "check", "package_resolution", "api_resolution", "documentation", "workspace", "consumer_journey"}
 
 func runRestructuringRehearsal(plans *restructuringplans.Store, plan restructuringplans.Plan, candidate restructuringplans.CandidateSet, in restructuringplans.Rehearsal) (restructuringplans.Rehearsal, error) {
-	if strings.TrimSpace(in.RequestID) == "" || len(in.Scenarios) < len(restructuringScenarioKinds) {
-		return in, errors.New("request_id and all eleven scenario kinds are required")
+	requiredCount := len(restructuringScenarioKinds) * len(candidate.Repositories)
+	if strings.TrimSpace(in.RequestID) == "" || len(candidate.Repositories) == 0 || len(in.Scenarios) != requiredCount {
+		return in, errors.New("request_id and exactly one of all eleven scenario kinds for every destination are required")
 	}
 	in.ID = ""
 	in.Outcomes = nil
@@ -352,14 +362,24 @@ func runRestructuringRehearsal(plans *restructuringplans.Store, plan restructuri
 	in.CostUnits = 0
 	in.RequiredDecisions = nil
 	seen := map[string]bool{}
+	required := map[string]bool{}
 	repos := map[string]restructuringplans.CandidateRepository{}
 	for _, x := range candidate.Repositories {
 		repos[x.DestinationID] = x
+		for _, kind := range restructuringScenarioKinds {
+			required[x.DestinationID+"\x00"+kind] = true
+		}
 	}
+	totalTimeout := 0
 	for _, s := range in.Scenarios {
-		seen[s.Kind] = true
-		if repos[s.DestinationID].ID == "" || s.TimeoutSeconds < 1 || s.TimeoutSeconds > 600 {
-			return in, errors.New("scenarios require a candidate destination and a timeout from 1 to 600 seconds")
+		key := s.DestinationID + "\x00" + s.Kind
+		if !required[key] || seen[key] {
+			return in, errors.New("scenario kinds must be unique and complete for every candidate destination")
+		}
+		seen[key] = true
+		totalTimeout += s.TimeoutSeconds
+		if repos[s.DestinationID].ID == "" || s.TimeoutSeconds < 1 || s.TimeoutSeconds > 300 {
+			return in, errors.New("scenarios require a candidate destination and a timeout from 1 to 300 seconds")
 		}
 		encoded, _ := json.Marshal(s)
 		if restructuringCredentialPattern.Match(encoded) {
@@ -369,16 +389,24 @@ func runRestructuringRehearsal(plans *restructuringplans.Store, plan restructuri
 			return in, errors.New("commands require a bounded preinstalled image")
 		}
 	}
-	for _, k := range restructuringScenarioKinds {
-		if !seen[k] {
-			return in, fmt.Errorf("missing %s scenario", k)
+	if totalTimeout > 900 {
+		return in, errors.New("aggregate rehearsal timeout cannot exceed 900 seconds")
+	}
+	for key := range required {
+		if !seen[key] {
+			return in, errors.New("every destination requires all eleven scenario kinds")
 		}
 	}
+	overall, stopOverall := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer stopOverall()
 	for i, s := range in.Scenarios {
 		started := time.Now()
 		o := restructuringplans.Outcome{ScenarioID: s.ID, Kind: s.Kind, DestinationID: s.DestinationID, State: "failed", ExitCode: 1}
 		repoPath := plans.CandidatePath(plan.RepositoryID, plan.ID, candidate.ID, s.DestinationID)
-		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(s.TimeoutSeconds)*time.Second)
+		if overall.Err() != nil {
+			return in, errors.New("aggregate rehearsal execution deadline exceeded")
+		}
+		ctx, cancel := context.WithTimeout(overall, time.Duration(s.TimeoutSeconds)*time.Second)
 		tmp, _ := os.MkdirTemp("", "restructuring-rehearsal-*")
 		var cmd *exec.Cmd
 		container := ""

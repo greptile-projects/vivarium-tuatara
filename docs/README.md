@@ -221,11 +221,14 @@ exact tips/trees, object and byte costs, signature status, and SHA-256 provenanc
 unavailable history, policy gaps, inaccessible inventory, missing tags, and independently controlled
 resources are explicit decisions. Exact retries return the same candidate.
 
-Candidate rehearsals freeze eleven required scenario kinds. Stock Git performs integrity, clone,
+Candidate rehearsals freeze exactly eleven required scenario kinds per destination, reject duplicates,
+and enforce per-scenario and 900-second aggregate budgets. Stock Git performs integrity, clone,
 fetch, and push into a disposable copy. Builds, checks, package and API resolution, documentation,
 workspaces, and consumer journeys run from candidate clones in preinstalled networkless, read-only,
 capability-free containers. Outcomes, bounded logs, cost, unsupported commands, and candidate gaps
 remain inspectable; assembly and rehearsal never register destinations or move authoritative state.
+Candidate assembly and ledger registration share a cross-process serialization boundary; bare repositories
+publish from unique staging paths by atomic rename, and exact concurrent requests reconcile safely.
 
 ## Shared regression search boundaries
 

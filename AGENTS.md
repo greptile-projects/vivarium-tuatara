@@ -3121,9 +3121,11 @@ mappings without cataloging a destination or moving a source ref. Bare candidate
 trees, requested full/selected ancestry, source authorship, selected tag objects, license paths,
 cross-repository links, object/storage cost, signature status, and SHA-256 provenance. Inventory
 gaps, unmovable resources, path collisions, and missing tags remain required decisions. Rehearsals
-retain an eleven-part matrix for stock Git integrity/clone/fetch/disposable push and networkless,
+retain exactly one eleven-part matrix per destination for stock Git integrity/clone/fetch/disposable push and networkless,
 read-only, capability-free build, check, package/API, documentation, workspace, and consumer runs.
-They retain bounded output and duration-derived cost and never mutate sources, candidates, catalog
+Scenario and aggregate deadlines are bounded. Candidate reconciliation, assembly, atomic bare-repository
+promotion, and ledger registration serialize beneath the ledger lock, so exact overlaps reconcile and
+losing version updates cannot leave unregistered repositories. Rehearsals retain bounded output and duration-derived cost and never mutate sources, candidates, catalog
 repositories, or active collaboration.
 
 Sensitive history remediations at `/repositories/{id}/history-remediations` and the repository

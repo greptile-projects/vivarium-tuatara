@@ -329,6 +329,61 @@ func (s *Store) AddCandidateSet(repo, id, actor string, expected int, in Candida
 	v.Version++
 	return v, s.write(v)
 }
+
+// CreateCandidateSet serializes reconciliation, assembly publication, and
+// ledger registration under the cross-process root lock. This prevents a
+// losing plan-version update from leaving an unregistered bare repository and
+// makes overlapping exact requests reconcile before filesystem publication.
+func (s *Store) CreateCandidateSet(repo, id, actor string, expected int, requestID, digest string, assemble func(Plan) (CandidateSet, error)) (Plan, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lockRoot()
+	if err != nil {
+		return Plan{}, err
+	}
+	defer unlock()
+	v, err := s.read(repo, id)
+	if err != nil {
+		return Plan{}, err
+	}
+	for _, x := range v.CandidateSets {
+		if x.RequestID != requestID {
+			continue
+		}
+		if x.RequestDigest != digest {
+			return Plan{}, ErrConflict
+		}
+		return v, nil
+	}
+	if expected != v.Version {
+		return Plan{}, ErrVersion
+	}
+	in, err := assemble(v)
+	cleanup := func() {
+		if safeID(in.ID) {
+			_ = os.RemoveAll(filepath.Dir(s.CandidatePath(repo, id, in.ID, "unused")))
+		}
+	}
+	if err != nil {
+		cleanup()
+		return Plan{}, err
+	}
+	if !safeID(in.ID) || in.RequestID != requestID || in.RequestDigest != digest || len(in.Repositories) == 0 {
+		cleanup()
+		return Plan{}, ErrInvalid
+	}
+	in.PlanVersion = v.Version
+	in.CreatedBy = actor
+	in.CreatedAt = s.now()
+	in.Authority = "immutable rehearsal material only; candidates grant no destination repository, Git, collaboration, resource migration, or publication authority"
+	v.CandidateSets = append(v.CandidateSets, in)
+	v.Version++
+	if err = s.write(v); err != nil {
+		cleanup()
+		return Plan{}, err
+	}
+	return v, nil
+}
 func (s *Store) AddRehearsal(repo, id, candidateID, actor string, expected int, in Rehearsal) (Plan, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -378,7 +433,7 @@ func sameFinding(a, b Finding) bool {
 var kinds = map[string]bool{"ref": true, "pull_request": true, "issue": true, "task": true, "release": true, "package": true, "documentation": true, "policy": true, "workspace": true, "automation": true, "consumer": true, "federated_relationship": true}
 
 func validate(v Plan) error {
-	if !bounded(v.RequestID, 1, 200) || !bounded(v.RepositoryID, 1, 200) || !bounded(v.Title, 1, 300) || !bounded(v.Intent, 1, 4000) || len(v.Sources) == 0 || len(v.Destinations) == 0 || len(v.Mappings) == 0 || len(v.Inventory) == 0 || v.Deadline.IsZero() || len(v.SuccessCriteria) == 0 || len(v.RollbackLimits) == 0 {
+	if !bounded(v.RequestID, 1, 200) || !bounded(v.RepositoryID, 1, 200) || !bounded(v.Title, 1, 300) || !bounded(v.Intent, 1, 4000) || len(v.Sources) == 0 || len(v.Destinations) == 0 || len(v.Destinations) > 20 || len(v.Mappings) == 0 || len(v.Inventory) == 0 || v.Deadline.IsZero() || len(v.SuccessCriteria) == 0 || len(v.RollbackLimits) == 0 {
 		return ErrInvalid
 	}
 	src, dst, inv := map[string]bool{}, map[string]bool{}, map[string]bool{}

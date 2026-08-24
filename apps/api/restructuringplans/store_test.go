@@ -117,3 +117,44 @@ func TestPlanRejectsCandidatePathTraversal(t *testing.T) {
 		}
 	}
 }
+
+func TestCandidateCreationSerializesAssemblyAndRegistration(t *testing.T) {
+	root := t.TempDir()
+	first, _ := New(root)
+	second, _ := New(root)
+	plan, err := first.Create(completePlan(), "owner", "plan-digest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assemble := func(id, request, digest string) func(Plan) (CandidateSet, error) {
+		return func(Plan) (CandidateSet, error) {
+			return CandidateSet{ID: id, RequestID: request, RequestDigest: digest, Repositories: []CandidateRepository{{ID: "core", DestinationID: "core"}}}, nil
+		}
+	}
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	for i, s := range []*Store{first, second} {
+		go func(i int, s *Store) {
+			<-start
+			_, e := s.CreateCandidateSet("source", plan.ID, "owner", 1, fmt.Sprintf("request-%d", i), fmt.Sprintf("digest-%d", i), assemble(fmt.Sprintf("candidate-%d", i), fmt.Sprintf("request-%d", i), fmt.Sprintf("digest-%d", i)))
+			results <- e
+		}(i, s)
+	}
+	close(start)
+	a, b := <-results, <-results
+	if !((a == nil && errors.Is(b, ErrVersion)) || (b == nil && errors.Is(a, ErrVersion))) {
+		t.Fatalf("distinct concurrent results = %v, %v", a, b)
+	}
+	current, err := first.Get("source", plan.ID)
+	if err != nil || len(current.CandidateSets) != 1 {
+		t.Fatalf("registered candidates = %#v, %v", current.CandidateSets, err)
+	}
+	calls := 0
+	exact := func(Plan) (CandidateSet, error) {
+		calls++
+		return CandidateSet{}, errors.New("exact retry assembled again")
+	}
+	if _, err = second.CreateCandidateSet("source", plan.ID, "owner", 1, current.CandidateSets[0].RequestID, current.CandidateSets[0].RequestDigest, exact); err != nil || calls != 0 {
+		t.Fatalf("exact retry = %v, assembly calls %d", err, calls)
+	}
+}

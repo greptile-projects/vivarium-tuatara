@@ -14,6 +14,10 @@ no source ref or collaboration record.
 `consumer_journey` scenarios. Git writes target disposable copies; commands run in preinstalled
 networkless, read-only, capability-free containers. Retained evidence includes bounded output,
 duration-derived cost, unsupported cases, and owner decisions, so passing checks cannot hide gaps.
+Each destination requires exactly one of every kind; duplicates are rejected, individual timeouts are
+at most 300 seconds, and the complete request may declare at most 900 seconds. Candidate assembly and
+registration serialize across processes and publish through atomic staging, making exact overlaps stable
+without leaving a losing version update's repository unregistered.
 
 ## Consequential workflow governance
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -71,6 +72,28 @@ func TestRestructuringCandidatePreservesSelectedHistoryWithoutMovingSource(t *te
 	}
 	if got := run("--git-dir="+path, "log", "--format=%an <%ae>", "--all"); !strings.Contains(got, "Source Author <source@example.test>") {
 		t.Fatalf("authorship missing: %s", got)
+	}
+}
+
+func TestRestructuringRehearsalRequiresBoundedPerDestinationMatrix(t *testing.T) {
+	candidate := restructuringplans.CandidateSet{Repositories: []restructuringplans.CandidateRepository{{ID: "core", DestinationID: "core"}, {ID: "docs", DestinationID: "docs"}}}
+	scenarios := make([]restructuringplans.Scenario, 0, len(restructuringScenarioKinds))
+	for i, kind := range restructuringScenarioKinds {
+		scenarios = append(scenarios, restructuringplans.Scenario{ID: fmt.Sprintf("scenario-%d", i), Kind: kind, DestinationID: "core", TimeoutSeconds: 1})
+	}
+	if _, err := runRestructuringRehearsal(nil, restructuringplans.Plan{}, candidate, restructuringplans.Rehearsal{RequestID: "missing-docs", Scenarios: scenarios}); err == nil || !strings.Contains(err.Error(), "exactly one") {
+		t.Fatalf("missing destination matrix = %v", err)
+	}
+	candidate.Repositories = candidate.Repositories[:1]
+	scenarios = append(scenarios, restructuringplans.Scenario{ID: "duplicate", Kind: "repository_integrity", DestinationID: "core", TimeoutSeconds: 1})
+	if _, err := runRestructuringRehearsal(nil, restructuringplans.Plan{}, candidate, restructuringplans.Rehearsal{RequestID: "duplicate", Scenarios: scenarios}); err == nil {
+		t.Fatal("duplicate scenario was accepted")
+	}
+	for i := range scenarios[:len(restructuringScenarioKinds)] {
+		scenarios[i].TimeoutSeconds = 100
+	}
+	if _, err := runRestructuringRehearsal(nil, restructuringplans.Plan{}, candidate, restructuringplans.Rehearsal{RequestID: "over-budget", Scenarios: scenarios[:len(restructuringScenarioKinds)]}); err == nil || !strings.Contains(err.Error(), "aggregate") {
+		t.Fatalf("over-budget matrix = %v", err)
 	}
 }
 
