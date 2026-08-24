@@ -3691,6 +3691,7 @@ export type PullRequestComment = {
   pull_request_id: string;
   author_id: string;
   body: string;
+  revision: string;
   created_at: string;
 };
 export type PullRequestReview = {

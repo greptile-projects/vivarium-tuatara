@@ -19,6 +19,17 @@ func TestChangeStackCycleRemainsExplicit(t *testing.T) {
 	}
 }
 
+func TestStackOwnerEvidenceSnapshotDetectsUpstreamMovement(t *testing.T) {
+	refs := []stackRevisionRef{{MemberID: "one", Revision: strings.Repeat("1", 40), Current: true}}
+	if !sameUpstreamSnapshot(map[string]string{"one": strings.Repeat("1", 40)}, refs) {
+		t.Fatal("exact upstream snapshot was stale")
+	}
+	refs[0].Revision = strings.Repeat("2", 40)
+	if sameUpstreamSnapshot(map[string]string{"one": strings.Repeat("1", 40)}, refs) {
+		t.Fatal("moved upstream revision retained owner evidence")
+	}
+}
+
 func TestChangeStackRangeViewJoinsDistinctObjectStores(t *testing.T) {
 	makeRepo := func(name, contents string) (string, string) {
 		dir := filepath.Join(t.TempDir(), name)

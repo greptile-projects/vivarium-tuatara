@@ -44,6 +44,7 @@ import { Avatar, Badge, Button, Card } from "./ui";
 
 type PullRow = PullRequest & { repository: Repository };
 type FederationEvent = { id:string;kind:"comment"|"review"|"revision"|"checks"|"preview"|"closure"|"agent_session";actor:string;revision?:string;body?:string;decision?:string;state?:string;evidence?:Record<string,unknown>;created_at:string;origin_instance_id:string;verification:string;stale:boolean };
+type StackContext={stack_id:string;stack_title:string;outcome:string;member_id:string;position:number;revision:string;parent_revision:string;target_revision:string;review_state:"reviewable_now"|"provisional"|"blocked";individual_diff:{commit_count:number;files:string[];additions:number;deletions:number};cumulative_diff:{commit_count:number;files:string[];additions:number;deletions:number};commit_ids:string[];upstream_revisions:{member_id:string;pull_request_id?:string;revision:string;current:boolean}[];evidence:{id:string;kind:string;actor_id?:string;revision:string;state:string;summary:string;created_at:string}[];downstream_evidence_invalidated_by_upstream_change:{member_id:string;pull_request_id?:string;revision:string;current:boolean}[];acceptance_criteria:string[];authority:string};
 
 async function allPages<T>(path: string, key: string, token?: string | null) {
   const items: T[] = [];
@@ -540,6 +541,7 @@ export function PullRequestDetail({
   const [comments, setComments] = useState<PullRequestComment[]>([]);
   const [reviews, setReviews] = useState<PullRequestReview[]>([]);
   const [federationEvents, setFederationEvents] = useState<FederationEvent[]>([]);
+  const [stackContexts, setStackContexts] = useState<StackContext[]>([]);
   const [readiness, setReadiness] = useState<MergeReadiness | null>(null);
   const [conflicts, setConflicts] = useState<ConflictAnalysis | null>(null);
   const [conflictError, setConflictError] = useState("");
@@ -583,6 +585,8 @@ export function PullRequestDetail({
       setFiles(filePage.files);
       setComments(discussion);
       setReviews(reviewList);
+	  const stackPage=await api<{stack_contexts:StackContext[]}>(`${base}/stack-context`,{},token).catch(()=>({stack_contexts:[]}));
+	  if(active()) setStackContexts(stackPage.stack_contexts);
 	  if (item.federated_contribution_id) {
 	    const shared = await api<{events:FederationEvent[]}>(`${base}/federation-events`,{},token).catch(()=>({events:[]}));
 	    if (active()) setFederationEvents(shared.events);
@@ -784,6 +788,16 @@ export function PullRequestDetail({
       "The contribution branch policy could not be updated.",
       allowed ? "Maintainer branch updates enabled." : "Maintainer branch updates disabled.",
     );
+  const acknowledgeStack = (event: FormEvent<HTMLFormElement>, stackContext: StackContext) => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    void mutate(
+      `/repositories/${repositoryID}/pulls/${pullRequestID}/stack-context/owner-acknowledgements`,
+      {method:"POST",body:JSON.stringify({stack_id:stackContext.stack_id,member_id:stackContext.member_id,decision:data.get("decision"),note:data.get("note")})},
+      "Owner acknowledgement could not be recorded.",
+      "Owner acknowledgement recorded.",
+    );
+  };
   const issueMaintainerCredential = async () => {
     setPending(true);
     setError("");
@@ -874,6 +888,7 @@ export function PullRequestDetail({
           {error}
         </p>
       )}
+      {stackContexts.map(stackContext=><Card key={stackContext.stack_id+stackContext.member_id} className="p-5"><div className="flex flex-wrap items-center gap-2"><Badge tone="info">Stack layer {stackContext.position}</Badge><h2 className="font-semibold">{stackContext.stack_title}</h2><Badge tone={stackContext.review_state==="reviewable_now"?"success":stackContext.review_state==="provisional"?"warning":"danger"}>{stackContext.review_state.replaceAll("_"," ")}</Badge></div><p className="mt-2 text-sm">{stackContext.outcome}</p><p className="mt-2 text-xs text-[var(--muted)]">Review this focused layer now; cumulative scope shows the complete candidate through this revision. Provisional evidence is waiting on exact upstream approval.</p><div className="mt-4 grid gap-3 sm:grid-cols-2"><div className="rounded-lg border p-3"><h3 className="text-sm font-semibold">Focused diff from declared parent</h3><p className="mt-1 font-mono text-xs">{short(stackContext.parent_revision)} → {short(stackContext.revision)}</p><p className="mt-2 text-xs">{stackContext.individual_diff.commit_count} commits · {stackContext.individual_diff.files.length} files · +{stackContext.individual_diff.additions} −{stackContext.individual_diff.deletions}</p><details className="mt-2 text-xs"><summary className="cursor-pointer font-semibold">Exact commits and files</summary><div className="mt-2 space-y-1 font-mono">{stackContext.commit_ids.map(id=><p key={id}>{id}</p>)}{stackContext.individual_diff.files.map(path=><p key={path}>{path}</p>)}</div></details></div><div className="rounded-lg border p-3"><h3 className="text-sm font-semibold">Cumulative diff from target</h3><p className="mt-1 font-mono text-xs">{short(stackContext.target_revision)} → {short(stackContext.revision)}</p><p className="mt-2 text-xs">{stackContext.cumulative_diff.commit_count} commits · {stackContext.cumulative_diff.files.length} files · +{stackContext.cumulative_diff.additions} −{stackContext.cumulative_diff.deletions}</p><p className="mt-2 text-xs text-[var(--muted)]">Inherited changes are context, not a second approval request.</p></div></div><div className="mt-4"><h3 className="text-sm font-semibold">Exact upstream dependencies</h3>{stackContext.upstream_revisions.length?<div className="mt-2 flex flex-wrap gap-2">{stackContext.upstream_revisions.map(dependency=><Badge key={dependency.member_id} tone={dependency.current?"success":"warning"}>{dependency.member_id} @ {short(dependency.revision)} · {dependency.current?"current":"moved"}</Badge>)}</div>:<p className="mt-1 text-xs text-[var(--muted)]">This is the first independently reviewable layer.</p>}</div><div className="mt-4"><h3 className="text-sm font-semibold">Layer-bound collaboration evidence</h3>{stackContext.evidence.length?<div className="mt-2 space-y-2">{stackContext.evidence.map(item=><div key={item.kind+item.id} className="rounded border p-2 text-xs"><div className="flex flex-wrap gap-2"><Badge>{item.kind.replaceAll("_"," ")}</Badge><Badge tone={item.state==="current"?"success":"warning"}>{item.state}</Badge><code>{item.revision?short(item.revision):"no revision"}</code></div><p className="mt-1">{item.summary}</p></div>)}</div>:<p className="mt-1 text-xs text-[var(--muted)]">No discussion, decisions, checks, previews, findings, or acknowledgements are retained for this revision yet.</p>}</div>{stackContext.downstream_evidence_invalidated_by_upstream_change.length>0&&<p className="mt-4 rounded-lg bg-[var(--warning-soft)] p-3 text-xs text-[var(--warning)]">Changing this layer would stale evidence on {stackContext.downstream_evidence_invalidated_by_upstream_change.map(x=>x.member_id).join(", ")}. Those layers must be re-evaluated at their replacement revisions.</p>}{isOwner&&pull.status==="open"&&<form className="mt-4 flex flex-wrap gap-2" onSubmit={event=>acknowledgeStack(event,stackContext)}><select name="decision" className="rounded-lg border bg-white px-3 py-2 text-sm"><option value="acknowledged">Acknowledge exact layer</option><option value="changes_requested">Request changes</option></select><input name="note" maxLength={2000} className="min-w-56 flex-1 rounded-lg border px-3 py-2 text-sm" placeholder="Optional revision-bound note"/><Button disabled={pending||refreshRequired}>Record owner decision</Button></form>}<p className="mt-4 text-xs text-[var(--muted)]">{stackContext.authority}</p></Card>)}
       {pull.durable_migration && <Card className="p-5"><div className="flex flex-wrap items-center gap-2"><h2 className="font-semibold">Durable-state coexistence contract</h2><Badge tone="warning">{pull.durable_migration.kind.replace("_"," ")}</Badge><Badge>step {pull.durable_migration.step_id}</Badge></div><p className="mt-2 text-sm text-[var(--muted)]">Exact review context for old and new application behavior. It grants no schema, data-store, deployment, review, or merge authority.</p><dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">{[["Old readers",pull.durable_migration.contract.old_readers],["New readers",pull.durable_migration.contract.new_readers],["Old writers",pull.durable_migration.contract.old_writers],["New writers",pull.durable_migration.contract.new_writers],["Rollout flags",pull.durable_migration.contract.rollout_flags],["Transformations",pull.durable_migration.contract.transformations],["Ownership",pull.durable_migration.contract.ownership],["Rollback assumptions",pull.durable_migration.contract.rollback_assumptions]].map(([label,values])=><div key={label as string}><dt className="font-semibold">{label}</dt><dd className="mt-1 text-[var(--muted)]">{(values as string[]).join("; ")}</dd></div>)}<div className="sm:col-span-2"><dt className="font-semibold">Idempotency and retries</dt><dd className="mt-1 text-[var(--muted)]">{pull.durable_migration.contract.idempotency}</dd></div></dl></Card>}
       <nav
         aria-label="Pull request sections"

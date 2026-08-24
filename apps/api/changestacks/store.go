@@ -38,24 +38,39 @@ type Diagnostic struct {
 }
 
 type Member struct {
-	ID                   string       `json:"id"`
-	Position             int          `json:"position"`
-	Title                string       `json:"title"`
-	SourceRepositoryID   string       `json:"source_repository_id,omitempty"`
-	SourceBranch         string       `json:"source_branch"`
-	PullRequestID        string       `json:"pull_request_id,omitempty"`
-	Revision             string       `json:"revision,omitempty"`
-	BaseRevision         string       `json:"base_revision,omitempty"`
-	ExpectedBaseRevision string       `json:"expected_base_revision,omitempty"`
-	DependsOn            []string     `json:"depends_on,omitempty"`
-	AcceptanceCriteria   []string     `json:"acceptance_criteria"`
-	Authors              []string     `json:"authors"`
-	IndividualScope      Scope        `json:"individual_scope"`
-	CumulativeScope      Scope        `json:"cumulative_scope"`
-	Permissions          Permission   `json:"effective_permissions"`
-	Diagnostics          []Diagnostic `json:"diagnostics"`
-	ReviewState          string       `json:"review_state"`
-	PublishedAt          *time.Time   `json:"published_at,omitempty"`
+	ID                   string            `json:"id"`
+	Position             int               `json:"position"`
+	Title                string            `json:"title"`
+	SourceRepositoryID   string            `json:"source_repository_id,omitempty"`
+	SourceBranch         string            `json:"source_branch"`
+	PullRequestID        string            `json:"pull_request_id,omitempty"`
+	Revision             string            `json:"revision,omitempty"`
+	BaseRevision         string            `json:"base_revision,omitempty"`
+	ExpectedBaseRevision string            `json:"expected_base_revision,omitempty"`
+	DependsOn            []string          `json:"depends_on,omitempty"`
+	AcceptanceCriteria   []string          `json:"acceptance_criteria"`
+	Authors              []string          `json:"authors"`
+	CommitIDs            []string          `json:"commit_ids"`
+	IndividualScope      Scope             `json:"individual_scope"`
+	CumulativeScope      Scope             `json:"cumulative_scope"`
+	Permissions          Permission        `json:"effective_permissions"`
+	Diagnostics          []Diagnostic      `json:"diagnostics"`
+	ReviewState          string            `json:"review_state"`
+	PublishedAt          *time.Time        `json:"published_at,omitempty"`
+	Acknowledgements     []Acknowledgement `json:"owner_acknowledgements,omitempty"`
+}
+
+// Acknowledgement is an affected repository owner's decision against one
+// exact layer and the exact upstream stack revisions visible at that time.
+type Acknowledgement struct {
+	ID                string            `json:"id"`
+	MemberID          string            `json:"member_id"`
+	Revision          string            `json:"revision"`
+	UpstreamRevisions map[string]string `json:"upstream_revisions"`
+	Decision          string            `json:"decision"`
+	Note              string            `json:"note,omitempty"`
+	OwnerID           string            `json:"owner_id"`
+	CreatedAt         time.Time         `json:"created_at"`
 }
 
 type Stack struct {
@@ -176,6 +191,33 @@ func (s *Store) list(repo string) ([]Stack, error) {
 	return out, nil
 }
 func (s *Store) Update(v Stack) error { s.mu.Lock(); defer s.mu.Unlock(); return s.write(v) }
+func (s *Store) Acknowledge(repo, stackID, memberID, owner, decision, note string) (Stack, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if owner == "" || (decision != "acknowledged" && decision != "changes_requested") || len(note) > 2000 {
+		return Stack{}, ErrInvalid
+	}
+	v, err := s.read(repo, stackID)
+	if err != nil {
+		return Stack{}, err
+	}
+	upstream := map[string]string{}
+	index := -1
+	for i := range v.Members {
+		if v.Members[i].ID == memberID {
+			index = i
+			break
+		}
+		upstream[v.Members[i].ID] = v.Members[i].Revision
+	}
+	if index < 0 || v.Members[index].Revision == "" {
+		return Stack{}, ErrInvalid
+	}
+	now := time.Now().UTC()
+	a := Acknowledgement{ID: randomID(), MemberID: memberID, Revision: v.Members[index].Revision, UpstreamRevisions: upstream, Decision: decision, Note: strings.TrimSpace(note), OwnerID: owner, CreatedAt: now}
+	v.Members[index].Acknowledgements = append(v.Members[index].Acknowledgements, a)
+	return v, s.write(v)
+}
 func (s *Store) read(repo, id string) (Stack, error) {
 	var v Stack
 	b, err := os.ReadFile(filepath.Join(s.root, repo, id+".json"))

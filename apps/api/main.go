@@ -1621,7 +1621,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		registerRestructuringPlanRoutes(mux, store, repositoryCatalog, authStore, organizationStore, restructuringPlanStore, pullRequestStore, issueStore, proposalStore, releaseStore, packageStore, documentationStore, governanceStore, workspaceStore, collaborationWorkflowStore, relationshipStore, federationStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && store != nil && pullRequestStore != nil && changeStackStore != nil {
-		registerChangeStackRoutes(mux, store, repositoryCatalog, authStore, changeStackStore, pullRequestStore)
+		registerChangeStackRoutes(mux, store, repositoryCatalog, authStore, changeStackStore, pullRequestStore, checkRunStore, previewStore)
 	}
 	if authStore != nil && userStore != nil && repositoryCatalog != nil && apiContractStore != nil && pullRequestStore != nil && releaseStore != nil {
 		registerAPIContractRoutes(mux, store, repositoryCatalog, authStore, apiContractStore, pullRequestStore, releaseStore)
