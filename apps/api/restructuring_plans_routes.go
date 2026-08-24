@@ -84,6 +84,7 @@ func registerRestructuringPlanRoutes(mux *http.ServeMux, git *storage.Store, cat
 		clean.Findings = nil
 		clean.CandidateSets = nil
 		clean.CollaborationMappings = nil
+		clean.DependentMigrations = nil
 		b, _ := json.Marshal(clean)
 		sum := sha256.Sum256(b)
 		digest := hex.EncodeToString(sum[:])
@@ -308,6 +309,133 @@ func registerRestructuringPlanRoutes(mux *http.ServeMux, git *storage.Store, cat
 			return
 		}
 		writeJSON(w, 201, out)
+	})
+	mux.HandleFunc("POST /repositories/{id}/restructuring-plans/{plan_id}/dependent-migrations", func(w http.ResponseWriter, r *http.Request) {
+		c, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var body struct {
+			ExpectedVersion int                                   `json:"expected_version"`
+			Migration       restructuringplans.DependentMigration `json:"migration"`
+		}
+		if decodeJSON(r, &body) != nil {
+			writeAPIError(w, 400, "invalid_request", "a dependent migration is required")
+			return
+		}
+		actor := actorID(c)
+		var out restructuringplans.Plan
+		err := catalog.WithCurrentParticipants([]string{c.UserID, body.Migration.OwnerID}, r.PathValue("id"), func() error {
+			var e error
+			out, e = plans.AddDependentMigration(r.PathValue("id"), r.PathValue("plan_id"), actor, body.ExpectedVersion, body.Migration)
+			return e
+		})
+		if errors.Is(err, repositories.ErrInvalidCollaborator) || errors.Is(err, repositories.ErrNotFound) {
+			writeAPIError(w, 422, "restructuring_dependent_owner_inaccessible", "the dependent owner must be a current repository participant who can submit migration events")
+			return
+		}
+		if errors.Is(err, restructuringplans.ErrVersion) || errors.Is(err, restructuringplans.ErrConflict) {
+			writeAPIError(w, 409, "restructuring_dependent_changed", "refresh before retaining dependent migration work")
+			return
+		}
+		if errors.Is(err, restructuringplans.ErrInvalid) {
+			writeAPIError(w, 422, "restructuring_dependent_invalid", "dependent migrations require an owner, explicit state, compatibility window, audience, safe synchronization, and applicable replacement or machine mapping")
+			return
+		}
+		if errors.Is(err, restructuringplans.ErrNotFound) {
+			writeAPIError(w, 404, "restructuring_plan_not_found", "restructuring plan not found")
+			return
+		}
+		if err != nil {
+			writeAPIError(w, 500, "restructuring_dependent_unavailable", "dependent migration could not be retained")
+			return
+		}
+		writeJSON(w, 201, out)
+	})
+	mux.HandleFunc("POST /repositories/{id}/restructuring-plans/{plan_id}/dependent-migrations/{migration_id}/events", func(w http.ResponseWriter, r *http.Request) {
+		c, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id"))
+		if !ok {
+			return
+		}
+		var body struct {
+			ExpectedVersion int                               `json:"expected_version"`
+			Event           restructuringplans.DependentEvent `json:"event"`
+		}
+		if decodeJSON(r, &body) != nil {
+			writeAPIError(w, 400, "invalid_request", "a migration event is required")
+			return
+		}
+		plan, err := plans.Get(r.PathValue("id"), r.PathValue("plan_id"))
+		if err != nil {
+			writeAPIError(w, 404, "restructuring_plan_not_found", "restructuring plan not found")
+			return
+		}
+		ownerID := ""
+		for _, migration := range plan.DependentMigrations {
+			if migration.ID == r.PathValue("migration_id") {
+				ownerID = migration.OwnerID
+				break
+			}
+		}
+		if ownerID == "" {
+			writeAPIError(w, 404, "restructuring_dependent_not_found", "dependent migration not found")
+			return
+		}
+		var out restructuringplans.Plan
+		err = catalog.WithCurrentParticipant(ownerID, r.PathValue("id"), func() error {
+			var e error
+			out, e = plans.AddDependentEvent(r.PathValue("id"), r.PathValue("plan_id"), r.PathValue("migration_id"), actorID(c), body.ExpectedVersion, body.Event)
+			return e
+		})
+		if errors.Is(err, repositories.ErrInvalidCollaborator) || errors.Is(err, repositories.ErrNotFound) {
+			writeAPIError(w, 403, "restructuring_dependent_owner_inaccessible", "the retained owner no longer has repository access; adoption remains blocked")
+			return
+		}
+		if errors.Is(err, restructuringplans.ErrVersion) || errors.Is(err, restructuringplans.ErrConflict) {
+			writeAPIError(w, 409, "restructuring_dependent_changed", "refresh before updating migration state")
+			return
+		}
+		if errors.Is(err, restructuringplans.ErrInvalid) {
+			writeAPIError(w, 403, "restructuring_dependent_owner_required", "only the retained dependent owner can publish a bounded state and next action")
+			return
+		}
+		if errors.Is(err, restructuringplans.ErrNotFound) {
+			writeAPIError(w, 404, "restructuring_dependent_not_found", "dependent migration not found")
+			return
+		}
+		if err != nil {
+			writeAPIError(w, 500, "restructuring_dependent_unavailable", "migration state could not be retained")
+			return
+		}
+		writeJSON(w, 201, out)
+	})
+	mux.HandleFunc("GET /repositories/{id}/restructuring-plans/{plan_id}/dependency-map", func(w http.ResponseWriter, r *http.Request) {
+		_, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id"))
+		if !ok {
+			return
+		}
+		p, err := plans.Get(r.PathValue("id"), r.PathValue("plan_id"))
+		if err != nil {
+			writeAPIError(w, 404, "restructuring_plan_not_found", "restructuring plan not found")
+			return
+		}
+		type entry struct {
+			Kind                string                                     `json:"kind"`
+			ResourceID          string                                     `json:"resource_id"`
+			State               string                                     `json:"state"`
+			CompatibilityWindow restructuringplans.CompatibilityWindow     `json:"compatibility_window"`
+			NextAction          string                                     `json:"next_action"`
+			ReplacementRemotes  []restructuringplans.ReplacementRemote     `json:"replacement_remotes,omitempty"`
+			Mappings            []restructuringplans.DependencyLinkMapping `json:"mappings,omitempty"`
+			Synchronization     []string                                   `json:"synchronization"`
+		}
+		xs := []entry{}
+		for _, m := range p.DependentMigrations {
+			if m.Audience == "public" {
+				xs = append(xs, entry{m.Kind, m.ResourceID, m.State, m.CompatibilityWindow, m.NextAction, m.ReplacementRemotes, m.Mappings, m.Synchronization})
+			}
+		}
+		writeJSON(w, 200, map[string]any{"schema": "vivarium.restructuring-dependency-map/v1", "repository_id": p.RepositoryID, "plan_id": p.ID, "version": p.Version, "migrations": xs})
 	})
 }
 

@@ -248,6 +248,24 @@ persistence. Blocked and archived mappings reject ordinary decisions and require
 they cannot be revived through approvals. These mappings create no destination resource and grant the restructuring coordinator no Git,
 review, queue, session, workspace, issue, task, or independently owned destination authority.
 
+Dependent entry points and consumers are retained beneath a plan's `dependent-migrations` route. The closed
+set covers clones, forks, packages, APIs, dependencies, extensions, workflows, documentation links,
+deployments, and federated followers. Every entry freezes its accountable owner, audience, current state,
+bounded compatibility window, next action, explicit replacement remotes, machine-readable dependency/link
+mappings, and ordered safe synchronization guidance. Public-audience entries are also projected through the
+plan's versioned `dependency-map` endpoint; private owner and participant context is never included there.
+
+Replacement remotes must use credential-free HTTP(S) URLs and name a declared destination. Self-redirects,
+duplicate destination redirects, and self-mappings are rejected rather than creating a loop. States keep
+discovered, planned, in-progress, blocked, unavailable, rejected, stale-credential, and unmigrated clients
+separate from adopted clients. Only the retained dependent owner can append state evidence, and adoption
+requires nonempty evidence. A new migration owner must be a current source-repository participant, and both
+creator and owner participation are held through persistence; event writes revalidate and hold that owner
+access so revocation leaves adoption visibly blocked instead of producing an unreachable authority. An optional human- or agent-owned propagation reference can point to ordinary
+target-repository task, pull, and release work; it records coordination without granting the restructuring
+team authority in that repository. These records grant no Git, package, API, extension, workflow,
+documentation, deployment, federation, pull, release, or consumer authority.
+
 ## Shared regression search boundaries
 
 Repository collaborators open regression investigations through `POST

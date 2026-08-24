@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -173,6 +174,54 @@ type CollaborationMapping struct {
 	CreatedAt          time.Time                  `json:"created_at"`
 	Authority          string                     `json:"authority"`
 }
+type CompatibilityWindow struct {
+	StartsAt time.Time `json:"starts_at"`
+	EndsAt   time.Time `json:"ends_at"`
+}
+type ReplacementRemote struct {
+	DestinationID string `json:"destination_id"`
+	RemoteURL     string `json:"remote_url"`
+	Ref           string `json:"ref,omitempty"`
+}
+type DependencyLinkMapping struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+	Kind string `json:"kind"`
+}
+type PropagationWork struct {
+	ActorKind    string `json:"actor_kind"`
+	RepositoryID string `json:"repository_id"`
+	TaskID       string `json:"task_id,omitempty"`
+	PullID       string `json:"pull_id,omitempty"`
+	ReleaseID    string `json:"release_id,omitempty"`
+}
+type DependentEvent struct {
+	RequestID  string    `json:"request_id"`
+	ActorID    string    `json:"actor_id"`
+	State      string    `json:"state"`
+	Evidence   string    `json:"evidence,omitempty"`
+	NextAction string    `json:"next_action"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+type DependentMigration struct {
+	ID                  string                  `json:"id"`
+	RequestID           string                  `json:"request_id"`
+	Kind                string                  `json:"kind"`
+	ResourceID          string                  `json:"resource_id"`
+	OwnerID             string                  `json:"owner_id"`
+	Audience            string                  `json:"audience"`
+	State               string                  `json:"state"`
+	CompatibilityWindow CompatibilityWindow     `json:"compatibility_window"`
+	NextAction          string                  `json:"next_action"`
+	ReplacementRemotes  []ReplacementRemote     `json:"replacement_remotes,omitempty"`
+	Mappings            []DependencyLinkMapping `json:"mappings,omitempty"`
+	Synchronization     []string                `json:"synchronization"`
+	Propagation         *PropagationWork        `json:"propagation,omitempty"`
+	Events              []DependentEvent        `json:"events,omitempty"`
+	CreatedBy           string                  `json:"created_by"`
+	CreatedAt           time.Time               `json:"created_at"`
+	Authority           string                  `json:"authority"`
+}
 type Plan struct {
 	ID                    string                 `json:"id"`
 	RequestID             string                 `json:"request_id"`
@@ -190,10 +239,131 @@ type Plan struct {
 	Findings              []Finding              `json:"findings,omitempty"`
 	CandidateSets         []CandidateSet         `json:"candidate_sets,omitempty"`
 	CollaborationMappings []CollaborationMapping `json:"collaboration_mappings,omitempty"`
+	DependentMigrations   []DependentMigration   `json:"dependent_migrations,omitempty"`
 	Version               int                    `json:"version"`
 	CreatedBy             string                 `json:"created_by"`
 	CreatedAt             time.Time              `json:"created_at"`
 	Authority             string                 `json:"authority"`
+}
+
+func (s *Store) AddDependentMigration(repo, id, actor string, expected int, in DependentMigration) (Plan, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lockRoot()
+	if err != nil {
+		return Plan{}, err
+	}
+	defer unlock()
+	v, err := s.read(repo, id)
+	if err != nil {
+		return Plan{}, err
+	}
+	for _, x := range v.DependentMigrations {
+		if x.RequestID == in.RequestID {
+			in.ID = x.ID
+			in.CreatedBy = x.CreatedBy
+			in.CreatedAt = x.CreatedAt
+			in.Events = x.Events
+			in.Authority = x.Authority
+			a, _ := json.Marshal(x)
+			b, _ := json.Marshal(in)
+			if string(a) == string(b) {
+				return v, nil
+			}
+			return Plan{}, ErrConflict
+		}
+	}
+	if expected != v.Version {
+		return Plan{}, ErrVersion
+	}
+	if !validDependentMigration(v, in) {
+		return Plan{}, ErrInvalid
+	}
+	in.ID = randomID()
+	in.CreatedBy = actor
+	in.CreatedAt = s.now()
+	in.Events = nil
+	in.Authority = "coordination and discovery only; this record grants no Git, package, API, extension, workflow, documentation, deployment, federation, pull, release, or consumer authority"
+	v.DependentMigrations = append(v.DependentMigrations, in)
+	v.Version++
+	return v, s.write(v)
+}
+
+func (s *Store) AddDependentEvent(repo, id, migrationID, actor string, expected int, in DependentEvent) (Plan, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lockRoot()
+	if err != nil {
+		return Plan{}, err
+	}
+	defer unlock()
+	v, err := s.read(repo, id)
+	if err != nil {
+		return Plan{}, err
+	}
+	for i := range v.DependentMigrations {
+		m := &v.DependentMigrations[i]
+		if m.ID != migrationID {
+			continue
+		}
+		for _, e := range m.Events {
+			if e.RequestID == in.RequestID {
+				if e.ActorID == actor && e.State == in.State && e.Evidence == in.Evidence && e.NextAction == in.NextAction {
+					return v, nil
+				}
+				return Plan{}, ErrConflict
+			}
+		}
+		if expected != v.Version {
+			return Plan{}, ErrVersion
+		}
+		if actor != m.OwnerID || !validDependentState(in.State) || !bounded(in.RequestID, 1, 200) || !bounded(in.Evidence, 0, 1000) || !bounded(in.NextAction, 1, 1000) || (in.State == "adopted" && strings.TrimSpace(in.Evidence) == "") {
+			return Plan{}, ErrInvalid
+		}
+		in.ActorID = actor
+		in.CreatedAt = s.now()
+		m.Events = append(m.Events, in)
+		m.State = in.State
+		m.NextAction = in.NextAction
+		v.Version++
+		return v, s.write(v)
+	}
+	return Plan{}, ErrNotFound
+}
+
+func validDependentState(v string) bool {
+	return map[string]bool{"discovered": true, "planned": true, "in_progress": true, "adopted": true, "blocked": true, "unavailable": true, "rejected": true, "stale_credentials": true, "unmigrated": true}[v]
+}
+func validDependentMigration(p Plan, m DependentMigration) bool {
+	kinds := map[string]bool{"clone": true, "fork": true, "package": true, "api": true, "dependency": true, "extension": true, "workflow": true, "documentation_link": true, "deployment": true, "federated_follower": true}
+	if !bounded(m.RequestID, 1, 200) || !kinds[m.Kind] || !bounded(m.ResourceID, 1, 500) || !bounded(m.OwnerID, 1, 200) || !map[string]bool{"public": true, "participants": true, "owner": true}[m.Audience] || !validDependentState(m.State) || !bounded(m.NextAction, 1, 1000) || len(m.Synchronization) == 0 || m.CompatibilityWindow.StartsAt.IsZero() || !m.CompatibilityWindow.EndsAt.After(m.CompatibilityWindow.StartsAt) {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, r := range m.ReplacementRemotes {
+		u, err := url.Parse(r.RemoteURL)
+		if seen[r.DestinationID] || !containsDestination(p.Destinations, r.DestinationID) || !bounded(r.RemoteURL, 1, 1000) || err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil || r.RemoteURL == m.ResourceID {
+			return false
+		}
+		seen[r.DestinationID] = true
+	}
+	for _, x := range m.Mappings {
+		if !bounded(x.From, 1, 500) || !bounded(x.To, 1, 500) || x.From == x.To || !map[string]bool{"dependency": true, "link": true, "package": true, "api": true}[x.Kind] {
+			return false
+		}
+	}
+	for _, x := range m.Synchronization {
+		if !bounded(x, 1, 1000) {
+			return false
+		}
+	}
+	if (m.Kind == "clone" || m.Kind == "fork" || m.Kind == "federated_follower") && len(m.ReplacementRemotes) == 0 {
+		return false
+	}
+	if m.Propagation != nil && (!map[string]bool{"human": true, "agent": true}[m.Propagation.ActorKind] || !bounded(m.Propagation.RepositoryID, 1, 200) || (m.Propagation.TaskID == "" && m.Propagation.PullID == "" && m.Propagation.ReleaseID == "")) {
+		return false
+	}
+	return true
 }
 
 func (s *Store) AddCollaborationMapping(repo, id, actor string, expected int, in CollaborationMapping) (Plan, error) {

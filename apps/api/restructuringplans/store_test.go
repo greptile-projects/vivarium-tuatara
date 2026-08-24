@@ -33,6 +33,45 @@ func TestCreateRejectsCallerControlledInventoryOwners(t *testing.T) {
 	}
 }
 
+func TestDependentMigrationKeepsFailuresVisibleAndOwnerControlled(t *testing.T) {
+	s, _ := New(t.TempDir())
+	p, _ := resolvedCreate(s, completePlan(), "owner", "digest")
+	now := time.Now().UTC()
+	m := DependentMigration{RequestID: "dependent-1", Kind: "clone", ResourceID: "developer-clone", OwnerID: "clone-owner", Audience: "public", State: "unmigrated", CompatibilityWindow: CompatibilityWindow{StartsAt: now, EndsAt: now.Add(7 * 24 * time.Hour)}, NextAction: "fetch the replacement, compare the signed tip, then change origin", ReplacementRemotes: []ReplacementRemote{{DestinationID: "core", RemoteURL: "https://example.test/core.git", Ref: "refs/heads/main"}}, Mappings: []DependencyLinkMapping{{From: "old/module", To: "core/module", Kind: "dependency"}}, Synchronization: []string{"git fetch replacement", "verify the expected tip", "git remote set-url origin https://example.test/core.git"}}
+	p, err := s.AddDependentMigration("source", p.ID, "coordinator", p.Version, m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := p.DependentMigrations[0]
+	if got.State != "unmigrated" || got.OwnerID != "clone-owner" || len(got.ReplacementRemotes) != 1 {
+		t.Fatalf("migration=%#v", got)
+	}
+	if _, err = s.AddDependentEvent("source", p.ID, got.ID, "coordinator", p.Version, DependentEvent{RequestID: "false-adoption", State: "adopted", NextAction: "done"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("coordinator adoption err=%v", err)
+	}
+	p, err = s.AddDependentEvent("source", p.ID, got.ID, "clone-owner", p.Version, DependentEvent{RequestID: "credentials", State: "stale_credentials", Evidence: "old token rejected", NextAction: "owner must issue a repository-scoped credential"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.DependentMigrations[0].State != "stale_credentials" || len(p.DependentMigrations[0].Events) != 1 {
+		t.Fatalf("event=%#v", p.DependentMigrations[0])
+	}
+}
+
+func TestDependentMigrationRejectsUnsafeOrIncompleteEntryPoint(t *testing.T) {
+	s, _ := New(t.TempDir())
+	p, _ := resolvedCreate(s, completePlan(), "owner", "digest")
+	now := time.Now().UTC()
+	base := DependentMigration{RequestID: "x", Kind: "fork", ResourceID: "fork", OwnerID: "owner", Audience: "public", State: "planned", CompatibilityWindow: CompatibilityWindow{StartsAt: now, EndsAt: now.Add(time.Hour)}, NextAction: "update remote", Synchronization: []string{"fetch first"}}
+	if _, err := s.AddDependentMigration("source", p.ID, "owner", p.Version, base); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("missing replacement accepted: %v", err)
+	}
+	base.ReplacementRemotes = []ReplacementRemote{{DestinationID: "missing", RemoteURL: "https://example.test/new.git"}}
+	if _, err := s.AddDependentMigration("source", p.ID, "owner", p.Version, base); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("unknown destination accepted: %v", err)
+	}
+}
+
 func TestCollaborationMappingRetainsIntentAndRequiresEveryAuthorApproval(t *testing.T) {
 	store, err := New(t.TempDir())
 	if err != nil {

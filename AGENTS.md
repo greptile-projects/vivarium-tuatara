@@ -3141,5 +3141,14 @@ identities remain evidence and never become implicit current approval. Human dec
 participation through persistence. Blocked and archived mappings reject decisions and can only be superseded
 by a fresh mapping. The mapping ledger grants no destination creation, Git, review, queue,
 session, workspace, issue, task, or independently owned work authority.
+Dependent migrations retain owner-controlled continuity for clones, forks, packages, APIs, dependencies,
+extensions, workflows, documentation links, deployments, and federated followers. Each entry has an explicit
+audience/state, bounded compatibility window, next action, credential-free replacement remote or machine
+mapping, and safe synchronization guidance. The public `dependency-map` projection includes public entries
+only. Redirect/self-mapping loops are rejected; only the named owner can change state, and adoption requires
+evidence. Creation holds both the proposer and named owner's current source-repository participation through
+persistence, and event writes revalidate the retained owner under the same catalog boundary, so access loss
+blocks progress rather than stranding a falsely actionable owner. Unavailable, rejected, stale-credential, and unmigrated consumers remain visible. Optional
+human/agent propagation references point at ordinary task/pull/release work and grant no consumer authority.
 
 Sensitive history remediations at `/repositories/{id}/history-remediations` and the repository
