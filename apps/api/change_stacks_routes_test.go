@@ -7,7 +7,69 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/changestacks"
 )
+
+func TestRestackRewritePreservesAuthorAndAppliesPatchOntoNewParent(t *testing.T) {
+	dir := t.TempDir()
+	run := func(input []byte, args ...string) string {
+		cmd := exec.Command("git", args...)
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=Layer Author", "GIT_AUTHOR_EMAIL=layer@example.test", "GIT_COMMITTER_NAME=Layer Author", "GIT_COMMITTER_EMAIL=layer@example.test")
+		cmd.Stdin = bytes.NewReader(input)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	run(nil, "init", "-q", dir)
+	if err := os.WriteFile(filepath.Join(dir, "base.txt"), []byte("base\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	run(nil, "-C", dir, "add", ".")
+	run(nil, "-C", dir, "commit", "-qm", "base")
+	base := run(nil, "-C", dir, "rev-parse", "HEAD")
+	if err := os.WriteFile(filepath.Join(dir, "layer.txt"), []byte("layer\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	run(nil, "-C", dir, "add", ".")
+	run(nil, "-C", dir, "commit", "-qm", "layer")
+	layer := run(nil, "-C", dir, "rev-parse", "HEAD")
+	run(nil, "-C", dir, "checkout", "-q", "--detach", base)
+	if err := os.WriteFile(filepath.Join(dir, "upstream.txt"), []byte("feedback\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	run(nil, "-C", dir, "add", ".")
+	run(nil, "-C", dir, "commit", "-qm", "feedback")
+	upstream := run(nil, "-C", dir, "rev-parse", "HEAD")
+	candidate, mapping, err := rewriteStackCommits(filepath.Join(dir, ".git"), upstream, []string{layer}, time.Unix(1_700_000_000, 0).UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mapping[layer] != candidate || run(nil, "--git-dir="+filepath.Join(dir, ".git"), "show", "-s", "--format=%P", candidate) != upstream {
+		t.Fatalf("candidate %s mapping %#v", candidate, mapping)
+	}
+	if author := run(nil, "--git-dir="+filepath.Join(dir, ".git"), "show", "-s", "--format=%an <%ae>", candidate); author != "Layer Author <layer@example.test>" {
+		t.Fatalf("author = %q", author)
+	}
+	if got := run(nil, "--git-dir="+filepath.Join(dir, ".git"), "show", candidate+":layer.txt"); got != "layer" {
+		t.Fatalf("layer contents = %q", got)
+	}
+}
+
+func TestRestackBranchIdentityNormalizesDefaultSourceRepository(t *testing.T) {
+	repositoryID := strings.Repeat("a", 32)
+	implicit := normalizedStackBranchKey(repositoryID, changestacks.Member{SourceBranch: "topic"})
+	explicit := normalizedStackBranchKey(repositoryID, changestacks.Member{SourceRepositoryID: repositoryID, SourceBranch: "refs/heads/topic"})
+	if implicit != explicit {
+		t.Fatalf("implicit key %q != explicit key %q", implicit, explicit)
+	}
+	if canonicalStackBranch("refs/heads/topic") != canonicalStackBranch("topic") {
+		t.Fatal("pull and member branch spellings did not canonicalize equally")
+	}
+}
 
 func TestChangeStackCycleRemainsExplicit(t *testing.T) {
 	graph := map[string][]string{"one": {"two"}, "two": {"one"}}

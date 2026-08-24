@@ -1,6 +1,9 @@
 package changestacks
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestStackPersistsOrderedAcceptanceBoundary(t *testing.T) {
 	s, err := New(t.TempDir())
@@ -66,5 +69,79 @@ func TestOwnerAcknowledgementFreezesLayerAndUpstreamRevisions(t *testing.T) {
 	}
 	if _, err = s.Acknowledge("repo", created.ID, "two", "owner", "approved", ""); err != ErrInvalid {
 		t.Fatalf("unsupported decision = %v", err)
+	}
+}
+
+func TestRestackIsRetryStableAndPreservesRevisionLineage(t *testing.T) {
+	s, _ := New(t.TempDir())
+	old := strings.Repeat("1", 40)
+	next := strings.Repeat("2", 40)
+	created, err := s.Create(Stack{RequestID: "stack", RequestDigest: "stack-digest", RepositoryID: "repo", Title: "Outcome", Outcome: "shared", TargetBranch: "main", Members: []Member{{ID: "one", Title: "One", SourceBranch: "one", Revision: old, BaseRevision: strings.Repeat("0", 40), AcceptanceCriteria: []string{"passes"}}}}, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposal := Restack{RequestID: "restack", RequestDigest: "restack-digest", CreatedBy: "alice", Members: []RestackMember{{Member: created.Members[0], ExpectedBranchTip: old, CandidateRevision: next}}}
+	_, first, err := s.ProposeRestack("repo", created.ID, proposal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, retry, err := s.ProposeRestack("repo", created.ID, proposal)
+	if err != nil || retry.ID != first.ID {
+		t.Fatalf("retry = %#v, %v", retry, err)
+	}
+	member := created.Members[0]
+	member.Revision = next
+	updated, _, err := s.ApplyRestack("repo", created.ID, first.ID, "alice", []Member{member})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lineage := updated.RevisionLineage["one"]
+	if len(lineage) != 1 || lineage[0].Revision != old || lineage[0].SucceededBy != next || lineage[0].ChangedBy != "alice" {
+		t.Fatalf("lineage = %#v", lineage)
+	}
+}
+
+func TestApplyRestackRejectsDanglingAndCyclicDependencies(t *testing.T) {
+	s, _ := New(t.TempDir())
+	baseMembers := []Member{{ID: "one", Title: "One", SourceBranch: "one", Revision: strings.Repeat("1", 40), AcceptanceCriteria: []string{"one"}}, {ID: "two", Title: "Two", SourceBranch: "two", Revision: strings.Repeat("2", 40), DependsOn: []string{"one"}, AcceptanceCriteria: []string{"two"}}}
+	created, err := s.Create(Stack{RequestID: "stack-graph", RequestDigest: "stack-graph-digest", RepositoryID: "repo", Title: "Outcome", Outcome: "shared", TargetBranch: "main", Members: baseMembers}, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, proposal, err := s.ProposeRestack("repo", created.ID, Restack{RequestID: "restack-graph", RequestDigest: "restack-graph-digest", CreatedBy: "alice", Members: []RestackMember{{Member: baseMembers[0]}, {Member: baseMembers[1]}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dangling := append([]Member(nil), baseMembers...)
+	dangling[1].DependsOn = []string{"removed"}
+	if _, _, err = s.ApplyRestack("repo", created.ID, proposal.ID, "alice", dangling); err != ErrInvalid {
+		t.Fatalf("dangling dependency = %v", err)
+	}
+	cyclic := append([]Member(nil), baseMembers...)
+	cyclic[0].DependsOn = []string{"two"}
+	if _, _, err = s.ApplyRestack("repo", created.ID, proposal.ID, "alice", cyclic); err != ErrInvalid {
+		t.Fatalf("cyclic dependency = %v", err)
+	}
+}
+
+func TestSequentialDistinctRestackRequestIDsDoNotReconcile(t *testing.T) {
+	s, _ := New(t.TempDir())
+	member := Member{ID: "one", Title: "One", SourceBranch: "one", Revision: strings.Repeat("1", 40), AcceptanceCriteria: []string{"passes"}}
+	created, err := s.Create(Stack{RequestID: "stack-sequential", RequestDigest: "stack-digest", RepositoryID: "repo", Title: "Outcome", Outcome: "shared", TargetBranch: "main", Members: []Member{member}}, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := Restack{RequestID: "removed-reference", RequestDigest: "first-digest", CreatedBy: "alice", Members: []RestackMember{{Member: member}}}
+	second := Restack{RequestID: "cycle-reference", RequestDigest: "second-digest", CreatedBy: "alice", Members: []RestackMember{{Member: member}}}
+	_, one, err := s.ProposeRestack("repo", created.ID, first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, two, err := s.ProposeRestack("repo", created.ID, second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if one.ID == two.ID || one.RequestID == two.RequestID {
+		t.Fatalf("distinct requests reconciled: %#v %#v", one, two)
 	}
 }
