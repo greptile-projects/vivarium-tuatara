@@ -29,26 +29,6 @@ func registerHistoryRemediationRoutes(mux *http.ServeMux, git *storage.Store, ca
 		}
 		return c.UserID
 	}
-	canSee := func(v historyremediations.Remediation, actor string) bool {
-		if v.CreatedBy == actor {
-			return true
-		}
-		for _, ids := range [][]string{v.AudienceIDs, v.OwnerIDs} {
-			for _, id := range ids {
-				if id == actor {
-					return true
-				}
-			}
-		}
-		for _, a := range v.RequiredApprovals {
-			for _, id := range a.ApproverIDs {
-				if id == actor {
-					return true
-				}
-			}
-		}
-		return false
-	}
 	public := func(v historyremediations.Remediation) historyremediations.Remediation {
 		v.RequestDigest = ""
 		return v
@@ -65,7 +45,7 @@ func registerHistoryRemediationRoutes(mux *http.ServeMux, git *storage.Store, ca
 		}
 		out := []historyremediations.Remediation{}
 		for _, v := range xs {
-			if canSee(v, actorID(c)) {
+			if historyRemediationCanSee(v, actorID(c)) {
 				out = append(out, public(v))
 			}
 		}
@@ -77,7 +57,7 @@ func registerHistoryRemediationRoutes(mux *http.ServeMux, git *storage.Store, ca
 			return
 		}
 		v, e := store.Get(r.PathValue("id"), r.PathValue("remediation_id"))
-		if e != nil || !canSee(v, actorID(c)) {
+		if e != nil || !historyRemediationCanSee(v, actorID(c)) {
 			writeAPIError(w, 404, "history_remediation_not_found", "history remediation not found")
 			return
 		}
@@ -104,6 +84,10 @@ func registerHistoryRemediationRoutes(mux *http.ServeMux, git *storage.Store, ca
 		sum := sha256.Sum256(b)
 		digest := hex.EncodeToString(sum[:])
 		if existing, found, reconcileErr := store.Reconcile(in.RepositoryID, in.RequestID, digest); found {
+			if !historyRemediationCanSee(existing, actorID(c)) {
+				writeAPIError(w, 404, "history_remediation_not_found", "history remediation not found")
+				return
+			}
 			writeJSON(w, 200, public(existing))
 			return
 		} else if errors.Is(reconcileErr, historyremediations.ErrConflict) {
@@ -185,6 +169,27 @@ func registerHistoryRemediationRoutes(mux *http.ServeMux, git *storage.Store, ca
 	})
 }
 
+func historyRemediationCanSee(v historyremediations.Remediation, actor string) bool {
+	if v.CreatedBy == actor {
+		return true
+	}
+	for _, ids := range [][]string{v.AudienceIDs, v.OwnerIDs} {
+		for _, id := range ids {
+			if id == actor {
+				return true
+			}
+		}
+	}
+	for _, approval := range v.RequiredApprovals {
+		for _, id := range approval.ApproverIDs {
+			if id == actor {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func historyRemediationSourceExists(v historyremediations.Remediation, findings *securityfindings.Store, incidentStore *incidents.Store, support *supportthreads.Store) bool {
 	switch v.Source.Kind {
 	case "security_finding":
@@ -230,7 +235,8 @@ func historyRemediationScopeExists(scope historyremediations.Scope, git *storage
 		}
 		if scope.Ref != "" {
 			out, refErr := exec.Command("git", "--git-dir="+repo.Path(), "rev-parse", "--verify", scope.Ref).Output()
-			if refErr != nil || strings.TrimSpace(string(out)) == "" {
+			resolved := strings.TrimSpace(string(out))
+			if refErr != nil || resolved != scope.ObjectID || (scope.Revision != "" && resolved != scope.Revision) {
 				return false
 			}
 		}

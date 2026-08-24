@@ -18,6 +18,9 @@ under the catalog's serialized source-participant and affected-repository mainta
 credentials cannot cross repositories. Closed scope kinds resolve Git objects/refs, releases, package artifacts,
 environments, and check artifacts through their authoritative stores, and all caller prose is bounded and
 credential-screened before persistence.
+Idempotent POST reconciliation applies the same record audience predicate as list/detail reads, so knowing a
+request identity and body grants no disclosure. A scoped Git ref must resolve to the exact claimed object and,
+when present, the same declared revision; independently valid Git identifiers cannot be combined.
 
 Propagation campaigns at `/repositories/{id}/propagation-campaigns` and the repository
 `/propagation` workspace freeze an exact source outcome from a merged pull, security repair,

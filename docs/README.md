@@ -16,6 +16,8 @@ environments resolve from their repository stores, packages bind their published
 check artifacts bind `pull/run/artifact` identity plus digest. Repository-bound credentials cannot name another
 repository. Exact retry reconciliation happens before these mutable checks, while new publication holds current
 source participants and affected-repository maintainer access stable through persistence.
+Reconciled POST responses use the same retained audience check as GET projections. Git refs are additionally
+bound to the exact claimed object and optional revision, rather than accepted as an unrelated existing ref.
 
 Discovery evidence retains only its source identity and SHA-256 digest, classification, safe note, and human
 attribution. Matches, false matches, inaccessible resources, legal holds, and conflicting retention or
