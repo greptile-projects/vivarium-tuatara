@@ -166,6 +166,20 @@ func TestPathCollisionCannotBeWaived(t *testing.T) {
 	}
 }
 
+func TestMissingCrossRepositoryLinkCannotBeDispositioned(t *testing.T) {
+	s, _ := New(t.TempDir())
+	p, _ := resolvedCreate(s, completePlan(), "owner", "digest")
+	p, _ = s.AddCandidateSet("source", p.ID, "owner", p.Version, CandidateSet{RequestID: "candidate", Repositories: []CandidateRepository{{ID: "one", DestinationID: "core"}, {ID: "two", DestinationID: "destination-2"}}, Gaps: []CandidateGap{{Kind: "cross_repository_link", ResourceID: "destination-set", State: "missing"}}})
+	_, err := s.DecideCandidateGap("source", p.ID, p.CandidateSets[0].ID, "owner", p.Version, CandidateGapDecision{RequestID: "unsafe", GapKind: "cross_repository_link", ResourceID: "destination-set", Decision: "accept_shared", Rationale: "Attempt to proceed without the required link"})
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("missing link decision = %v", err)
+	}
+	p.CandidateSets[0].GapDecisions = []CandidateGapDecision{{GapKind: "cross_repository_link", ResourceID: "destination-set", Decision: "accept_shared"}}
+	if allCandidateGapsDecided(p.CandidateSets[0]) {
+		t.Fatal("readiness accepted an incompatible retained decision")
+	}
+}
+
 func TestBlockedPublicationCanRestoreSourceWithoutChangingDestination(t *testing.T) {
 	s, _ := New(t.TempDir())
 	p, _ := resolvedCreate(s, completePlan(), "owner", "digest")

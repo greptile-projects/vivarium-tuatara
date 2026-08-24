@@ -235,8 +235,11 @@ attributable, plan-version-bound disposition through
 `POST /repositories/{id}/restructuring-plans/{plan_id}/candidate-sets/{candidate_id}/gap-decisions`. Supported
 dispositions retain an independently controlled resource, recreate it through ordinary destination work, exclude it
 under an explicit owner decision, or accept deliberately shared history. Cutover remains blocked until every retained
-gap has a decision. A path collision cannot be waived because the assembled tree itself is invalid; collaborators must
-correct the mappings and assemble a successor candidate. Read-only agents cannot disposition gaps.
+gap has a compatible decision. Path collisions and missing cross-repository links cannot be waived because the
+assembled material itself is invalid or incomplete; collaborators must correct the mappings or links and assemble a
+successor candidate. `accept_shared` applies only to gaps retained in the `shared` state. Read-only agents cannot
+disposition gaps, and current repository participation is held across the owner check and persistence so revocation
+cannot race an authority-bearing decision.
 
 Active work is proposed separately through a plan's `collaboration-mappings` route. A mapping binds an
 inventoried source resource and exact revision to a branch, pull, issue, proposal, task, decision, check,

@@ -3171,8 +3171,10 @@ general repository, Git, policy, collaboration, release, dependent, or cleanup a
 Candidate gaps remain immutable evidence, but a current affected human owner or the human plan creator can append a
 version-bound `retain_external`, `recreate`, `exclude`, or `accept_shared` disposition with a bounded rationale. A
 complete set of retained dispositions satisfies the cutover decision boundary without relabeling the original
-uncertainty. Path collisions cannot be dispositioned because they describe an invalid materialized tree and require a
-corrected successor candidate. Agent credentials cannot make these decisions.
+uncertainty. Path collisions and missing cross-repository links cannot be dispositioned because they describe invalid
+or incomplete candidate material and require a corrected successor candidate. `accept_shared` applies only to a gap
+retained in the `shared` state. Agent credentials cannot make these decisions, and catalog participation is held from
+the retained-owner check through decision persistence so concurrent revocation wins before or after the whole write.
 The connected `restructuring-journey.spec.ts` browser/API/stock-Git journey extracts shared history from a monorepo
 into independently owned application and component repositories, divides an exact open pull into connected
 contributions, rehearses the complete two-destination matrix, carries human/agent dependent work and an unavailable

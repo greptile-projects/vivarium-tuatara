@@ -362,7 +362,7 @@ func allCandidateGapsDecided(candidate CandidateSet) bool {
 	for _, gap := range candidate.Gaps {
 		decided := false
 		for _, decision := range candidate.GapDecisions {
-			if decision.GapKind == gap.Kind && decision.ResourceID == gap.ResourceID {
+			if decision.GapKind == gap.Kind && decision.ResourceID == gap.ResourceID && validCandidateGapDecision(gap, decision.Decision) {
 				decided = true
 				break
 			}
@@ -372,6 +372,27 @@ func allCandidateGapsDecided(candidate CandidateSet) bool {
 		}
 	}
 	return true
+}
+
+func validCandidateGapDecision(gap CandidateGap, decision string) bool {
+	// These gaps describe incomplete candidate material. A decision cannot
+	// supply the missing link or repair the colliding tree, so a successor
+	// candidate is required.
+	if gap.Kind == "path_collision" || gap.Kind == "cross_repository_link" {
+		return false
+	}
+	switch gap.State {
+	case "shared":
+		return decision == "accept_shared" || decision == "recreate" || decision == "exclude"
+	case "inaccessible":
+		return decision == "retain_external" || decision == "recreate" || decision == "exclude"
+	case "ambiguous", "missing", "blocked", "unknown":
+		return decision == "recreate" || decision == "exclude"
+	case "resolved":
+		return decision == "retain_external" || decision == "recreate" || decision == "exclude"
+	default:
+		return false
+	}
 }
 
 func (s *Store) DecideCandidateGap(repo, id, candidateID, actor string, expected int, in CandidateGapDecision) (Plan, error) {
@@ -412,12 +433,14 @@ func (s *Store) DecideCandidateGap(repo, id, candidateID, actor string, expected
 				break
 			}
 		}
-		allowed := map[string]bool{"retain_external": true, "recreate": true, "exclude": true, "accept_shared": true}
-		if !found || !allowed[in.Decision] || !bounded(in.RequestID, 1, 200) || !bounded(in.Rationale, 1, 1000) {
-			return Plan{}, ErrInvalid
+		var retainedGap CandidateGap
+		for _, gap := range candidate.Gaps {
+			if gap.Kind == in.GapKind && gap.ResourceID == in.ResourceID {
+				retainedGap = gap
+				break
+			}
 		}
-		// A collision describes an invalid materialized tree and cannot be waived.
-		if in.GapKind == "path_collision" {
+		if !found || !validCandidateGapDecision(retainedGap, in.Decision) || !bounded(in.RequestID, 1, 200) || !bounded(in.Rationale, 1, 1000) {
 			return Plan{}, ErrInvalid
 		}
 		in.ActorID, in.CreatedAt = actor, s.now()
