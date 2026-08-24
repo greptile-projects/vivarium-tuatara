@@ -60,6 +60,53 @@ type Member struct {
 	Acknowledgements     []Acknowledgement `json:"owner_acknowledgements,omitempty"`
 }
 
+// RevisionLineage preserves the review identity that preceded an applied
+// restack. Rewritten commits are new Git objects; they do not replace the
+// attributable revision that collaborators originally published.
+type RevisionLineage struct {
+	Revision     string    `json:"revision"`
+	BaseRevision string    `json:"base_revision"`
+	SucceededBy  string    `json:"succeeded_by,omitempty"`
+	RestackID    string    `json:"restack_id"`
+	ChangedBy    string    `json:"changed_by"`
+	ChangedAt    time.Time `json:"changed_at"`
+}
+
+type RestackImpact struct {
+	ReviewsInvalidated int `json:"reviews_invalidated"`
+	ChecksInvalidated  int `json:"checks_invalidated"`
+}
+
+type RestackMember struct {
+	Member                Member            `json:"member"`
+	Action                string            `json:"action"`
+	OldPosition           int               `json:"old_position,omitempty"`
+	OldRevision           string            `json:"old_revision,omitempty"`
+	ExpectedBranchTip     string            `json:"expected_branch_tip,omitempty"`
+	CandidateRevision     string            `json:"candidate_revision,omitempty"`
+	CandidateBase         string            `json:"candidate_base,omitempty"`
+	RewrittenCommits      map[string]string `json:"rewritten_commits,omitempty"`
+	Impact                RestackImpact     `json:"impact"`
+	PublishedBranchUpdate bool              `json:"published_branch_update"`
+	Diagnostics           []Diagnostic      `json:"diagnostics"`
+}
+
+type Restack struct {
+	ID             string          `json:"id"`
+	RequestID      string          `json:"request_id"`
+	RequestDigest  string          `json:"request_digest"`
+	Status         string          `json:"status"`
+	TargetRevision string          `json:"target_revision"`
+	Members        []RestackMember `json:"members"`
+	Removed        []Member        `json:"removed_members,omitempty"`
+	Diagnostics    []Diagnostic    `json:"diagnostics"`
+	CreatedBy      string          `json:"created_by"`
+	CreatedAt      time.Time       `json:"created_at"`
+	AppliedBy      string          `json:"applied_by,omitempty"`
+	AppliedAt      *time.Time      `json:"applied_at,omitempty"`
+	Authority      string          `json:"authority"`
+}
+
 // Acknowledgement is an affected repository owner's decision against one
 // exact layer and the exact upstream stack revisions visible at that time.
 type Acknowledgement struct {
@@ -74,19 +121,21 @@ type Acknowledgement struct {
 }
 
 type Stack struct {
-	ID             string       `json:"id"`
-	RequestID      string       `json:"request_id"`
-	RequestDigest  string       `json:"request_digest,omitempty"`
-	RepositoryID   string       `json:"repository_id"`
-	Title          string       `json:"title"`
-	Outcome        string       `json:"outcome"`
-	TargetBranch   string       `json:"target_branch"`
-	TargetRevision string       `json:"target_revision,omitempty"`
-	Members        []Member     `json:"members"`
-	Diagnostics    []Diagnostic `json:"diagnostics"`
-	CreatedBy      string       `json:"created_by"`
-	CreatedAt      time.Time    `json:"created_at"`
-	Authority      string       `json:"authority"`
+	ID              string                       `json:"id"`
+	RequestID       string                       `json:"request_id"`
+	RequestDigest   string                       `json:"request_digest,omitempty"`
+	RepositoryID    string                       `json:"repository_id"`
+	Title           string                       `json:"title"`
+	Outcome         string                       `json:"outcome"`
+	TargetBranch    string                       `json:"target_branch"`
+	TargetRevision  string                       `json:"target_revision,omitempty"`
+	Members         []Member                     `json:"members"`
+	Diagnostics     []Diagnostic                 `json:"diagnostics"`
+	CreatedBy       string                       `json:"created_by"`
+	CreatedAt       time.Time                    `json:"created_at"`
+	Authority       string                       `json:"authority"`
+	Restacks        []Restack                    `json:"restacks,omitempty"`
+	RevisionLineage map[string][]RevisionLineage `json:"revision_lineage,omitempty"`
 }
 
 type Store struct {
@@ -191,6 +240,86 @@ func (s *Store) list(repo string) ([]Stack, error) {
 	return out, nil
 }
 func (s *Store) Update(v Stack) error { s.mu.Lock(); defer s.mu.Unlock(); return s.write(v) }
+
+// ProposeRestack appends one immutable, caller-stable preview. Git and
+// authorization validation is performed by the public route before this
+// persistence boundary.
+func (s *Store) ProposeRestack(repo, stackID string, proposal Restack) (Stack, Restack, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v, err := s.read(repo, stackID)
+	if err != nil {
+		return Stack{}, Restack{}, err
+	}
+	if proposal.RequestID == "" || proposal.RequestDigest == "" || proposal.CreatedBy == "" || len(proposal.Members) == 0 {
+		return Stack{}, Restack{}, ErrInvalid
+	}
+	for _, existing := range v.Restacks {
+		if existing.RequestID != proposal.RequestID {
+			continue
+		}
+		if existing.RequestDigest != proposal.RequestDigest {
+			return Stack{}, Restack{}, ErrInvalid
+		}
+		return v, existing, nil
+	}
+	proposal.ID = randomID()
+	proposal.Status = "previewed"
+	if proposal.CreatedAt.IsZero() {
+		proposal.CreatedAt = time.Now().UTC()
+	}
+	proposal.Authority = "preview grants no Git or pull authority; apply rechecks every branch, permission, and conflict"
+	v.Restacks = append(v.Restacks, proposal)
+	return v, proposal, s.write(v)
+}
+
+// ApplyRestack records the already-CAS-published result and advances the
+// stack's collaboration projection without discarding its old lineage.
+func (s *Store) ApplyRestack(repo, stackID, restackID, actor string, members []Member) (Stack, Restack, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v, err := s.read(repo, stackID)
+	if err != nil {
+		return Stack{}, Restack{}, err
+	}
+	index := -1
+	for i := range v.Restacks {
+		if v.Restacks[i].ID == restackID {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		return Stack{}, Restack{}, ErrNotFound
+	}
+	r := &v.Restacks[index]
+	if r.Status == "applied" {
+		return v, *r, nil
+	}
+	if r.Status != "previewed" || actor == "" {
+		return Stack{}, Restack{}, ErrInvalid
+	}
+	now := time.Now().UTC()
+	if v.RevisionLineage == nil {
+		v.RevisionLineage = map[string][]RevisionLineage{}
+	}
+	old := map[string]Member{}
+	for _, m := range v.Members {
+		old[m.ID] = m
+	}
+	for i := range members {
+		members[i].Position = i + 1
+		if prior, ok := old[members[i].ID]; ok && prior.Revision != members[i].Revision {
+			v.RevisionLineage[members[i].ID] = append(v.RevisionLineage[members[i].ID], RevisionLineage{Revision: prior.Revision, BaseRevision: prior.BaseRevision, SucceededBy: members[i].Revision, RestackID: r.ID, ChangedBy: actor, ChangedAt: now})
+		}
+	}
+	for _, removed := range r.Removed {
+		v.RevisionLineage[removed.ID] = append(v.RevisionLineage[removed.ID], RevisionLineage{Revision: removed.Revision, BaseRevision: removed.BaseRevision, RestackID: r.ID, ChangedBy: actor, ChangedAt: now})
+	}
+	v.Members = members
+	r.Status, r.AppliedBy, r.AppliedAt = "applied", actor, &now
+	return v, *r, s.write(v)
+}
 func (s *Store) Acknowledge(repo, stackID, memberID, owner, decision, note string) (Stack, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

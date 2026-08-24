@@ -1,6 +1,9 @@
 package changestacks
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestStackPersistsOrderedAcceptanceBoundary(t *testing.T) {
 	s, err := New(t.TempDir())
@@ -66,5 +69,34 @@ func TestOwnerAcknowledgementFreezesLayerAndUpstreamRevisions(t *testing.T) {
 	}
 	if _, err = s.Acknowledge("repo", created.ID, "two", "owner", "approved", ""); err != ErrInvalid {
 		t.Fatalf("unsupported decision = %v", err)
+	}
+}
+
+func TestRestackIsRetryStableAndPreservesRevisionLineage(t *testing.T) {
+	s, _ := New(t.TempDir())
+	old := strings.Repeat("1", 40)
+	next := strings.Repeat("2", 40)
+	created, err := s.Create(Stack{RequestID: "stack", RequestDigest: "stack-digest", RepositoryID: "repo", Title: "Outcome", Outcome: "shared", TargetBranch: "main", Members: []Member{{ID: "one", Title: "One", SourceBranch: "one", Revision: old, BaseRevision: strings.Repeat("0", 40), AcceptanceCriteria: []string{"passes"}}}}, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposal := Restack{RequestID: "restack", RequestDigest: "restack-digest", CreatedBy: "alice", Members: []RestackMember{{Member: created.Members[0], ExpectedBranchTip: old, CandidateRevision: next}}}
+	_, first, err := s.ProposeRestack("repo", created.ID, proposal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, retry, err := s.ProposeRestack("repo", created.ID, proposal)
+	if err != nil || retry.ID != first.ID {
+		t.Fatalf("retry = %#v, %v", retry, err)
+	}
+	member := created.Members[0]
+	member.Revision = next
+	updated, _, err := s.ApplyRestack("repo", created.ID, first.ID, "alice", []Member{member})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lineage := updated.RevisionLineage["one"]
+	if len(lineage) != 1 || lineage[0].Revision != old || lineage[0].SucceededBy != next || lineage[0].ChangedBy != "alice" {
+		t.Fatalf("lineage = %#v", lineage)
 	}
 }

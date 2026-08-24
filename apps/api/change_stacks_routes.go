@@ -449,6 +449,7 @@ func registerChangeStackRoutes(mux *http.ServeMux, git *storage.Store, catalog *
 		}
 		writeJSON(w, 201, project(out, actor, true))
 	})
+	registerChangeStackRestackRoutes(mux, git, catalog, credentials, stacks, pulls, checks)
 }
 
 func appendUniquePath(paths []string, candidate string) []string {
