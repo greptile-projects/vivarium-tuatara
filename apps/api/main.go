@@ -1591,6 +1591,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	if authStore != nil && repositoryCatalog != nil && historyRemediationStore != nil && store != nil && securityFindingStore != nil && incidentStore != nil && supportThreadStore != nil && releaseStore != nil && packageStore != nil && deploymentStore != nil && checkRunStore != nil {
 		registerHistoryRemediationRoutes(mux, store, repositoryCatalog, authStore, historyRemediationStore, securityFindingStore, incidentStore, supportThreadStore, releaseStore, packageStore, deploymentStore, checkRunStore)
 		registerHistoryRewriteRoutes(mux, store, repositoryCatalog, authStore, historyRemediationStore)
+		registerHistoryContainmentRoutes(mux, store, repositoryCatalog, authStore, historyRemediationStore)
 	}
 	if authStore != nil && userStore != nil && repositoryCatalog != nil && apiContractStore != nil && pullRequestStore != nil && releaseStore != nil {
 		registerAPIContractRoutes(mux, store, repositoryCatalog, authStore, apiContractStore, pullRequestStore, releaseStore)
@@ -1778,7 +1779,7 @@ func historyRewritePushPaused(store *historyremediations.Store, remote string) (
 		return true, "push paused: remediation state is unavailable; retry after a maintainer confirms migration"
 	}
 	for _, item := range items {
-		if item.Publication == nil || (item.Publication.State != "publishing" && item.Publication.State != "migration_in_progress") {
+		if item.Publication == nil {
 			continue
 		}
 		for _, system := range item.Publication.PausedSystems {
@@ -5784,6 +5785,12 @@ func runGitService(w http.ResponseWriter, r *http.Request, repo *storage.Reposit
 		// Embargoed repair refs never appear through ordinary clone, fetch, or
 		// push discovery, including to repository owners.
 		args = append([]string{"-c", "transfer.hideRefs=refs/heads/vivarium-security/"}, args...)
+	}
+	if service == uploadPackService {
+		// History quarantine depends on upload-pack refusing direct or merely
+		// reachable SHA wants. Only objects reachable from advertised safe refs
+		// may be served after a rewrite.
+		args = append([]string{"-c", "uploadpack.allowAnySHA1InWant=false", "-c", "uploadpack.allowReachableSHA1InWant=false"}, args...)
 	}
 	var removeHooks func()
 	if service == receivePackService {

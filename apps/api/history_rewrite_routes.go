@@ -261,7 +261,7 @@ func historyPublicationReady(v historyremediations.Remediation, expected int, in
 		}
 	}
 	for _, target := range in.MigrationTargets {
-		if target.ID == "" || target.ResourceID == "" || target.OwnerID == "" || target.Instructions == "" || !map[string]bool{"local_branch": true, "fork": true, "federated_copy": true, "pull_request": true, "integration": true}[target.Kind] {
+		if target.ID == "" || target.ResourceID == "" || target.OwnerID == "" || target.Instructions == "" || target.ReplacementRef == "" || !map[string]bool{"local_branch": true, "fork": true, "federated_copy": true, "pull_request": true, "workspace": true, "integration": true}[target.Kind] {
 			return false
 		}
 	}

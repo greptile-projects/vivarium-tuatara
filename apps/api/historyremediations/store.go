@@ -172,6 +172,8 @@ type MigrationTarget struct {
 	State                   string `json:"state"`
 	Instructions            string `json:"instructions"`
 	AcknowledgedBy          string `json:"acknowledged_by,omitempty"`
+	ReplacementRef          string `json:"replacement_ref"`
+	ReplacementRevision     string `json:"replacement_revision"`
 }
 type Publication struct {
 	ID                 string                `json:"id"`
@@ -185,6 +187,55 @@ type Publication struct {
 	State              string                `json:"state"`
 	PublishedBy        string                `json:"published_by"`
 	PublishedAt        time.Time             `json:"published_at"`
+}
+
+// CompletionPolicy is the closed, retained definition used by every
+// containment pass. A pass may be complete while still honestly reporting
+// bounded residual copies; it may never call those copies erased.
+type CompletionPolicy struct {
+	RequiredKinds  []string `json:"required_kinds"`
+	MinimumPassing int      `json:"minimum_passing"`
+}
+type ContainmentObservation struct {
+	Kind                    string    `json:"kind"`
+	ResourceID              string    `json:"resource_id"`
+	State                   string    `json:"state"`
+	EvidenceSHA256          string    `json:"evidence_sha256"`
+	Summary                 string    `json:"summary"`
+	IndependentlyControlled bool      `json:"independently_controlled,omitempty"`
+	ExceptionExpiresAt      time.Time `json:"exception_expires_at,omitempty"`
+	CheckedAt               time.Time `json:"checked_at"`
+}
+type ContainmentPass struct {
+	ID           string                   `json:"id"`
+	RequestID    string                   `json:"request_id"`
+	Observations []ContainmentObservation `json:"observations"`
+	State        string                   `json:"state"`
+	ErasureClaim bool                     `json:"erasure_claim"`
+	Blockers     []string                 `json:"blockers"`
+	CheckedBy    string                   `json:"checked_by"`
+	CheckedAt    time.Time                `json:"checked_at"`
+}
+type MigrationAction struct {
+	ID                   string    `json:"id"`
+	RequestID            string    `json:"request_id"`
+	Kind                 string    `json:"kind"`
+	ResourceID           string    `json:"resource_id"`
+	Action               string    `json:"action"`
+	ReplacementRevision  string    `json:"replacement_revision"`
+	DiscussionPreserved  bool      `json:"discussion_preserved"`
+	AttributionPreserved bool      `json:"attribution_preserved"`
+	ActorID              string    `json:"actor_id"`
+	CreatedAt            time.Time `json:"created_at"`
+}
+type Restoration struct {
+	ID                string    `json:"id"`
+	RequestID         string    `json:"request_id"`
+	Systems           []string  `json:"systems"`
+	ContainmentPassID string    `json:"containment_pass_id"`
+	State             string    `json:"state"`
+	RestoredBy        string    `json:"restored_by"`
+	RestoredAt        time.Time `json:"restored_at"`
 }
 type Remediation struct {
 	ID                   string                `json:"id"`
@@ -209,6 +260,10 @@ type Remediation struct {
 	RewriteCandidates    []RewriteCandidate    `json:"rewrite_candidates"`
 	PublicationApprovals []PublicationApproval `json:"publication_approvals"`
 	Publication          *Publication          `json:"publication,omitempty"`
+	CompletionPolicy     CompletionPolicy      `json:"completion_policy"`
+	ContainmentPasses    []ContainmentPass     `json:"containment_passes"`
+	MigrationActions     []MigrationAction     `json:"migration_actions"`
+	Restorations         []Restoration         `json:"restorations"`
 }
 
 func (s *Store) ApprovePublication(repo, id string, expected int, role, actor string) (Remediation, error) {
@@ -271,6 +326,9 @@ func New(root string) (*Store, error) {
 	}
 	return &Store{root: root, now: func() time.Time { return time.Now().UTC().Truncate(time.Microsecond) }}, nil
 }
+func defaultCompletionPolicy() CompletionPolicy {
+	return CompletionPolicy{RequiredKinds: []string{"repository_reachability", "object_access", "fork_acknowledgement", "federation_acknowledgement", "package_replacement", "artifact_replacement", "credential_rotation", "deployment", "cache", "recovery_copy"}, MinimumPassing: 10}
+}
 func randomID() string                       { b := make([]byte, 12); _, _ = rand.Read(b); return hex.EncodeToString(b) }
 func (s *Store) path(repo, id string) string { return filepath.Join(s.root, repo, id+".json") }
 func valid(v Remediation) bool {
@@ -330,12 +388,211 @@ func (s *Store) Create(v Remediation, actor, digest string) (Remediation, error)
 	v.Version = 1
 	v.ExposureMap = []ExposureFinding{}
 	v.RewriteCandidates = []RewriteCandidate{}
+	v.CompletionPolicy = defaultCompletionPolicy()
+	v.ContainmentPasses = []ContainmentPass{}
+	v.MigrationActions = []MigrationAction{}
+	v.Restorations = []Restoration{}
 	if err := os.MkdirAll(filepath.Dir(s.path(v.RepositoryID, v.ID)), 0700); err != nil {
 		return Remediation{}, err
 	}
 	b, _ := json.MarshalIndent(v, "", "  ")
 	if err := atomicWrite(s.path(v.RepositoryID, v.ID), b, s.beforeReplace); err != nil {
 		return Remediation{}, err
+	}
+	return v, nil
+}
+
+func validObservation(x ContainmentObservation, now time.Time) bool {
+	kinds := map[string]bool{"repository_reachability": true, "object_access": true, "fork_acknowledgement": true, "federation_acknowledgement": true, "package_replacement": true, "artifact_replacement": true, "credential_rotation": true, "deployment": true, "cache": true, "recovery_copy": true}
+	states := map[string]bool{"passed": true, "failed": true, "unreachable": true, "independently_controlled": true, "retained_legal": true, "reintroduced": true, "exception": true}
+	if !kinds[x.Kind] || x.ResourceID == "" || !states[x.State] || len(x.EvidenceSHA256) != 64 || x.Summary == "" || len(x.Summary) > 500 || strings.ContainsAny(x.Summary, "\r\n") {
+		return false
+	}
+	if x.State == "exception" && (x.ExceptionExpiresAt.IsZero() || !x.ExceptionExpiresAt.After(now) || x.ExceptionExpiresAt.After(now.Add(30*24*time.Hour))) {
+		return false
+	}
+	return true
+}
+
+// RecordContainmentPass appends an immutable current-evidence pass. Only a
+// pass covering every policy kind can permit restoration. Residual states stay
+// visible and ErasureClaim is always false by construction.
+func (s *Store) RecordContainmentPass(repo, id string, expected int, in ContainmentPass, actor string) (Remediation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	b, err := os.ReadFile(s.path(repo, id))
+	if os.IsNotExist(err) {
+		return Remediation{}, ErrNotFound
+	}
+	if err != nil {
+		return Remediation{}, err
+	}
+	var v Remediation
+	if err = json.Unmarshal(b, &v); err != nil {
+		return Remediation{}, err
+	}
+	if len(v.CompletionPolicy.RequiredKinds) == 0 {
+		v.CompletionPolicy = defaultCompletionPolicy()
+	}
+	for _, x := range v.ContainmentPasses {
+		if x.RequestID == in.RequestID {
+			return v, nil
+		}
+	}
+	if v.Publication == nil || v.Publication.State == "publishing" || expected != v.Version || in.RequestID == "" {
+		return Remediation{}, ErrVersionConflict
+	}
+	now := s.now()
+	covered := map[string]bool{}
+	blockers := []string{}
+	passing := 0
+	for i := range in.Observations {
+		x := &in.Observations[i]
+		if !validObservation(*x, now) || covered[x.Kind] {
+			return Remediation{}, ErrInvalid
+		}
+		covered[x.Kind] = true
+		x.CheckedAt = now
+		if x.State == "passed" {
+			passing++
+		} else if x.State != "exception" {
+			blockers = append(blockers, x.Kind+":"+x.State)
+		}
+	}
+	for _, kind := range v.CompletionPolicy.RequiredKinds {
+		if !covered[kind] {
+			blockers = append(blockers, kind+":missing")
+		}
+	}
+	in.ID = randomID()
+	in.CheckedBy = actor
+	in.CheckedAt = now
+	in.ErasureClaim = false
+	in.Blockers = blockers
+	in.State = "blocked"
+	if len(blockers) == 0 && passing >= v.CompletionPolicy.MinimumPassing {
+		in.State = "passing"
+	}
+	v.ContainmentPasses = append(v.ContainmentPasses, in)
+	if in.State == "blocked" {
+		v.Publication.State = "migration_in_progress"
+		paused := false
+		for _, system := range v.Publication.PausedSystems {
+			paused = paused || system == "pushes"
+		}
+		if !paused {
+			v.Publication.PausedSystems = append(v.Publication.PausedSystems, "pushes")
+		}
+	}
+	v.Version++
+	out, _ := json.MarshalIndent(v, "", "  ")
+	if err = atomicWrite(s.path(repo, id), out, s.beforeReplace); err != nil {
+		return Remediation{}, err
+	}
+	return v, nil
+}
+
+func (s *Store) RecordMigration(repo, id string, expected int, in MigrationAction, actor string) (Remediation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	b, e := os.ReadFile(s.path(repo, id))
+	if os.IsNotExist(e) {
+		return Remediation{}, ErrNotFound
+	}
+	if e != nil {
+		return Remediation{}, e
+	}
+	var v Remediation
+	if e = json.Unmarshal(b, &v); e != nil {
+		return Remediation{}, e
+	}
+	for _, x := range v.MigrationActions {
+		if x.RequestID == in.RequestID {
+			return v, nil
+		}
+	}
+	if expected != v.Version || v.Publication == nil || in.RequestID == "" || !map[string]bool{"pull_request": true, "workspace": true}[in.Kind] || !map[string]bool{"migrated": true, "closed": true}[in.Action] || !migrationTargetMatches(v, in) || !in.DiscussionPreserved || !in.AttributionPreserved {
+		return Remediation{}, ErrInvalid
+	}
+	in.ID = randomID()
+	in.ActorID = actor
+	in.CreatedAt = s.now()
+	v.MigrationActions = append(v.MigrationActions, in)
+	v.Version++
+	out, _ := json.MarshalIndent(v, "", "  ")
+	if e = atomicWrite(s.path(repo, id), out, s.beforeReplace); e != nil {
+		return Remediation{}, e
+	}
+	return v, nil
+}
+
+func migrationTargetMatches(v Remediation, action MigrationAction) bool {
+	if v.Publication == nil || len(action.ReplacementRevision) != 40 {
+		return false
+	}
+	for _, target := range v.Publication.MigrationTargets {
+		if target.Kind == action.Kind && target.ResourceID == action.ResourceID && target.ReplacementRevision == action.ReplacementRevision {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Store) Restore(repo, id string, expected int, in Restoration, actor string) (Remediation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	b, e := os.ReadFile(s.path(repo, id))
+	if os.IsNotExist(e) {
+		return Remediation{}, ErrNotFound
+	}
+	if e != nil {
+		return Remediation{}, e
+	}
+	var v Remediation
+	if e = json.Unmarshal(b, &v); e != nil {
+		return Remediation{}, e
+	}
+	for _, x := range v.Restorations {
+		if x.RequestID == in.RequestID {
+			return v, nil
+		}
+	}
+	if expected != v.Version || v.Publication == nil || in.RequestID == "" || len(in.Systems) == 0 {
+		return Remediation{}, ErrInvalid
+	}
+	var pass *ContainmentPass
+	for i := range v.ContainmentPasses {
+		if v.ContainmentPasses[i].ID == in.ContainmentPassID {
+			pass = &v.ContainmentPasses[i]
+		}
+	}
+	if pass == nil || pass.State != "passing" || pass.ID != v.ContainmentPasses[len(v.ContainmentPasses)-1].ID {
+		return Remediation{}, ErrConflict
+	}
+	seen := map[string]bool{}
+	for _, x := range in.Systems {
+		if seen[x] || !map[string]bool{"pushes": true, "automation": true, "releases": true, "contributions": true}[x] {
+			return Remediation{}, ErrInvalid
+		}
+		seen[x] = true
+	}
+	in.ID = randomID()
+	in.State = "restored"
+	in.RestoredBy = actor
+	in.RestoredAt = s.now()
+	v.Restorations = append(v.Restorations, in)
+	if seen["pushes"] {
+		v.Publication.PausedSystems = []string{}
+	}
+	if len(v.Publication.PausedSystems) == 0 {
+		v.Publication.State = "contained_with_residuals"
+	} else {
+		v.Publication.State = "migration_in_progress"
+	}
+	v.Version++
+	out, _ := json.MarshalIndent(v, "", "  ")
+	if e = atomicWrite(s.path(repo, id), out, s.beforeReplace); e != nil {
+		return Remediation{}, e
 	}
 	return v, nil
 }
@@ -541,9 +798,11 @@ func (s *Store) ReservePublication(repo, id string, expected int, in Publication
 		a.Approvals, z.Approvals = nil, nil
 		for i := range a.MigrationTargets {
 			a.MigrationTargets[i].State, a.MigrationTargets[i].AcknowledgedBy = "", ""
+			a.MigrationTargets[i].ReplacementRevision = ""
 		}
 		for i := range z.MigrationTargets {
 			z.MigrationTargets[i].State, z.MigrationTargets[i].AcknowledgedBy = "", ""
+			z.MigrationTargets[i].ReplacementRevision = ""
 		}
 		ab, _ := json.Marshal(a)
 		zb, _ := json.Marshal(z)
@@ -595,9 +854,26 @@ func (s *Store) ReservePublication(repo, id string, expected int, in Publication
 			return Remediation{}, ErrInvalid
 		}
 	}
+	migrationResources := map[string]bool{}
 	for i := range in.MigrationTargets {
 		t := &in.MigrationTargets[i]
-		if t.ID == "" || t.ResourceID == "" || t.OwnerID == "" || t.Instructions == "" || !map[string]bool{"local_branch": true, "fork": true, "federated_copy": true, "pull_request": true, "integration": true}[t.Kind] {
+		resourceKey := t.Kind + "\x00" + t.ResourceID
+		if t.ID == "" || t.ResourceID == "" || migrationResources[resourceKey] || t.OwnerID == "" || t.Instructions == "" || !map[string]bool{"local_branch": true, "fork": true, "federated_copy": true, "pull_request": true, "workspace": true, "integration": true}[t.Kind] {
+			return Remediation{}, ErrInvalid
+		}
+		migrationResources[resourceKey] = true
+		t.ReplacementRevision = ""
+		for _, candidate := range v.RewriteCandidates {
+			if candidate.ID != in.CandidateID {
+				continue
+			}
+			for _, ref := range candidate.CandidateRefs {
+				if ref.Name == t.ReplacementRef {
+					t.ReplacementRevision = ref.NewTip
+				}
+			}
+		}
+		if t.ReplacementRevision == "" {
 			return Remediation{}, ErrInvalid
 		}
 		if t.IndependentlyControlled {

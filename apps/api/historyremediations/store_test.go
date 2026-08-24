@@ -1,6 +1,7 @@
 package historyremediations
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -184,7 +185,7 @@ func TestRewriteCandidateAndRehearsalAreCASVersionedAndRetryStable(t *testing.T)
 	if err != nil || approved.Version != 4 {
 		t.Fatalf("approval = %#v, %v", approved.PublicationApprovals, err)
 	}
-	publication := Publication{RequestID: "publish-1", CandidateID: finished.RewriteCandidates[0].ID, PausedSystems: []string{"pushes"}, MigrationTargets: []MigrationTarget{{ID: "fork-1", Kind: "fork", ResourceID: "fork-repo", RepositoryID: "consumer", OwnerID: "consumer-owner", IndependentlyControlled: true, Instructions: "fetch replacement refs and rewrite the fork under consumer authority"}}}
+	publication := Publication{RequestID: "publish-1", CandidateID: finished.RewriteCandidates[0].ID, PausedSystems: []string{"pushes"}, MigrationTargets: []MigrationTarget{{ID: "fork-1", Kind: "fork", ResourceID: "fork-repo", RepositoryID: "consumer", OwnerID: "consumer-owner", IndependentlyControlled: true, ReplacementRef: "refs/heads/main", Instructions: "fetch replacement refs and rewrite the fork under consumer authority"}}}
 	unsupported := publication
 	unsupported.RequestID = "unsupported-pause"
 	unsupported.PausedSystems = []string{"pushes", "queues"}
@@ -194,6 +195,9 @@ func TestRewriteCandidateAndRehearsalAreCASVersionedAndRetryStable(t *testing.T)
 	reserved, err := s.ReservePublication("repo", created.ID, 4, publication, "maintainer")
 	if err != nil || reserved.Version != 5 || reserved.Publication.State != "publishing" || reserved.Publication.MigrationTargets[0].State != "awaiting_owner" {
 		t.Fatalf("reservation = %#v, %v", reserved.Publication, err)
+	}
+	if reserved.Publication.MigrationTargets[0].ReplacementRevision != strings.Repeat("b", 40) {
+		t.Fatalf("server-derived target replacement = %#v", reserved.Publication.MigrationTargets[0])
 	}
 	published, err := s.CompletePublication("repo", created.ID, "publish-1", finished.RewriteCandidates[0].ID)
 	if err != nil || published.Version != 6 || published.Publication.State != "migration_in_progress" || published.Publication.MigrationTargets[0].State != "awaiting_owner" {
@@ -205,5 +209,90 @@ func TestRewriteCandidateAndRehearsalAreCASVersionedAndRetryStable(t *testing.T)
 	retry, err = s.ReservePublication("repo", created.ID, 4, publication, "maintainer")
 	if err != nil || retry.Version != 6 {
 		t.Fatalf("publication retry = %#v, %v", retry.Publication, err)
+	}
+}
+
+func TestContainmentPassKeepsResidualsVisibleAndGatesScopedRestoration(t *testing.T) {
+	s, _ := New(t.TempDir())
+	created, _ := s.Create(fixture(), "maintainer", "digest")
+	// Seed the already-governed publication boundary; publication behavior is
+	// covered above and this test focuses on its successor milestone.
+	created.Publication = &Publication{ID: "publication", CandidateID: "candidate", State: "migration_in_progress", PausedSystems: []string{"pushes"}, QuarantinedObjects: []string{"blob-1"}}
+	b, _ := json.MarshalIndent(created, "", "  ")
+	if err := atomicWrite(s.path("repo", created.ID), b, nil); err != nil {
+		t.Fatal(err)
+	}
+	kinds := created.CompletionPolicy.RequiredKinds
+	pass := ContainmentPass{RequestID: "pass-1"}
+	for _, kind := range kinds {
+		state := "passed"
+		if kind == "recovery_copy" {
+			state = "retained_legal"
+		}
+		pass.Observations = append(pass.Observations, ContainmentObservation{Kind: kind, ResourceID: kind + "-1", State: state, EvidenceSHA256: strings.Repeat("d", 64), Summary: "current authoritative evidence"})
+	}
+	blocked, err := s.RecordContainmentPass("repo", created.ID, 1, pass, "security")
+	if err != nil || blocked.ContainmentPasses[0].State != "blocked" || blocked.ContainmentPasses[0].ErasureClaim || len(blocked.ContainmentPasses[0].Blockers) != 1 {
+		t.Fatalf("blocked pass = %#v, %v", blocked.ContainmentPasses, err)
+	}
+	if _, err = s.Restore("repo", created.ID, 2, Restoration{RequestID: "restore-early", ContainmentPassID: blocked.ContainmentPasses[0].ID, Systems: []string{"pushes"}}, "security"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("unsafe restoration = %v", err)
+	}
+	pass.RequestID = "pass-2"
+	for i := range pass.Observations {
+		pass.Observations[i].State = "passed"
+	}
+	passing, err := s.RecordContainmentPass("repo", created.ID, 2, pass, "security")
+	if err != nil || passing.ContainmentPasses[1].State != "passing" {
+		t.Fatalf("passing = %#v, %v", passing.ContainmentPasses, err)
+	}
+	partial, err := s.Restore("repo", created.ID, 3, Restoration{RequestID: "restore-contributions", ContainmentPassID: passing.ContainmentPasses[1].ID, Systems: []string{"contributions"}}, "security")
+	if err != nil || partial.Publication.State != "migration_in_progress" || len(partial.Publication.PausedSystems) != 1 {
+		t.Fatalf("partial restore disabled push containment = %#v, %v", partial.Publication, err)
+	}
+	restored, err := s.Restore("repo", created.ID, 4, Restoration{RequestID: "restore", ContainmentPassID: passing.ContainmentPasses[1].ID, Systems: []string{"pushes"}}, "security")
+	if err != nil || restored.Publication.State != "contained_with_residuals" || len(restored.Publication.PausedSystems) != 0 {
+		t.Fatalf("restore = %#v, %v", restored.Publication, err)
+	}
+	pass.RequestID = "pass-reintroduced"
+	pass.Observations[0].State = "reintroduced"
+	recontained, err := s.RecordContainmentPass("repo", created.ID, 5, pass, "security")
+	if err != nil || recontained.Publication.State != "migration_in_progress" || len(recontained.Publication.PausedSystems) != 1 {
+		t.Fatalf("reintroduced history was not re-contained = %#v, %v", recontained.Publication, err)
+	}
+}
+
+func TestMigrationRequiresExactReplacementAndPreservedContext(t *testing.T) {
+	s, _ := New(t.TempDir())
+	v, _ := s.Create(fixture(), "maintainer", "digest")
+	v.RewriteCandidates = []RewriteCandidate{{ID: "candidate", CandidateRefs: []CandidateRef{{NewTip: strings.Repeat("e", 40)}}, CommitMap: []CommitMapping{{NewCommitID: strings.Repeat("f", 40)}}}}
+	v.Publication = &Publication{ID: "publication", CandidateID: "candidate", State: "migration_in_progress", MigrationTargets: []MigrationTarget{{ID: "pull-target", Kind: "pull_request", ResourceID: "pull-1", ReplacementRef: "refs/heads/main", ReplacementRevision: strings.Repeat("e", 40)}}}
+	b, _ := json.Marshal(v)
+	_ = atomicWrite(s.path("repo", v.ID), b, nil)
+	a := MigrationAction{RequestID: "migration", Kind: "pull_request", ResourceID: "pull-1", Action: "migrated", ReplacementRevision: strings.Repeat("e", 40), DiscussionPreserved: true, AttributionPreserved: true}
+	got, err := s.RecordMigration("repo", v.ID, 1, a, "security")
+	if err != nil || len(got.MigrationActions) != 1 {
+		t.Fatalf("migration = %#v, %v", got.MigrationActions, err)
+	}
+	unrelated := a
+	unrelated.RequestID = "unrelated"
+	unrelated.ReplacementRevision = strings.Repeat("a", 40)
+	if _, err = s.RecordMigration("repo", v.ID, 2, unrelated, "security"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("unrelated replacement = %v", err)
+	}
+	crossMapped := a
+	crossMapped.RequestID = "cross-mapped"
+	crossMapped.ResourceID = "pull-release"
+	v2, _ := s.Get("repo", v.ID)
+	v2.Publication.MigrationTargets = append(v2.Publication.MigrationTargets, MigrationTarget{ID: "release-target", Kind: "pull_request", ResourceID: "pull-release", ReplacementRef: "refs/heads/release", ReplacementRevision: strings.Repeat("f", 40)})
+	b, _ = json.Marshal(v2)
+	_ = atomicWrite(s.path("repo", v.ID), b, nil)
+	if _, err = s.RecordMigration("repo", v.ID, 2, crossMapped, "security"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("cross-mapped replacement = %v", err)
+	}
+	a.RequestID = "unsafe"
+	a.AttributionPreserved = false
+	if _, err = s.RecordMigration("repo", v.ID, 2, a, "security"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("lost attribution = %v", err)
 	}
 }
