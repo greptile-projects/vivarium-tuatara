@@ -58,6 +58,120 @@ func TestDependentMigrationKeepsFailuresVisibleAndOwnerControlled(t *testing.T) 
 	}
 }
 
+func TestCutoverRequiresApprovalAndLatestPassingTopologyEvidence(t *testing.T) {
+	s, _ := New(t.TempDir())
+	p, _ := resolvedCreate(s, completePlan(), "owner", "digest")
+	c := CandidateSet{RequestID: "candidate", Repositories: []CandidateRepository{{ID: "bare", DestinationID: "core", Tip: "0123456789012345678901234567890123456789"}}}
+	p, _ = s.AddCandidateSet("source", p.ID, "owner", p.Version, c)
+	candidateID := p.CandidateSets[0].ID
+	p, _ = s.AddRehearsal("source", p.ID, candidateID, "owner", p.Version, Rehearsal{RequestID: "rehearsal", State: "passed"})
+	p, err := s.StartCutover("source", p.ID, "owner", p.Version, Cutover{RequestID: "cutover", CandidateID: candidateID, PauseKinds: []string{"git", "collaboration"}, CleanupPolicy: "archive"})
+	if err != nil || p.Cutover.State != "awaiting_approval" {
+		t.Fatalf("start = %#v, %v", p.Cutover, err)
+	}
+	published := false
+	if _, err = s.ActivateCutoverWith("source", p.ID, "owner", p.Version, map[string]string{"core": "destination"}, func() error { published = true; return nil }); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("unapproved activation = %v", err)
+	}
+	if published {
+		t.Fatal("publication ran before activation authorization")
+	}
+	p, err = s.ApproveCutover("source", p.ID, "owner", p.Version, CutoverApproval{RequestID: "approval", DestinationID: "core", Decision: "approve"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err = s.ActivateCutover("source", p.ID, "owner", p.Version, map[string]string{"core": "destination"})
+	if err != nil || p.Cutover.SourceState != "writes_paused" {
+		t.Fatalf("activate = %#v, %v", p.Cutover, err)
+	}
+	kinds := []string{"build", "release", "permission", "link", "consumer", "contribution", "git_traffic"}
+	for i, k := range kinds {
+		state := "passed"
+		if k == "git_traffic" {
+			state = "residual"
+		}
+		p, err = s.ObserveCutover("source", p.ID, "owner", p.Version, CutoverObservation{RequestID: fmt.Sprintf("o-%d", i), Kind: k, ResourceID: "core", State: state, Evidence: "sha256:bounded"})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err = s.FinishCutover("source", p.ID, "owner", p.Version, false); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("residual traffic cleanup = %v", err)
+	}
+	p, err = s.ObserveCutover("source", p.ID, "owner", p.Version, CutoverObservation{RequestID: "traffic-recovered", Kind: "git_traffic", ResourceID: "core", State: "passed", Evidence: "zero writes during observation"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err = s.FinishCutover("source", p.ID, "owner", p.Version, false)
+	if err != nil || p.Cutover.State != "completed" || p.Cutover.SourceState != "archive" {
+		t.Fatalf("finish = %#v, %v", p.Cutover, err)
+	}
+}
+
+func TestCutoverRollbackRestoresSourceAuthority(t *testing.T) {
+	s, _ := New(t.TempDir())
+	p, _ := resolvedCreate(s, completePlan(), "owner", "digest")
+	p, _ = s.AddCandidateSet("source", p.ID, "owner", p.Version, CandidateSet{RequestID: "c", Repositories: []CandidateRepository{{ID: "bare", DestinationID: "core", Tip: strings.Repeat("a", 40)}}})
+	p, _ = s.AddRehearsal("source", p.ID, p.CandidateSets[0].ID, "owner", p.Version, Rehearsal{RequestID: "r", State: "passed"})
+	p, _ = s.StartCutover("source", p.ID, "owner", p.Version, Cutover{RequestID: "x", CandidateID: p.CandidateSets[0].ID, PauseKinds: []string{"git"}, CleanupPolicy: "read_only"})
+	p, _ = s.ApproveCutover("source", p.ID, "owner", p.Version, CutoverApproval{RequestID: "a", DestinationID: "core", Decision: "approve"})
+	p, _ = s.ActivateCutover("source", p.ID, "owner", p.Version, map[string]string{"core": "destination"})
+	p, err := s.FinishCutover("source", p.ID, "owner", p.Version, true)
+	if err != nil || p.Cutover.State != "rolled_back" || p.Cutover.SourceState != "active" {
+		t.Fatalf("rollback=%#v, %v", p.Cutover, err)
+	}
+}
+
+func TestCutoverPublicationFailurePausesSourceAndReconcilesRetry(t *testing.T) {
+	s, _ := New(t.TempDir())
+	p, _ := resolvedCreate(s, completePlan(), "owner", "digest")
+	p, _ = s.AddCandidateSet("source", p.ID, "owner", p.Version, CandidateSet{RequestID: "c", Repositories: []CandidateRepository{{ID: "bare", DestinationID: "core", Tip: strings.Repeat("a", 40)}}})
+	p, _ = s.AddRehearsal("source", p.ID, p.CandidateSets[0].ID, "owner", p.Version, Rehearsal{RequestID: "r", State: "passed"})
+	p, _ = s.StartCutover("source", p.ID, "owner", p.Version, Cutover{RequestID: "x", CandidateID: p.CandidateSets[0].ID, PauseKinds: []string{"git"}, CleanupPolicy: "archive"})
+	p, _ = s.ApproveCutover("source", p.ID, "owner", p.Version, CutoverApproval{RequestID: "a", DestinationID: "core", Decision: "approve"})
+	p, err := s.ActivateCutoverWith("source", p.ID, "owner", p.Version, map[string]string{"core": "destination"}, func() error { return errors.New("compensation failed") })
+	if err == nil || p.Cutover.State != "publication_blocked" || p.Cutover.SourceState != "writes_paused" || len(p.Cutover.Blockers) == 0 {
+		t.Fatalf("failed publication = %#v, %v", p.Cutover, err)
+	}
+	p, err = s.ActivateCutoverWith("source", p.ID, "owner", p.Version, map[string]string{"core": "destination"}, func() error { return nil })
+	if err != nil || p.Cutover.State != "active" || p.Cutover.SourceState != "writes_paused" {
+		t.Fatalf("reconciled publication = %#v, %v", p.Cutover, err)
+	}
+}
+
+func TestBlockedPublicationCanRestoreSourceWithoutChangingDestination(t *testing.T) {
+	s, _ := New(t.TempDir())
+	p, _ := resolvedCreate(s, completePlan(), "owner", "digest")
+	p, _ = s.AddCandidateSet("source", p.ID, "owner", p.Version, CandidateSet{RequestID: "c", Repositories: []CandidateRepository{{ID: "bare", DestinationID: "core", Tip: strings.Repeat("a", 40)}}})
+	p, _ = s.AddRehearsal("source", p.ID, p.CandidateSets[0].ID, "owner", p.Version, Rehearsal{RequestID: "r", State: "passed"})
+	p, _ = s.StartCutover("source", p.ID, "owner", p.Version, Cutover{RequestID: "x", CandidateID: p.CandidateSets[0].ID, PauseKinds: []string{"git"}, CleanupPolicy: "archive"})
+	p, _ = s.ApproveCutover("source", p.ID, "owner", p.Version, CutoverApproval{RequestID: "a", DestinationID: "core", Decision: "approve"})
+	p, _ = s.ActivateCutoverWith("source", p.ID, "owner", p.Version, map[string]string{"core": "destination"}, func() error { return errors.New("destination ref changed during compensation") })
+	p, err := s.FinishCutover("source", p.ID, "owner", p.Version, true)
+	if err != nil || p.Cutover.State != "rolled_back" || p.Cutover.SourceState != "active" || p.Cutover.Destinations[0].State != "independently_changed" {
+		t.Fatalf("blocked rollback = %#v, %v", p.Cutover, err)
+	}
+}
+
+func TestCutoverCompletionRequiresEveryDestinationEvidenceMatrix(t *testing.T) {
+	s, _ := New(t.TempDir())
+	p, _ := resolvedCreate(s, validPlanForTest(strings.Repeat("0", 40)), "owner", "digest")
+	repositories := []CandidateRepository{{ID: "core-bare", DestinationID: "core", Tip: strings.Repeat("a", 40)}, {ID: "two-bare", DestinationID: "destination-2", Tip: strings.Repeat("b", 40)}}
+	p, _ = s.AddCandidateSet("source", p.ID, "owner", p.Version, CandidateSet{RequestID: "candidate", Repositories: repositories})
+	p, _ = s.AddRehearsal("source", p.ID, p.CandidateSets[0].ID, "owner", p.Version, Rehearsal{RequestID: "rehearsal", State: "passed"})
+	p, _ = s.StartCutover("source", p.ID, "owner", p.Version, Cutover{RequestID: "cutover", CandidateID: p.CandidateSets[0].ID, PauseKinds: []string{"git"}, CleanupPolicy: "archive"})
+	for _, destination := range []string{"core", "destination-2"} {
+		p, _ = s.ApproveCutover("source", p.ID, "owner", p.Version, CutoverApproval{RequestID: "approve-" + destination, DestinationID: destination, Decision: "approve"})
+	}
+	p, _ = s.ActivateCutover("source", p.ID, "owner", p.Version, map[string]string{"core": "core-repo", "destination-2": "two-repo"})
+	for i, kind := range []string{"build", "release", "permission", "link", "consumer", "contribution", "git_traffic"} {
+		p, _ = s.ObserveCutover("source", p.ID, "owner", p.Version, CutoverObservation{RequestID: fmt.Sprintf("core-%d", i), Kind: kind, ResourceID: "core", State: "passed", Evidence: "passing core evidence"})
+	}
+	if _, err := s.FinishCutover("source", p.ID, "owner", p.Version, false); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("missing second-destination evidence = %v", err)
+	}
+}
+
 func TestDependentMigrationRejectsUnsafeOrIncompleteEntryPoint(t *testing.T) {
 	s, _ := New(t.TempDir())
 	p, _ := resolvedCreate(s, completePlan(), "owner", "digest")
