@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/federation"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/issues"
@@ -94,6 +96,16 @@ func TestRestructuringRehearsalRequiresBoundedPerDestinationMatrix(t *testing.T)
 	}
 	if _, err := runRestructuringRehearsal(nil, restructuringplans.Plan{}, candidate, restructuringplans.Rehearsal{RequestID: "over-budget", Scenarios: scenarios[:len(restructuringScenarioKinds)]}); err == nil || !strings.Contains(err.Error(), "aggregate") {
 		t.Fatalf("over-budget matrix = %v", err)
+	}
+}
+
+func TestRestructuringRehearsalSetupHonorsScenarioDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	_, err := restructuringRehearsalSetup(ctx, "sh", "-c", "sleep 2")
+	if err == nil || time.Since(started) > time.Second {
+		t.Fatalf("setup cancellation = %v after %s", err, time.Since(started))
 	}
 }
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -16,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
@@ -351,6 +353,26 @@ func pathComponents(path string) int {
 
 var restructuringScenarioKinds = []string{"repository_integrity", "clone", "fetch", "push", "build", "check", "package_resolution", "api_resolution", "documentation", "workspace", "consumer_journey"}
 
+func restructuringRehearsalSetup(ctx context.Context, args ...string) ([]byte, error) {
+	cmd := exec.Command(args[0], args[1:]...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	var output bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &output, &output
+	if err := cmd.Start(); err != nil {
+		return output.Bytes(), err
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		return output.Bytes(), err
+	case <-ctx.Done():
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		<-done
+		return output.Bytes(), ctx.Err()
+	}
+}
+
 func runRestructuringRehearsal(plans *restructuringplans.Store, plan restructuringplans.Plan, candidate restructuringplans.CandidateSet, in restructuringplans.Rehearsal) (restructuringplans.Rehearsal, error) {
 	requiredCount := len(restructuringScenarioKinds) * len(candidate.Repositories)
 	if strings.TrimSpace(in.RequestID) == "" || len(candidate.Repositories) == 0 || len(in.Scenarios) != requiredCount {
@@ -407,22 +429,34 @@ func runRestructuringRehearsal(plans *restructuringplans.Store, plan restructuri
 			return in, errors.New("aggregate rehearsal execution deadline exceeded")
 		}
 		ctx, cancel := context.WithTimeout(overall, time.Duration(s.TimeoutSeconds)*time.Second)
-		tmp, _ := os.MkdirTemp("", "restructuring-rehearsal-*")
+		tmp, tempErr := os.MkdirTemp("", "restructuring-rehearsal-*")
+		if tempErr != nil {
+			cancel()
+			return in, tempErr
+		}
 		var cmd *exec.Cmd
 		container := ""
+		var setupOutput []byte
+		var setupErr error
+		setup := func(args ...string) {
+			if setupErr != nil {
+				return
+			}
+			setupOutput, setupErr = restructuringRehearsalSetup(ctx, args...)
+		}
 		switch s.Kind {
 		case "repository_integrity":
 			cmd = exec.CommandContext(ctx, "git", "--git-dir="+repoPath, "fsck", "--full")
 		case "clone":
 			cmd = exec.CommandContext(ctx, "git", "clone", "--no-local", repoPath, filepath.Join(tmp, "clone"))
 		case "fetch":
-			_ = exec.Command("git", "init", "--bare", filepath.Join(tmp, "fetch.git")).Run()
+			setup("git", "init", "--bare", filepath.Join(tmp, "fetch.git"))
 			cmd = exec.CommandContext(ctx, "git", "--git-dir="+filepath.Join(tmp, "fetch.git"), "fetch", repoPath, "+refs/heads/*:refs/heads/*")
 		case "push":
 			sandbox := filepath.Join(tmp, "push.git")
-			_ = exec.Command("git", "clone", "-q", "--bare", "--no-local", repoPath, sandbox).Run()
+			setup("git", "clone", "-q", "--bare", "--no-local", repoPath, sandbox)
 			work := filepath.Join(tmp, "push-work")
-			_ = exec.Command("git", "clone", "-q", "--no-local", sandbox, work).Run()
+			setup("git", "clone", "-q", "--no-local", sandbox, work)
 			cmd = exec.CommandContext(ctx, "git", "-C", work, "push", "origin", "HEAD:refs/heads/rehearsal-push")
 		default:
 			if strings.TrimSpace(s.Command) == "" {
@@ -436,14 +470,19 @@ func runRestructuringRehearsal(plans *restructuringplans.Store, plan restructuri
 				continue
 			}
 			work := filepath.Join(tmp, "work")
-			_ = exec.Command("git", "clone", "-q", "--no-local", repoPath, work).Run()
+			setup("git", "clone", "-q", "--no-local", repoPath, work)
 			container = fmt.Sprintf("vivarium-restructuring-%d-%d", os.Getpid(), i)
 			cmd = exec.CommandContext(ctx, "docker", "run", "--name", container, "--rm", "--pull=never", "--network=none", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=128", "--memory=512m", "--cpus=1", "--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()), "--mount", "type=bind,src="+work+",dst=/workspace,readonly", "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=64m,mode=1777", "--workdir", "/workspace", "--env", "HOME=/tmp", s.Image, "sh", "-c", s.Command)
 		}
-		b, e := cmd.CombinedOutput()
+		b, e := setupOutput, setupErr
+		if e == nil {
+			b, e = cmd.CombinedOutput()
+		}
 		cancel()
 		if container != "" {
-			_ = exec.Command("docker", "rm", "-f", container).Run()
+			cleanupCtx, stopCleanup := context.WithTimeout(context.Background(), 5*time.Second)
+			_ = exec.CommandContext(cleanupCtx, "docker", "rm", "-f", container).Run()
+			stopCleanup()
 		}
 		if len(b) > 4000 {
 			b = b[:4000]
