@@ -564,6 +564,16 @@ func (s *Store) AppendTimeline(repo, stackID string, event TimelineEvent) (Stack
 	if member == nil || member.Revision == "" || event.Revision != member.Revision {
 		return Stack{}, TimelineEvent{}, ErrInvalid
 	}
+	activeAssignee := false
+	for _, assignment := range v.Assignments {
+		if assignment.MemberID == event.MemberID && assignment.PrincipalID == event.ActorID && assignment.Status == "active" {
+			activeAssignee = true
+			break
+		}
+	}
+	if !activeAssignee {
+		return Stack{}, TimelineEvent{}, ErrInvalid
+	}
 	if event.Kind == "handoff" && (event.FromPrincipalID == "" || event.ToPrincipalID == "" || event.FromPrincipalID != event.ActorID || event.FromPrincipalID == event.ToPrincipalID) {
 		return Stack{}, TimelineEvent{}, ErrInvalid
 	}

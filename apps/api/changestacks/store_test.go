@@ -53,6 +53,17 @@ func TestStackWorkFreezesContextAndRejectsStaleInputs(t *testing.T) {
 		t.Fatalf("event %#v: %v", event, err)
 	}
 	_, replacement, _ := s.Assign("repo", created.ID, "layer", Assignment{PrincipalType: "human", PrincipalID: "next", AssignedBy: "owner"})
+	_, retried, retryErr := s.AppendTimeline("repo", created.ID, TimelineEvent{RequestID: "checkpoint", RequestDigest: "event-digest", MemberID: "layer", Kind: "checkpoint", Summary: "Tests pass", Revision: strings.Repeat("2", 40), WorkLaunchID: launch.ID, ActorID: "agent", ActorType: "agent"})
+	if retryErr != nil || retried.ID != event.ID {
+		t.Fatalf("exact committed retry did not reconcile after reassignment: %#v, %v", retried, retryErr)
+	}
+	if _, _, err = s.AppendTimeline("repo", created.ID, TimelineEvent{RequestID: "superseded", RequestDigest: "superseded-digest", MemberID: "layer", Kind: "checkpoint", Summary: "Late checkpoint", Revision: strings.Repeat("2", 40), ActorID: assignment.PrincipalID, ActorType: "agent"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("superseded assignee appended after reassignment: %v", err)
+	}
+	afterRejection, getErr := s.Get("repo", created.ID)
+	if getErr != nil || len(afterRejection.Timeline) != 1 {
+		t.Fatalf("rejected superseded event changed timeline: %#v, %v", afterRejection.Timeline, getErr)
+	}
 	if _, _, err = s.OpenWork("repo", created.ID, WorkLaunch{RequestID: "stale", RequestDigest: "stale-digest", MemberID: "layer", Kind: "change_session", AssignmentID: assignment.ID, OpenedBy: "agent"}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("stale assignment admitted: %v", err)
 	}
