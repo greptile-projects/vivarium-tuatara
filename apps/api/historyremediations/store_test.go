@@ -84,3 +84,34 @@ func TestReconcilePrecedesMutableValidation(t *testing.T) {
 		t.Fatalf("changed reconcile = %v", err)
 	}
 }
+
+func TestExposureMapIsCASVersionedRetryStableAndBoundToAffectedObjects(t *testing.T) {
+	s, _ := New(t.TempDir())
+	v := fixture()
+	created, err := s.Create(v, "maintainer", "digest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	finding := ExposureFinding{RequestID: "map-1", CopyKind: "active_clone", ResourceID: "clone-7", ObjectIDs: []string{"blob-1"}, DerivedKinds: []string{"credential"}, State: "suspected", IndependentlyControlled: true, Restricted: true, CitationKind: "owner_attestation", CitationResourceID: "attestation-1", CitationSHA256: strings.Repeat("d", 64), Uncertainty: "Owner has not completed an object scan"}
+	updated, err := s.AddExposureFinding("repo", created.ID, 1, finding, "readonly-agent")
+	if err != nil || updated.Version != 2 || len(updated.ExposureMap) != 1 || updated.ExposureMap[0].AttributedTo != "readonly-agent" {
+		t.Fatalf("append = %#v, %v", updated, err)
+	}
+	retry, err := s.AddExposureFinding("repo", created.ID, 1, finding, "readonly-agent")
+	if err != nil || retry.Version != 2 {
+		t.Fatalf("retry = %#v, %v", retry, err)
+	}
+	finding.RequestID = "map-2"
+	if _, err = s.AddExposureFinding("repo", created.ID, 1, finding, "maintainer"); !errors.Is(err, ErrVersionConflict) {
+		t.Fatalf("stale append = %v", err)
+	}
+	finding.ObjectIDs = []string{"not-in-remediation"}
+	if _, err = s.AddExposureFinding("repo", created.ID, 2, finding, "maintainer"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("foreign object = %v", err)
+	}
+	finding.ObjectIDs = []string{"blob-1"}
+	finding.Note = testJWT()
+	if _, err = s.AddExposureFinding("repo", created.ID, 2, finding, "maintainer"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("credential prose = %v", err)
+	}
+}

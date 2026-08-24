@@ -34,6 +34,23 @@ permissions beneath `$HISTORY_REMEDIATION_STORAGE_ROOT`. The ledger agrees on wh
 coordinate, but grants no inspection, Git, object deletion, ref rewrite, package, artifact, release,
 environment, disclosure, or delivery authority.
 
+Authorized remediation participants and repository-bound read-only agents can append cited exposure findings
+through `POST /repositories/{id}/history-remediations/{remediation_id}/exposure-findings`. Each compare-and-swap
+entry maps one or more already-scoped affected object IDs, plus closed derived categories (`credential`,
+`personal_data`, `confidential_data`, or `generated_artifact`), to a branch, tag, pull request, fork, federated
+contribution, workspace, checkpoint, cache, package, release artifact, documentation location, deployment,
+backup, or active clone. Entries distinguish `confirmed`, `suspected`, `unreachable`,
+`independently_controlled`, and `unverifiable`, with a SHA-256 citation, bounded payload-free analysis,
+uncertainty, actor, and time. Caller request identities make append retries stable, while the remediation
+version prevents lost concurrent discoveries.
+
+The web/API projection keeps newly found propagation visible immediately. A finding marked restricted retains
+its classification, affected object IDs, derived-data categories, attribution, and the fact of uncertainty,
+but replaces its copy and citation identities and omits caller prose. This permits teams to track an
+independently controlled clone or backup without turning the remediation ledger into an access bypass or a new
+copy of restricted contents. Exposure-map records grant no inspection, clone, cache, package, deployment,
+backup, federation, Git, or remediation authority.
+
 ## Propagation campaigns
 
 An authorized repository collaborator opens a durable shared delivery boundary through `POST

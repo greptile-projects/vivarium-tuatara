@@ -18,6 +18,7 @@ import (
 var ErrNotFound = errors.New("history remediation not found")
 var ErrInvalid = errors.New("invalid history remediation")
 var ErrConflict = errors.New("history remediation request changed")
+var ErrVersionConflict = errors.New("history remediation version changed")
 
 var credentialPattern = regexp.MustCompile(`(?i)(authorization\s*:|bearer\s+[a-z0-9._-]{12,}|-----begin [a-z ]*private key-----|(?:api[_-]?key|password|passwd|secret|token)\s*[:=]\s*[^\s]{8,}|(?:ghp|github_pat|glpat-|xox[baprs]-|sk-)[a-z0-9_-]{12,}|\beyJ[a-z0-9_-]{10,}\.[a-z0-9_-]{10,}\.[a-z0-9_-]{10,}\b)`)
 
@@ -59,24 +60,48 @@ type Approval struct {
 	ApproverIDs []string `json:"approver_ids"`
 	Required    int      `json:"required"`
 }
+
+// ExposureFinding is a payload-free observation about one place an affected
+// object (or data derived from it) may still be reachable or in use.
+type ExposureFinding struct {
+	ID                      string    `json:"id"`
+	RequestID               string    `json:"request_id"`
+	CopyKind                string    `json:"copy_kind"`
+	ResourceID              string    `json:"resource_id"`
+	RepositoryID            string    `json:"repository_id,omitempty"`
+	ObjectIDs               []string  `json:"object_ids"`
+	DerivedKinds            []string  `json:"derived_kinds,omitempty"`
+	State                   string    `json:"state"`
+	IndependentlyControlled bool      `json:"independently_controlled,omitempty"`
+	Restricted              bool      `json:"restricted,omitempty"`
+	CitationKind            string    `json:"citation_kind"`
+	CitationResourceID      string    `json:"citation_resource_id"`
+	CitationSHA256          string    `json:"citation_sha256"`
+	Note                    string    `json:"note,omitempty"`
+	Uncertainty             string    `json:"uncertainty,omitempty"`
+	AttributedTo            string    `json:"attributed_to"`
+	CreatedAt               time.Time `json:"created_at"`
+}
 type Remediation struct {
-	ID                 string       `json:"id"`
-	RepositoryID       string       `json:"repository_id"`
-	RequestID          string       `json:"request_id"`
-	RequestDigest      string       `json:"request_digest,omitempty"`
-	Title              string       `json:"title"`
-	Source             Source       `json:"source"`
-	ContentDescription string       `json:"content_description"`
-	Reason             string       `json:"reason"`
-	Scopes             []Scope      `json:"scopes"`
-	Evidence           []Evidence   `json:"discovery_evidence"`
-	Constraints        []Constraint `json:"constraints"`
-	AudienceIDs        []string     `json:"audience_ids"`
-	OwnerIDs           []string     `json:"owner_ids"`
-	RequiredApprovals  []Approval   `json:"required_approvals"`
-	CreatedBy          string       `json:"created_by"`
-	CreatedAt          time.Time    `json:"created_at"`
-	Authority          string       `json:"authority"`
+	ID                 string            `json:"id"`
+	RepositoryID       string            `json:"repository_id"`
+	RequestID          string            `json:"request_id"`
+	RequestDigest      string            `json:"request_digest,omitempty"`
+	Title              string            `json:"title"`
+	Source             Source            `json:"source"`
+	ContentDescription string            `json:"content_description"`
+	Reason             string            `json:"reason"`
+	Scopes             []Scope           `json:"scopes"`
+	Evidence           []Evidence        `json:"discovery_evidence"`
+	Constraints        []Constraint      `json:"constraints"`
+	AudienceIDs        []string          `json:"audience_ids"`
+	OwnerIDs           []string          `json:"owner_ids"`
+	RequiredApprovals  []Approval        `json:"required_approvals"`
+	CreatedBy          string            `json:"created_by"`
+	CreatedAt          time.Time         `json:"created_at"`
+	Authority          string            `json:"authority"`
+	Version            int               `json:"version"`
+	ExposureMap        []ExposureFinding `json:"exposure_map"`
 }
 type Store struct {
 	root string
@@ -149,11 +174,90 @@ func (s *Store) Create(v Remediation, actor, digest string) (Remediation, error)
 	v.CreatedBy = actor
 	v.CreatedAt = s.now()
 	v.Authority = "coordination record only; grants no inspection, Git, object deletion, ref rewrite, package, artifact, release, environment, disclosure, or delivery authority"
+	v.Version = 1
+	v.ExposureMap = []ExposureFinding{}
 	if err := os.MkdirAll(filepath.Dir(s.path(v.RepositoryID, v.ID)), 0700); err != nil {
 		return Remediation{}, err
 	}
 	b, _ := json.MarshalIndent(v, "", "  ")
 	if err := os.WriteFile(s.path(v.RepositoryID, v.ID), b, 0600); err != nil {
+		return Remediation{}, err
+	}
+	return v, nil
+}
+
+func validFinding(v ExposureFinding, remediation Remediation) bool {
+	kinds := map[string]bool{"branch": true, "tag": true, "pull_request": true, "fork": true, "federated_contribution": true, "workspace": true, "checkpoint": true, "cache": true, "package": true, "release_artifact": true, "documentation": true, "deployment": true, "backup": true, "active_clone": true}
+	states := map[string]bool{"confirmed": true, "suspected": true, "unreachable": true, "independently_controlled": true, "unverifiable": true}
+	if !kinds[v.CopyKind] || !states[v.State] || v.RequestID == "" || v.ResourceID == "" || len(v.ObjectIDs) == 0 || v.CitationKind == "" || v.CitationResourceID == "" || len(v.CitationSHA256) != 64 || len(v.Note) > 300 || len(v.Uncertainty) > 300 || strings.ContainsAny(v.Note+v.Uncertainty, "\r\n") {
+		return false
+	}
+	allowed := map[string]bool{}
+	for _, scope := range remediation.Scopes {
+		allowed[scope.ObjectID] = true
+	}
+	for _, id := range v.ObjectIDs {
+		if !allowed[id] {
+			return false
+		}
+	}
+	for _, kind := range v.DerivedKinds {
+		if !map[string]bool{"credential": true, "personal_data": true, "confidential_data": true, "generated_artifact": true}[kind] {
+			return false
+		}
+	}
+	b, err := json.Marshal(v)
+	return err == nil && !credentialPattern.Match(b)
+}
+
+// AddExposureFinding appends under compare-and-swap and reconciles retries.
+func (s *Store) AddExposureFinding(repo, id string, expected int, in ExposureFinding, actor string) (Remediation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	b, err := os.ReadFile(s.path(repo, id))
+	if os.IsNotExist(err) {
+		return Remediation{}, ErrNotFound
+	}
+	if err != nil {
+		return Remediation{}, err
+	}
+	var v Remediation
+	if err = json.Unmarshal(b, &v); err != nil {
+		return Remediation{}, err
+	}
+	if v.Version == 0 {
+		v.Version = 1
+	}
+	for _, existing := range v.ExposureMap {
+		if existing.RequestID == in.RequestID {
+			cleanA, cleanB := existing, in
+			cleanA.ID = ""
+			cleanA.AttributedTo = ""
+			cleanA.CreatedAt = time.Time{}
+			cleanB.ID = ""
+			cleanB.AttributedTo = ""
+			cleanB.CreatedAt = time.Time{}
+			a, _ := json.Marshal(cleanA)
+			z, _ := json.Marshal(cleanB)
+			if string(a) != string(z) {
+				return Remediation{}, ErrConflict
+			}
+			return v, nil
+		}
+	}
+	if expected != v.Version {
+		return Remediation{}, ErrVersionConflict
+	}
+	if !validFinding(in, v) {
+		return Remediation{}, ErrInvalid
+	}
+	in.ID = randomID()
+	in.AttributedTo = actor
+	in.CreatedAt = s.now()
+	v.ExposureMap = append(v.ExposureMap, in)
+	v.Version++
+	out, _ := json.MarshalIndent(v, "", "  ")
+	if err = os.WriteFile(s.path(repo, id), out, 0600); err != nil {
 		return Remediation{}, err
 	}
 	return v, nil

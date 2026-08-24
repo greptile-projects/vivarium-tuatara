@@ -31,6 +31,15 @@ func registerHistoryRemediationRoutes(mux *http.ServeMux, git *storage.Store, ca
 	}
 	public := func(v historyremediations.Remediation) historyremediations.Remediation {
 		v.RequestDigest = ""
+		for i := range v.ExposureMap {
+			if v.ExposureMap[i].Restricted {
+				v.ExposureMap[i].ResourceID = "restricted-copy"
+				v.ExposureMap[i].RepositoryID = ""
+				v.ExposureMap[i].CitationResourceID = "restricted-citation"
+				v.ExposureMap[i].Note = ""
+				v.ExposureMap[i].Uncertainty = "Details are restricted by the independently controlled system."
+			}
+		}
 		return v
 	}
 	mux.HandleFunc("GET /repositories/{id}/history-remediations", func(w http.ResponseWriter, r *http.Request) {
@@ -45,7 +54,7 @@ func registerHistoryRemediationRoutes(mux *http.ServeMux, git *storage.Store, ca
 		}
 		out := []historyremediations.Remediation{}
 		for _, v := range xs {
-			if historyRemediationCanSee(v, actorID(c)) {
+			if historyRemediationCanSee(v, c.UserID) {
 				out = append(out, public(v))
 			}
 		}
@@ -57,7 +66,7 @@ func registerHistoryRemediationRoutes(mux *http.ServeMux, git *storage.Store, ca
 			return
 		}
 		v, e := store.Get(r.PathValue("id"), r.PathValue("remediation_id"))
-		if e != nil || !historyRemediationCanSee(v, actorID(c)) {
+		if e != nil || !historyRemediationCanSee(v, c.UserID) {
 			writeAPIError(w, 404, "history_remediation_not_found", "history remediation not found")
 			return
 		}
@@ -84,7 +93,7 @@ func registerHistoryRemediationRoutes(mux *http.ServeMux, git *storage.Store, ca
 		sum := sha256.Sum256(b)
 		digest := hex.EncodeToString(sum[:])
 		if existing, found, reconcileErr := store.Reconcile(in.RepositoryID, in.RequestID, digest); found {
-			if !historyRemediationCanSee(existing, actorID(c)) {
+			if !historyRemediationCanSee(existing, c.UserID) {
 				writeAPIError(w, 404, "history_remediation_not_found", "history remediation not found")
 				return
 			}
@@ -166,6 +175,42 @@ func registerHistoryRemediationRoutes(mux *http.ServeMux, git *storage.Store, ca
 			return
 		}
 		writeJSON(w, 201, public(out))
+	})
+	mux.HandleFunc("POST /repositories/{id}/history-remediations/{remediation_id}/exposure-findings", func(w http.ResponseWriter, r *http.Request) {
+		c, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:read")
+		if !ok {
+			return
+		}
+		v, err := store.Get(r.PathValue("id"), r.PathValue("remediation_id"))
+		if err != nil || !historyRemediationCanSee(v, c.UserID) {
+			writeAPIError(w, 404, "history_remediation_not_found", "history remediation not found")
+			return
+		}
+		if c.AgentID != "" && c.RepositoryID != v.RepositoryID {
+			writeAPIError(w, 403, "history_remediation_agent_forbidden", "read-only agents must be bound to the remediation repository")
+			return
+		}
+		var in struct {
+			ExpectedVersion int                                 `json:"expected_version"`
+			Finding         historyremediations.ExposureFinding `json:"finding"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "an exposure finding is required")
+			return
+		}
+		out, err := store.AddExposureFinding(v.RepositoryID, v.ID, in.ExpectedVersion, in.Finding, actorID(c))
+		switch {
+		case errors.Is(err, historyremediations.ErrVersionConflict):
+			writeAPIError(w, 409, "history_remediation_version_conflict", "the remediation changed; reload before adding the finding")
+		case errors.Is(err, historyremediations.ErrConflict):
+			writeAPIError(w, 409, "history_remediation_finding_conflict", "request_id was already used for a different finding")
+		case errors.Is(err, historyremediations.ErrInvalid):
+			writeAPIError(w, 422, "history_remediation_finding_invalid", "a permitted copy kind, affected object, state, digest citation, and bounded safe analysis are required")
+		case err != nil:
+			writeAPIError(w, 500, "history_remediation_unavailable", "the exposure finding could not be retained")
+		default:
+			writeJSON(w, 201, public(out))
+		}
 	})
 }
 
