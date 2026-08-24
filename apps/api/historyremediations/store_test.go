@@ -3,6 +3,7 @@ package historyremediations
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -54,6 +55,7 @@ func TestRejectsPayloadLikeMultilineDescriptionAndIncompleteEvidence(t *testing.
 		"bare JWT in evidence note":     func(v *Remediation) { v.Evidence[0].Note = testJWT() },
 		"bare JWT in constraint reason": func(v *Remediation) { v.Constraints[0].Reason = testJWT() },
 		"bare JWT in root description":  func(v *Remediation) { v.ContentDescription = testJWT() },
+		"AWS access key in evidence":    func(v *Remediation) { v.Evidence[0].Note = "AKIAIOSFODNN7EXAMPLE" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			v := fixture()
@@ -113,5 +115,42 @@ func TestExposureMapIsCASVersionedRetryStableAndBoundToAffectedObjects(t *testin
 	finding.Note = testJWT()
 	if _, err = s.AddExposureFinding("repo", created.ID, 2, finding, "maintainer"); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("credential prose = %v", err)
+	}
+	finding.Note = ""
+	finding.Uncertainty = "Observed identifier ASIAIOSFODNN7EXAMPLE"
+	if _, err = s.AddExposureFinding("repo", created.ID, 2, finding, "maintainer"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("AWS credential prose = %v", err)
+	}
+}
+
+func TestFailedExposureReplacementPreservesLiveRecord(t *testing.T) {
+	s, _ := New(t.TempDir())
+	created, err := s.Create(fixture(), "maintainer", "digest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := s.path("repo", created.ID)
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.beforeReplace = func() error { return errors.New("injected replacement failure") }
+	finding := ExposureFinding{RequestID: "map-failure", CopyKind: "backup", ResourceID: "backup-1", ObjectIDs: []string{"blob-1"}, State: "unverifiable", CitationKind: "inventory", CitationResourceID: "inventory-1", CitationSHA256: strings.Repeat("e", 64)}
+	if _, err = s.AddExposureFinding("repo", created.ID, 1, finding, "maintainer"); err == nil {
+		t.Fatal("replacement unexpectedly succeeded")
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatal("failed replacement changed live remediation")
+	}
+	if _, err = s.Get("repo", created.ID); err != nil {
+		t.Fatalf("live remediation became unreadable: %v", err)
+	}
+	matches, _ := filepath.Glob(filepath.Join(filepath.Dir(path), ".history-remediation-*"))
+	if len(matches) != 0 {
+		t.Fatalf("temporary replacements remain: %v", matches)
 	}
 }

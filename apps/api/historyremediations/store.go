@@ -20,7 +20,7 @@ var ErrInvalid = errors.New("invalid history remediation")
 var ErrConflict = errors.New("history remediation request changed")
 var ErrVersionConflict = errors.New("history remediation version changed")
 
-var credentialPattern = regexp.MustCompile(`(?i)(authorization\s*:|bearer\s+[a-z0-9._-]{12,}|-----begin [a-z ]*private key-----|(?:api[_-]?key|password|passwd|secret|token)\s*[:=]\s*[^\s]{8,}|(?:ghp|github_pat|glpat-|xox[baprs]-|sk-)[a-z0-9_-]{12,}|\beyJ[a-z0-9_-]{10,}\.[a-z0-9_-]{10,}\.[a-z0-9_-]{10,}\b)`)
+var credentialPattern = regexp.MustCompile(`(?i)(authorization\s*:|bearer\s+[a-z0-9._-]{12,}|-----begin [a-z ]*private key-----|(?:api[_-]?key|password|passwd|secret|token)\s*[:=]\s*[^\s]{8,}|(?:ghp|github_pat|glpat-|xox[baprs]-|sk-)[a-z0-9_-]{12,}|\b(?:AKIA|ASIA)[A-Z0-9]{16}\b|\beyJ[a-z0-9_-]{10,}\.[a-z0-9_-]{10,}\.[a-z0-9_-]{10,}\b)`)
 
 type Source struct {
 	Kind       string `json:"kind"`
@@ -104,9 +104,10 @@ type Remediation struct {
 	ExposureMap        []ExposureFinding `json:"exposure_map"`
 }
 type Store struct {
-	root string
-	mu   sync.Mutex
-	now  func() time.Time
+	root          string
+	mu            sync.Mutex
+	now           func() time.Time
+	beforeReplace func() error
 }
 
 func New(root string) (*Store, error) {
@@ -180,7 +181,7 @@ func (s *Store) Create(v Remediation, actor, digest string) (Remediation, error)
 		return Remediation{}, err
 	}
 	b, _ := json.MarshalIndent(v, "", "  ")
-	if err := os.WriteFile(s.path(v.RepositoryID, v.ID), b, 0600); err != nil {
+	if err := atomicWrite(s.path(v.RepositoryID, v.ID), b, s.beforeReplace); err != nil {
 		return Remediation{}, err
 	}
 	return v, nil
@@ -257,10 +258,55 @@ func (s *Store) AddExposureFinding(repo, id string, expected int, in ExposureFin
 	v.ExposureMap = append(v.ExposureMap, in)
 	v.Version++
 	out, _ := json.MarshalIndent(v, "", "  ")
-	if err = os.WriteFile(s.path(repo, id), out, 0600); err != nil {
+	if err = atomicWrite(s.path(repo, id), out, s.beforeReplace); err != nil {
 		return Remediation{}, err
 	}
 	return v, nil
+}
+
+func atomicWrite(path string, data []byte, beforeReplace func() error) (err error) {
+	dir := filepath.Dir(path)
+	temporary, err := os.CreateTemp(dir, ".history-remediation-*")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer func() {
+		_ = temporary.Close()
+		if err != nil {
+			_ = os.Remove(temporaryPath)
+		}
+	}()
+	if err = temporary.Chmod(0600); err != nil {
+		return err
+	}
+	if _, err = temporary.Write(data); err != nil {
+		return err
+	}
+	if err = temporary.Sync(); err != nil {
+		return err
+	}
+	if err = temporary.Close(); err != nil {
+		return err
+	}
+	if beforeReplace != nil {
+		if err = beforeReplace(); err != nil {
+			return err
+		}
+	}
+	if err = os.Rename(temporaryPath, path); err != nil {
+		return err
+	}
+	directory, openErr := os.Open(dir)
+	if openErr != nil {
+		return openErr
+	}
+	err = directory.Sync()
+	closeErr := directory.Close()
+	if err == nil {
+		err = closeErr
+	}
+	return err
 }
 
 // Reconcile returns a previously committed request before callers consult

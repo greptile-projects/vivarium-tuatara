@@ -54,7 +54,7 @@ func registerHistoryRemediationRoutes(mux *http.ServeMux, git *storage.Store, ca
 		}
 		out := []historyremediations.Remediation{}
 		for _, v := range xs {
-			if historyRemediationCanSee(v, c.UserID) {
+			if historyRemediationCanSee(v, actorID(c)) {
 				out = append(out, public(v))
 			}
 		}
@@ -66,7 +66,7 @@ func registerHistoryRemediationRoutes(mux *http.ServeMux, git *storage.Store, ca
 			return
 		}
 		v, e := store.Get(r.PathValue("id"), r.PathValue("remediation_id"))
-		if e != nil || !historyRemediationCanSee(v, c.UserID) {
+		if e != nil || !historyRemediationCanSee(v, actorID(c)) {
 			writeAPIError(w, 404, "history_remediation_not_found", "history remediation not found")
 			return
 		}
@@ -93,7 +93,7 @@ func registerHistoryRemediationRoutes(mux *http.ServeMux, git *storage.Store, ca
 		sum := sha256.Sum256(b)
 		digest := hex.EncodeToString(sum[:])
 		if existing, found, reconcileErr := store.Reconcile(in.RepositoryID, in.RequestID, digest); found {
-			if !historyRemediationCanSee(existing, c.UserID) {
+			if !historyRemediationCanSee(existing, actorID(c)) {
 				writeAPIError(w, 404, "history_remediation_not_found", "history remediation not found")
 				return
 			}
@@ -182,7 +182,7 @@ func registerHistoryRemediationRoutes(mux *http.ServeMux, git *storage.Store, ca
 			return
 		}
 		v, err := store.Get(r.PathValue("id"), r.PathValue("remediation_id"))
-		if err != nil || !historyRemediationCanSee(v, c.UserID) {
+		if err != nil || !historyRemediationCanSee(v, actorID(c)) {
 			writeAPIError(w, 404, "history_remediation_not_found", "history remediation not found")
 			return
 		}
