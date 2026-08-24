@@ -1297,6 +1297,13 @@ func (s *Store) AddComment(repositoryID, pullRequestID, authorID, body string) (
 	if body == "" || len([]rune(body)) > 10000 {
 		return Comment{}, ErrInvalid
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Comment{}, err
+	}
+	defer unlock()
 	pull, err := s.Get(repositoryID, pullRequestID)
 	if err != nil {
 		return Comment{}, err
@@ -1306,13 +1313,6 @@ func (s *Store) AddComment(repositoryID, pullRequestID, authorID, body string) (
 		return Comment{}, err
 	}
 	comment := Comment{ID: commentID, PullRequestID: pullRequestID, AuthorID: authorID, Body: body, Revision: pull.SourceCommitID, CreatedAt: s.now().Truncate(time.Microsecond)}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	unlock, err := s.lock()
-	if err != nil {
-		return Comment{}, err
-	}
-	defer unlock()
 	record, err := s.readComments(repositoryID, pullRequestID)
 	if err != nil {
 		return Comment{}, err

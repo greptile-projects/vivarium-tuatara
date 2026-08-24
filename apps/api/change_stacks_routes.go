@@ -283,16 +283,27 @@ func registerChangeStackRoutes(mux *http.ServeMux, git *storage.Store, catalog *
 			return
 		}
 		matched := false
+		memberRevision := ""
 		for _, m := range v.Members {
 			if m.ID == in.MemberID && m.PullRequestID == r.PathValue("pull_id") {
 				matched = true
+				memberRevision = m.Revision
 			}
 		}
-		if !matched {
+		if !matched || memberRevision == "" {
 			writeAPIError(w, 422, "stack_layer_mismatch", "the pull request does not identify that stack layer")
 			return
 		}
-		out, err := stacks.Acknowledge(r.PathValue("id"), in.StackID, in.MemberID, actor.UserID, in.Decision, in.Note)
+		var out changestacks.Stack
+		err = pulls.WithSourceRevision(r.PathValue("id"), r.PathValue("pull_id"), memberRevision, func(pullrequests.PullRequest) error {
+			var acknowledgeErr error
+			out, acknowledgeErr = stacks.Acknowledge(r.PathValue("id"), in.StackID, in.MemberID, actor.UserID, in.Decision, in.Note)
+			return acknowledgeErr
+		})
+		if errors.Is(err, pullrequests.ErrSourceChanged) || errors.Is(err, pullrequests.ErrNotReady) {
+			writeAPIError(w, 409, "stack_layer_stale", "the pull request moved or closed; refresh the stack before acknowledging its layer")
+			return
+		}
 		if errors.Is(err, changestacks.ErrInvalid) {
 			writeAPIError(w, 422, "stack_acknowledgement_invalid", "decision must acknowledge or request changes on the exact current layer")
 			return
