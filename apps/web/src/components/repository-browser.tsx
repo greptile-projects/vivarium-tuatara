@@ -254,6 +254,7 @@ export function RepositoryBrowser({ id }: { id: string }) {
             <Link href={`/repositories/${id}/debugging`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Production debugging</Link>
             <Link href={`/repositories/${id}/regressions`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Regression investigations</Link>
             <Link href={`/repositories/${id}/propagation`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Propagation campaigns</Link>
+            <Link href={`/repositories/${id}/stacks`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Change stacks</Link>
             <Link href={`/repositories/${id}/history-remediation`} className="text-sm font-semibold text-[var(--danger)] hover:underline">Sensitive history remediation</Link>
             <Link href={`/repositories/${id}/restructuring`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Repository restructuring</Link>
             <Link href={`/repositories/${id}/recovery`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Recovery commitments</Link>

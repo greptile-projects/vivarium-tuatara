@@ -2,6 +2,8 @@
 
 Guidance for coding agents working in this repository.
 
+Change stacks at `/repositories/{id}/change-stacks` and the repository `/stacks` workspace retain a shared outcome, target branch, explicit member order and dependencies, per-change acceptance criteria, ordinary pull identity, and each exact published source revision beneath `$CHANGE_STACK_STORAGE_ROOT` (`change-stacks`). Branch-only members publish as ordinary pull requests whose target is the preceding layer; existing pulls retain their ordinary review boundary. Reads derive individual and cumulative Git scope, commit authors, base relationships, current caller permissions, and explicit cycle, missing dependency/commit, unrelated-history, duplicate-change, moved-revision, pull-mismatch, and inaccessible-branch diagnostics. A stack coordinates review context only: it never rewrites or moves a branch and grants no Git, branch, pull, review, or merge authority.
+
 Sensitive history remediations at `/repositories/{id}/history-remediations` and the repository
 `/history-remediation` workspace give current maintainers a private, retry-stable coordination boundary
 for a security finding, privacy incident, support case, or selected object. Records retain a bounded

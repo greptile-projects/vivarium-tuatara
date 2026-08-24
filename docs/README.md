@@ -3,6 +3,12 @@
 Notes on how this project fits together. Mostly empty for now — things get
 written down here as they're decided, not before.
 
+## Collaborative change stacks
+
+Repository contributors can publish an ordered large outcome at `POST /repositories/{id}/change-stacks` and inspect it through `GET /repositories/{id}/change-stacks` or the repository `/stacks` workspace. Each member names a branch or an existing pull request, dependencies, and acceptance criteria. Branch entries are opened as ordinary pull requests against the preceding layer; every retained member freezes the exact revision offered for review.
+
+The read surface derives each layer's diff and the cumulative target diff, commit authors, declared and Git base relationships, and effective read/publish/review/push permissions. Missing commits or dependencies, cycles, unrelated histories, duplicate changes, moved pull revisions, pull mismatches, and inaccessible branches stay visible as diagnostics. Stack records are coordination context and never move refs or add delivery authority. Persistent records live under `$CHANGE_STACK_STORAGE_ROOT`, defaulting to `change-stacks`.
+
 ## Sensitive history remediation
 
 Current repository maintainers open restricted history-repair coordination through `POST
