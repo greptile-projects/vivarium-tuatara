@@ -1,6 +1,7 @@
 package changestacks
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -24,6 +25,39 @@ func TestStackPersistsOrderedAcceptanceBoundary(t *testing.T) {
 	}
 	if got.Authority == "" {
 		t.Fatal("authority boundary missing")
+	}
+}
+
+func TestStackWorkFreezesContextAndRejectsStaleInputs(t *testing.T) {
+	s, _ := New(t.TempDir())
+	created, err := s.Create(Stack{RequestID: "stack-work", RequestDigest: "digest", RepositoryID: "repo", Title: "Parallel delivery", Outcome: "Ship the shared outcome", TargetBranch: "main", Members: []Member{
+		{ID: "base", Title: "Foundation", SourceRepositoryID: "repo", SourceBranch: "base", Revision: strings.Repeat("1", 40), BaseRevision: strings.Repeat("0", 40), AcceptanceCriteria: []string{"foundation passes"}},
+		{ID: "layer", Title: "Dependent", SourceRepositoryID: "repo", SourceBranch: "layer", Revision: strings.Repeat("2", 40), BaseRevision: strings.Repeat("1", 40), DependsOn: []string{"base"}, AcceptanceCriteria: []string{"journey passes"}, PullRequestID: "pull-layer"},
+	}}, "owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, assignment, err := s.Assign("repo", created.ID, "layer", Assignment{PrincipalType: "agent", PrincipalID: "agent", OperatorID: "owner", AccessGrantID: "grant", AssignedBy: "owner"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, launch, err := s.OpenWork("repo", created.ID, WorkLaunch{RequestID: "launch", RequestDigest: "launch-digest", MemberID: "layer", Kind: "shared_workspace", AssignmentID: assignment.ID, OpenedBy: "agent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if launch.Outcome != created.Outcome || launch.ParentRevision != strings.Repeat("1", 40) || launch.UpstreamRevisions["base"] != strings.Repeat("1", 40) || len(launch.AcceptanceCriteria) != 1 || len(launch.Evidence) != 2 {
+		t.Fatalf("launch did not freeze context: %#v", launch)
+	}
+	_, event, err := s.AppendTimeline("repo", created.ID, TimelineEvent{RequestID: "checkpoint", RequestDigest: "event-digest", MemberID: "layer", Kind: "checkpoint", Summary: "Tests pass", Revision: strings.Repeat("2", 40), WorkLaunchID: launch.ID, ActorID: "agent", ActorType: "agent"})
+	if err != nil || event.UpstreamRevisions["base"] != strings.Repeat("1", 40) {
+		t.Fatalf("event %#v: %v", event, err)
+	}
+	_, replacement, _ := s.Assign("repo", created.ID, "layer", Assignment{PrincipalType: "human", PrincipalID: "next", AssignedBy: "owner"})
+	if _, _, err = s.OpenWork("repo", created.ID, WorkLaunch{RequestID: "stale", RequestDigest: "stale-digest", MemberID: "layer", Kind: "change_session", AssignmentID: assignment.ID, OpenedBy: "agent"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("stale assignment admitted: %v", err)
+	}
+	if _, _, err = s.AppendTimeline("repo", created.ID, TimelineEvent{RequestID: "moved", RequestDigest: "moved-digest", MemberID: "layer", Kind: "question", Summary: "Current?", Revision: strings.Repeat("3", 40), ActorID: replacement.PrincipalID, ActorType: "human"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("moved revision admitted: %v", err)
 	}
 }
 
