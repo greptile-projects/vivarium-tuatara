@@ -39,7 +39,7 @@ func registerHistoryRewriteRoutes(mux *http.ServeMux, git *storage.Store, catalo
 			return
 		}
 		v, err := store.Get(r.PathValue("id"), r.PathValue("remediation_id"))
-		if err != nil || c.AgentID != "" || !historyRemediationOwner(v, c.UserID) {
+		if err != nil || !historyRemediationCanRespond(v, c.UserID) {
 			writeAPIError(w, 404, "history_remediation_not_found", "history remediation not found")
 			return
 		}
@@ -130,7 +130,7 @@ func registerHistoryRewriteRoutes(mux *http.ServeMux, git *storage.Store, catalo
 			return
 		}
 		v, err := store.Get(r.PathValue("id"), r.PathValue("remediation_id"))
-		if err != nil || !historyRemediationCanRespond(v, c.UserID) {
+		if err != nil || !historyRemediationCanPublish(v, c) {
 			writeAPIError(w, 404, "history_remediation_not_found", "history remediation not found")
 			return
 		}
@@ -275,6 +275,10 @@ func historyRemediationOwner(v historyremediations.Remediation, actor string) bo
 		}
 	}
 	return false
+}
+
+func historyRemediationCanPublish(v historyremediations.Remediation, credential auth.Credential) bool {
+	return credential.AgentID == "" && historyRemediationOwner(v, credential.UserID)
 }
 
 func publishHistoryRefs(gitDir string, refs []historyremediations.CandidateRef) error {

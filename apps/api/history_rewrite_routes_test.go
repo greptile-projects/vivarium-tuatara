@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/historyremediations"
 )
 
@@ -156,10 +157,16 @@ func TestPublishHistoryRefsIsAtomicAndRetryStable(t *testing.T) {
 
 func TestHistoryRewritePublicationRequiresNamedOwner(t *testing.T) {
 	v := historyremediations.Remediation{CreatedBy: "creator", OwnerIDs: []string{"owner"}}
-	if historyRemediationOwner(v, "creator") {
+	if historyRemediationCanPublish(v, auth.Credential{UserID: "creator"}) {
 		t.Fatal("non-owner creator received publication authority")
 	}
-	if !historyRemediationOwner(v, "owner") {
+	if historyRemediationCanPublish(v, auth.Credential{UserID: "creator", AgentID: "agent"}) {
+		t.Fatal("creator-bound agent received publication authority")
+	}
+	if historyRemediationCanPublish(v, auth.Credential{UserID: "owner", AgentID: "agent"}) {
+		t.Fatal("owner-bound agent received publication authority")
+	}
+	if !historyRemediationCanPublish(v, auth.Credential{UserID: "owner"}) {
 		t.Fatal("named owner lacks publication authority")
 	}
 }
