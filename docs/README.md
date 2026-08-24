@@ -237,9 +237,11 @@ dependencies, and original acceptance criteria; a divided change names every des
 revision, owner, dependency edge, and local criterion. Embargoed, inaccessible, rejected, and deliberately
 unmigrated work stays blocked or archived instead of leaking context into another repository.
 
-Named source authors inspect and decide mappings through revision-bound, append-only decisions. The server
-requires the submitted author set to exactly match the source resource's frozen inventory-owner set and
-persists its own copy, so a mapping proposer cannot omit a required participant. Every author
+Named source authors inspect and decide mappings through revision-bound, append-only decisions. During plan
+admission the server resolves each exact resource's author or controlling owner from its authoritative Git,
+pull, issue, proposal-task, release, package, documentation, governance, workspace, workflow, dependency, or
+repository record. Caller inventory must match and the ledger persists a server-owned copy. Mapping authors
+must then exactly match that admitted set, so neither a plan nor mapping proposer can omit a required participant. Every author
 must approve the same exact source revision before a mapping becomes approved, so an old review is preserved
 as history but never silently promoted to current approval. Decisions recheck repository participation at
 persistence. Blocked and archived mappings reject ordinary decisions and require a new successor mapping;

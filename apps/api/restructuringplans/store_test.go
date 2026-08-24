@@ -9,6 +9,30 @@ import (
 	"time"
 )
 
+func resolvedCreate(s *Store, p Plan, actor, digest string) (Plan, error) {
+	owners := map[string][]string{}
+	for _, item := range p.Inventory {
+		owners[item.ID] = append([]string(nil), item.OwnerIDs...)
+	}
+	return s.CreateResolved(p, actor, digest, owners)
+}
+
+func TestCreateRejectsCallerControlledInventoryOwners(t *testing.T) {
+	s, _ := New(t.TempDir())
+	if _, err := s.Create(completePlan(), "owner", "digest"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("unresolved create err = %v", err)
+	}
+	p := completePlan()
+	owners := map[string][]string{}
+	for _, item := range p.Inventory {
+		owners[item.ID] = append([]string(nil), item.OwnerIDs...)
+	}
+	owners[p.Inventory[0].ID] = []string{"different-authoritative-owner"}
+	if _, err := s.CreateResolved(p, "owner", "digest", owners); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("mismatched resolved owners err = %v", err)
+	}
+}
+
 func TestCollaborationMappingRetainsIntentAndRequiresEveryAuthorApproval(t *testing.T) {
 	store, err := New(t.TempDir())
 	if err != nil {
@@ -16,7 +40,7 @@ func TestCollaborationMappingRetainsIntentAndRequiresEveryAuthorApproval(t *test
 	}
 	rev := "0123456789012345678901234567890123456789"
 	plan := validPlanForTest(rev)
-	created, err := store.Create(plan, "author-a", "digest")
+	created, err := resolvedCreate(store, plan, "author-a", "digest")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +74,7 @@ func TestCollaborationMappingRetainsIntentAndRequiresEveryAuthorApproval(t *test
 func TestCollaborationMappingRejectsStaleAndUnownedApproval(t *testing.T) {
 	store, _ := New(t.TempDir())
 	rev := "0123456789012345678901234567890123456789"
-	created, _ := store.Create(validPlanForTest(rev), "author-a", "digest")
+	created, _ := resolvedCreate(store, validPlanForTest(rev), "author-a", "digest")
 	m := CollaborationMapping{RequestID: "map", InventoryItemID: "i-0", Kind: "branch", SourceRepositoryID: "source", SourceResourceID: "resource-0", SourceRevision: rev, Disposition: "move", Snapshot: CollaborationSnapshot{AuthorshipIDs: []string{"author-a", "author-b"}, AcceptanceCriteria: []string{"preserve intent"}}, Destinations: []CollaborationDestination{{DestinationID: "core", ResourceID: "new-main", Revision: rev, OwnerIDs: []string{"owner"}, AcceptanceCriteria: []string{"pass"}}}}
 	created, err := store.AddCollaborationMapping("source", created.ID, "author-a", created.Version, m)
 	if err != nil {
@@ -68,7 +92,7 @@ func TestCollaborationMappingRejectsStaleAndUnownedApproval(t *testing.T) {
 func TestCollaborationMappingRejectsOmittedInventoriedOwner(t *testing.T) {
 	store, _ := New(t.TempDir())
 	rev := "0123456789012345678901234567890123456789"
-	created, _ := store.Create(validPlanForTest(rev), "author-a", "digest")
+	created, _ := resolvedCreate(store, validPlanForTest(rev), "author-a", "digest")
 	m := CollaborationMapping{RequestID: "omitted", InventoryItemID: "i-0", Kind: "branch", SourceRepositoryID: "source", SourceResourceID: "resource-0", SourceRevision: rev, Disposition: "move", Snapshot: CollaborationSnapshot{AuthorshipIDs: []string{"author-a"}, AcceptanceCriteria: []string{"preserve intent"}}, Destinations: []CollaborationDestination{{DestinationID: "core", ResourceID: "new-main", Revision: rev, OwnerIDs: []string{"owner"}, AcceptanceCriteria: []string{"pass"}}}}
 	if _, err := store.AddCollaborationMapping("source", created.ID, "author-a", created.Version, m); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("omitted inventoried owner err = %v", err)
@@ -88,7 +112,7 @@ func TestTerminalCollaborationMappingsRejectApprovals(t *testing.T) {
 			if tc.inaccessible {
 				plan.Inventory[0].State = "inaccessible"
 			}
-			created, _ := store.Create(plan, "author-a", "digest")
+			created, _ := resolvedCreate(store, plan, "author-a", "digest")
 			m := CollaborationMapping{RequestID: "terminal", InventoryItemID: "i-0", Kind: "branch", SourceRepositoryID: "source", SourceResourceID: "resource-0", SourceRevision: rev, Disposition: tc.disposition, Embargoed: tc.embargoed, Snapshot: CollaborationSnapshot{AuthorshipIDs: []string{"author-a", "author-b"}, AcceptanceCriteria: []string{"preserve intent"}}}
 			if tc.disposition != "archive" {
 				m.Destinations = []CollaborationDestination{{DestinationID: "core", ResourceID: "new-main", Revision: rev, OwnerIDs: []string{"owner"}, AcceptanceCriteria: []string{"pass"}}}
@@ -131,7 +155,7 @@ func TestIndependentStoresSerializeFindingCAS(t *testing.T) {
 	root := t.TempDir()
 	first, _ := New(root)
 	second, _ := New(root)
-	p, err := first.Create(completePlan(), "owner", "digest")
+	p, err := resolvedCreate(first, completePlan(), "owner", "digest")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,15 +197,15 @@ func TestCreateRetryAndCitedAgentFinding(t *testing.T) {
 		t.Fatal(e)
 	}
 	p := completePlan()
-	one, e := s.Create(p, "owner", "digest")
+	one, e := resolvedCreate(s, p, "owner", "digest")
 	if e != nil {
 		t.Fatal(e)
 	}
-	two, e := s.Create(p, "owner", "digest")
+	two, e := resolvedCreate(s, p, "owner", "digest")
 	if e != nil || two.ID != one.ID {
 		t.Fatalf("retry = %#v %v", two, e)
 	}
-	if _, e = s.Create(p, "owner", "changed"); !errors.Is(e, ErrConflict) {
+	if _, e = resolvedCreate(s, p, "owner", "changed"); !errors.Is(e, ErrConflict) {
 		t.Fatalf("changed retry = %v", e)
 	}
 	out, e := s.AddFinding("source", one.ID, "agent-1", "read_only_agent", Finding{RequestID: "finding-1", Version: 1, InventoryItemIDs: []string{"i-0"}, Body: "The release workflow still names the old path.", Citations: []string{"policy.yml@0123456789012345678901234567890123456789"}})
@@ -203,12 +227,12 @@ func TestRequiresCompleteExplicitInventory(t *testing.T) {
 	s, _ := New(t.TempDir())
 	p := completePlan()
 	p.Inventory = p.Inventory[:len(p.Inventory)-1]
-	if _, e := s.Create(p, "owner", "digest"); !errors.Is(e, ErrInvalid) {
+	if _, e := resolvedCreate(s, p, "owner", "digest"); !errors.Is(e, ErrInvalid) {
 		t.Fatalf("incomplete inventory = %v", e)
 	}
 	p = completePlan()
 	p.Inventory[0].State = "hidden"
-	if _, e := s.Create(p, "owner", "digest"); !errors.Is(e, ErrInvalid) {
+	if _, e := resolvedCreate(s, p, "owner", "digest"); !errors.Is(e, ErrInvalid) {
 		t.Fatalf("hidden state = %v", e)
 	}
 }
@@ -222,7 +246,7 @@ func TestPlanRejectsCandidatePathTraversal(t *testing.T) {
 	} {
 		p := completePlan()
 		mutate(&p)
-		if _, err := s.Create(p, "owner", randomID()); !errors.Is(err, ErrInvalid) {
+		if _, err := resolvedCreate(s, p, "owner", randomID()); !errors.Is(err, ErrInvalid) {
 			t.Fatalf("unsafe plan accepted: %#v, %v", p, err)
 		}
 	}
@@ -232,7 +256,7 @@ func TestCandidateCreationSerializesAssemblyAndRegistration(t *testing.T) {
 	root := t.TempDir()
 	first, _ := New(root)
 	second, _ := New(root)
-	plan, err := first.Create(completePlan(), "owner", "plan-digest")
+	plan, err := resolvedCreate(first, completePlan(), "owner", "plan-digest")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -3132,8 +3132,10 @@ repositories, or active collaboration.
 Active collaboration mappings bind an inventoried exact source resource to a branch, pull, issue, proposal,
 task, decision, check, session, workspace, or queue snapshot. They retain authorship, discussion/review
 identities, dependency edges, acceptance criteria, and one or more exact destination contributions and owners.
-Embargoed or inaccessible context is blocked and deliberate non-migration is archived. The submitted author
-set must exactly equal the exact resource's frozen inventory owners and is replaced by a server-owned copy.
+Embargoed or inaccessible context is blocked and deliberate non-migration is archived. Plan admission resolves
+the author or controlling owner for every exact resource from its authoritative resource store and rejects
+caller inventory that differs. The submitted mapping author set must exactly equal those server-owned admitted
+owners and is replaced by another server-owned copy.
 Every retained source author independently approves the same exact revision before the mapping becomes approved; historical review
 identities remain evidence and never become implicit current approval. Human decisions hold current repository
 participation through persistence. Blocked and archived mappings reject decisions and can only be superseded

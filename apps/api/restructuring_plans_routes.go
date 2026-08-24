@@ -129,6 +129,15 @@ func registerRestructuringPlanRoutes(mux *http.ServeMux, git *storage.Store, cat
 				return
 			}
 		}
+		resolvedOwners := make(map[string][]string, len(in.Inventory))
+		for _, item := range in.Inventory {
+			owners, resolveErr := restructuringInventoryOwners(item, catalog, pulls, issueStore, proposalStore, releaseStore, packageStore, docs, policies, workspaceStore, workflows, consumers)
+			if resolveErr != nil || len(owners) == 0 || !sameOwnerSet(item.OwnerIDs, owners) {
+				writeAPIError(w, 422, "restructuring_inventory_owners_invalid", "inventory owners must exactly match the authoritative source resource participants")
+				return
+			}
+			resolvedOwners[item.ID] = owners
+		}
 		var out restructuringplans.Plan
 		sourceIDs := make([]string, 0, len(in.Sources))
 		for _, source := range in.Sources {
@@ -136,7 +145,7 @@ func registerRestructuringPlanRoutes(mux *http.ServeMux, git *storage.Store, cat
 		}
 		e := catalog.WithCurrentParticipation(c.UserID, sourceIDs, func() error {
 			var createErr error
-			out, createErr = plans.Create(in, c.UserID, digest)
+			out, createErr = plans.CreateResolved(in, c.UserID, digest, resolvedOwners)
 			return createErr
 		})
 		if errors.Is(e, restructuringplans.ErrConflict) {
@@ -300,6 +309,125 @@ func registerRestructuringPlanRoutes(mux *http.ServeMux, git *storage.Store, cat
 		}
 		writeJSON(w, 201, out)
 	})
+}
+
+func restructuringInventoryOwners(item restructuringplans.InventoryItem, catalog *repositories.Store, pulls *pullrequests.Store, issueStore *issues.Store, proposalStore *proposals.Store, releaseStore *releases.Store, packageStore *packageversions.Store, docs *docscollections.Store, policies *governance.Store, workspaceStore *workspaces.Store, workflows *collaborationworkflows.Store, consumers *relationships.Store) ([]string, error) {
+	repo, err := catalog.GetByID(item.RepositoryID)
+	if err != nil {
+		return nil, err
+	}
+	owners := []string{repo.OwnerID}
+	switch item.Kind {
+	case "pull_request":
+		v, e := pulls.Get(item.RepositoryID, item.ResourceID)
+		if e != nil {
+			return nil, e
+		}
+		owners = []string{v.AuthorID}
+	case "issue":
+		v, e := issueStore.Get(item.RepositoryID, item.ResourceID)
+		if e != nil {
+			return nil, e
+		}
+		owners = []string{v.ReporterID}
+	case "task":
+		parts := strings.Split(item.ResourceID, "/")
+		if len(parts) != 2 {
+			return nil, restructuringplans.ErrInvalid
+		}
+		v, e := proposalStore.GetTask(item.RepositoryID, parts[0], parts[1])
+		if e != nil {
+			return nil, e
+		}
+		owners = []string{v.CreatedBy}
+	case "release":
+		v, e := releaseStore.Get(item.RepositoryID, item.ResourceID)
+		if e != nil {
+			return nil, e
+		}
+		owners = []string{v.CreatedBy}
+	case "package":
+		parts := strings.SplitN(item.ResourceID, "@", 2)
+		if len(parts) != 2 {
+			return nil, restructuringplans.ErrInvalid
+		}
+		v, e := packageStore.Get(parts[0], parts[1])
+		if e != nil {
+			return nil, e
+		}
+		owners = []string{v.PublisherID}
+	case "documentation":
+		xs, e := docs.List(item.RepositoryID, item.ResourceID)
+		if e != nil {
+			return nil, e
+		}
+		owners = nil
+		for _, v := range xs {
+			if v.SourceRevision == item.Revision {
+				owners = []string{v.PublishedBy}
+				break
+			}
+		}
+	case "policy":
+		v, e := policies.Get(item.ResourceID)
+		if e != nil {
+			return nil, e
+		}
+		owners = []string{v.CreatedBy}
+	case "workspace":
+		v, e := workspaceStore.Get(item.ResourceID)
+		if e != nil {
+			return nil, e
+		}
+		owners = []string{v.CreatorID}
+	case "automation":
+		v, e := workflows.Get(item.ResourceID)
+		if e != nil {
+			return nil, e
+		}
+		owners = nil
+		for _, revision := range v.Revisions {
+			if revision.Source.Revision == item.Revision {
+				owners = []string{revision.ActivatedBy}
+				break
+			}
+		}
+	case "consumer":
+		xs, e := consumers.ListDependencies(item.RepositoryID)
+		if e != nil {
+			return nil, e
+		}
+		owners = nil
+		for _, v := range xs {
+			if v.ID == item.ResourceID && v.CommitID == item.Revision {
+				owners = []string{v.DeclaredBy}
+				break
+			}
+		}
+	}
+	if len(owners) == 0 || strings.TrimSpace(owners[0]) == "" {
+		return nil, restructuringplans.ErrInvalid
+	}
+	return owners, nil
+}
+
+func sameOwnerSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, x := range a {
+		if seen[x] {
+			return false
+		}
+		seen[x] = true
+	}
+	for _, x := range b {
+		if !seen[x] {
+			return false
+		}
+	}
+	return true
 }
 
 func gitCommitExists(path, revision string) bool {

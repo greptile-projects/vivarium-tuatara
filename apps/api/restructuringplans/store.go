@@ -396,7 +396,23 @@ func New(root string) (*Store, error) {
 	}
 	return &Store{root: root, now: func() time.Time { return time.Now().UTC().Truncate(time.Microsecond) }}, nil
 }
+
+// Create deliberately rejects unresolved ownership. Public callers must enter
+// through CreateResolved after authoritative resource stores have supplied the
+// exact consent sets; accepting Plan.Inventory directly would make OwnerIDs an
+// authorization assertion.
 func (s *Store) Create(v Plan, actor, digest string) (Plan, error) {
+	return Plan{}, ErrInvalid
+}
+
+func (s *Store) CreateResolved(v Plan, actor, digest string, owners map[string][]string) (Plan, error) {
+	for i := range v.Inventory {
+		resolved := owners[v.Inventory[i].ID]
+		if len(resolved) == 0 || !sameStringSet(v.Inventory[i].OwnerIDs, resolved) {
+			return Plan{}, ErrInvalid
+		}
+		v.Inventory[i].OwnerIDs = append([]string(nil), resolved...)
+	}
 	if validate(v) != nil {
 		return Plan{}, ErrInvalid
 	}
