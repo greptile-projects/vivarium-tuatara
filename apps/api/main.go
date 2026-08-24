@@ -1798,7 +1798,7 @@ func restructuringPushPaused(store *restructuringplans.Store, remote string) (bo
 		return true, "push paused: restructuring state is unavailable"
 	}
 	for _, p := range items {
-		if p.Cutover != nil && p.Cutover.State == "active" && p.Cutover.SourceState == "writes_paused" {
+		if p.Cutover != nil && p.Cutover.SourceState == "writes_paused" {
 			return true, "push rejected: repository authority moved during restructuring; use the retained destination mapping or ask the cutover controller to roll back"
 		}
 	}

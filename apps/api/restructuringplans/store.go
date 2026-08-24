@@ -408,7 +408,7 @@ func (s *Store) ActivateCutoverWith(repo, id, actor string, expected int, reposi
 	if v.Cutover == nil {
 		return Plan{}, ErrNotFound
 	}
-	if expected != v.Version || v.Cutover.State != "awaiting_approval" || v.CreatedBy != actor {
+	if expected != v.Version || (v.Cutover.State != "awaiting_approval" && v.Cutover.State != "publication_blocked") || v.CreatedBy != actor {
 		return Plan{}, ErrInvalid
 	}
 	for _, d := range v.Destinations {
@@ -422,17 +422,37 @@ func (s *Store) ActivateCutoverWith(repo, id, actor string, expected int, reposi
 			return Plan{}, ErrInvalid
 		}
 	}
-	if publish != nil {
-		if e = publish(); e != nil {
-			return Plan{}, e
-		}
-	}
 	now := s.now()
-	v.Cutover.State = "active"
+	v.Cutover.State = "publishing"
 	v.Cutover.SourceState = "writes_paused"
 	v.Cutover.ActivatedAt = &now
 	for i := range v.Cutover.Destinations {
 		v.Cutover.Destinations[i].RepositoryID = repositories[v.Cutover.Destinations[i].DestinationID]
+		v.Cutover.Destinations[i].State = "publishing"
+		v.Cutover.Destinations[i].Health = "pending"
+	}
+	v.Version++
+	if e = s.write(v); e != nil {
+		return Plan{}, e
+	}
+	if publish != nil {
+		if e = publish(); e != nil {
+			v.Cutover.State = "publication_blocked"
+			v.Cutover.Blockers = append(v.Cutover.Blockers, "destination publication or target-checked compensation failed; source writes remain paused and exact activation must be retried")
+			for i := range v.Cutover.Destinations {
+				v.Cutover.Destinations[i].State = "publication_uncertain"
+				v.Cutover.Destinations[i].Health = "blocked"
+			}
+			v.Version++
+			if writeErr := s.write(v); writeErr != nil {
+				return Plan{}, writeErr
+			}
+			return v, e
+		}
+	}
+	v.Cutover.State = "active"
+	v.Cutover.Blockers = nil
+	for i := range v.Cutover.Destinations {
 		v.Cutover.Destinations[i].State = "authoritative"
 		v.Cutover.Destinations[i].Health = "observing"
 	}

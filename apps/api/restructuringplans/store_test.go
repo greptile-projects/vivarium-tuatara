@@ -122,6 +122,23 @@ func TestCutoverRollbackRestoresSourceAuthority(t *testing.T) {
 	}
 }
 
+func TestCutoverPublicationFailurePausesSourceAndReconcilesRetry(t *testing.T) {
+	s, _ := New(t.TempDir())
+	p, _ := resolvedCreate(s, completePlan(), "owner", "digest")
+	p, _ = s.AddCandidateSet("source", p.ID, "owner", p.Version, CandidateSet{RequestID: "c", Repositories: []CandidateRepository{{ID: "bare", DestinationID: "core", Tip: strings.Repeat("a", 40)}}})
+	p, _ = s.AddRehearsal("source", p.ID, p.CandidateSets[0].ID, "owner", p.Version, Rehearsal{RequestID: "r", State: "passed"})
+	p, _ = s.StartCutover("source", p.ID, "owner", p.Version, Cutover{RequestID: "x", CandidateID: p.CandidateSets[0].ID, PauseKinds: []string{"git"}, CleanupPolicy: "archive"})
+	p, _ = s.ApproveCutover("source", p.ID, "owner", p.Version, CutoverApproval{RequestID: "a", DestinationID: "core", Decision: "approve"})
+	p, err := s.ActivateCutoverWith("source", p.ID, "owner", p.Version, map[string]string{"core": "destination"}, func() error { return errors.New("compensation failed") })
+	if err == nil || p.Cutover.State != "publication_blocked" || p.Cutover.SourceState != "writes_paused" || len(p.Cutover.Blockers) == 0 {
+		t.Fatalf("failed publication = %#v, %v", p.Cutover, err)
+	}
+	p, err = s.ActivateCutoverWith("source", p.ID, "owner", p.Version, map[string]string{"core": "destination"}, func() error { return nil })
+	if err != nil || p.Cutover.State != "active" || p.Cutover.SourceState != "writes_paused" {
+		t.Fatalf("reconciled publication = %#v, %v", p.Cutover, err)
+	}
+}
+
 func TestCutoverCompletionRequiresEveryDestinationEvidenceMatrix(t *testing.T) {
 	s, _ := New(t.TempDir())
 	p, _ := resolvedCreate(s, validPlanForTest(strings.Repeat("0", 40)), "owner", "digest")

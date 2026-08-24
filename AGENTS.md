@@ -3154,10 +3154,13 @@ Cutover control starts only from a gap-free candidate whose latest complete rehe
 collaboration mappings are approved or deliberately archived. Every destination owner separately approves before
 the human plan creator binds exact pre-created repositories, imports retained candidate tips, publishes default
 refs, and activates the source write boundary. The ledger exposes source/destination health, active pause kinds,
-approvals, bounded topology observations, and rollback; stock Git rejects source pushes while active. Cleanup
-publication runs only after serialized creator/version/owner-approval validation, preflights every default ref, and
+approvals, bounded topology observations, and rollback; stock Git rejects source pushes while active. Publication
+runs only after serialized creator/version/owner-approval validation, preflights every default ref, and
 compensates only refs created by that attempt with target-checked deletion if a later destination fails. Cleanup
-requires current passing build, release, permission, link, supported-consumer, ordinary-contribution, and Git-traffic
+uses a durable pre-publication `publishing` intent that pauses source writes. Publication or compensation failure
+retains `publication_blocked`, uncertain destination health, and a blocker; an exact retry reconciles surviving
+candidate-tip refs while source writes remain paused, so cleanup failure cannot expose two writable authorities.
+Cleanup requires current passing build, release, permission, link, supported-consumer, ordinary-contribution, and Git-traffic
 evidence keyed to every destination plus adoption of every dependent. Residual traffic and late writes block read-only/archive/removal policy
 completion. Rollback restores source authority without deleting evidence or candidates, and the ledger grants no
 general repository, Git, policy, collaboration, release, dependent, or cleanup authority.

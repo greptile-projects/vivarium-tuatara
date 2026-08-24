@@ -271,8 +271,11 @@ collaborator can stage cutover. Each destination owner approves independently. A
 destination repositories, imports the immutable candidate commits, publishes default refs, and activates a source
 write boundary; stock Git rejects pushes to the old authority with migration guidance. Activation authorization is
 serialized before Git mutation, all destination refs are preflighted, exact prior publication reconciles, and a later
-failure target-checks compensation for only refs created by that attempt. The workspace and API retain
-live source/destination state, active controls, approvals, dependency adoption, and bounded build, release,
+failure target-checks compensation for only refs created by that attempt. Before mutation, a durable `publishing`
+intent pauses source writes. If publication or compensation fails, the
+cutover retains `publication_blocked`, uncertain destination health, and an explicit blocker; exact retry reconciles
+surviving candidate-tip refs while the source stays paused. The workspace and API retain live source/destination
+state, active controls, approvals, dependency adoption, and bounded build, release,
 permission, link, supported-consumer, ordinary-contribution, and Git-traffic evidence for every destination. Failed or residual current
 evidence, late writes, and unadopted dependents prevent cleanup. A complete passing matrix applies the declared
 read-only, archive, or removal policy; rollback restores source authority without erasing retained history.
