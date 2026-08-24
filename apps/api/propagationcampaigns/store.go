@@ -19,6 +19,7 @@ var ErrNotFound = errors.New("propagation campaign not found")
 var ErrInvalid = errors.New("invalid propagation campaign")
 var ErrConflict = errors.New("propagation campaign request changed")
 var ErrVersion = errors.New("propagation campaign assessment changed")
+var ErrProofVersion = errors.New("propagation campaign equivalence proof changed")
 
 type Source struct {
 	Kind         string   `json:"kind"`
@@ -98,22 +99,163 @@ type Contribution struct {
 	PublishedAt       time.Time `json:"published_at"`
 	Authority         string    `json:"authority"`
 }
-type Campaign struct {
-	ID                 string           `json:"id"`
-	RequestID          string           `json:"request_id"`
-	RequestDigest      string           `json:"request_digest,omitempty"`
-	RepositoryID       string           `json:"repository_id"`
-	Title              string           `json:"title"`
-	Intent             string           `json:"intent"`
-	AcceptanceCriteria []string         `json:"acceptance_criteria"`
-	Source             Source           `json:"source"`
-	Targets            []Target         `json:"targets"`
-	CompletionPolicy   CompletionPolicy `json:"completion_policy"`
-	Assessments        []Assessment     `json:"assessments,omitempty"`
-	Contributions      []Contribution   `json:"contributions,omitempty"`
-	CreatedBy          string           `json:"created_by"`
-	CreatedAt          time.Time        `json:"created_at"`
+type EquivalenceScenario struct {
+	Name               string     `json:"name"`
+	SourceCommand      string     `json:"source_command"`
+	TargetCommand      string     `json:"target_command,omitempty"`
+	Coverage           []string   `json:"coverage"`
+	State              string     `json:"state"`
+	CheckRunID         string     `json:"check_run_id,omitempty"`
+	Logs               string     `json:"logs,omitempty"`
+	Artifacts          []Artifact `json:"artifacts,omitempty"`
+	Cost               float64    `json:"cost"`
+	SubstituteEvidence []Citation `json:"substitute_evidence,omitempty"`
 }
+type Artifact struct {
+	Path   string `json:"path"`
+	SHA256 string `json:"sha256"`
+	Size   int64  `json:"size"`
+}
+type OrdinaryCheck struct {
+	Name       string     `json:"name"`
+	Command    string     `json:"command"`
+	State      string     `json:"state"`
+	CheckRunID string     `json:"check_run_id"`
+	Logs       string     `json:"logs,omitempty"`
+	Artifacts  []Artifact `json:"artifacts,omitempty"`
+	Cost       float64    `json:"cost"`
+}
+type OwnerDecision struct {
+	OwnerID   string    `json:"owner_id"`
+	Decision  string    `json:"decision"`
+	Rationale string    `json:"rationale"`
+	CreatedAt time.Time `json:"created_at"`
+}
+type EquivalenceProof struct {
+	ID                      string                `json:"id"`
+	RequestID               string                `json:"request_id"`
+	RequestDigest           string                `json:"request_digest"`
+	TargetID                string                `json:"target_id"`
+	Version                 int                   `json:"version"`
+	TargetRevision          string                `json:"target_revision"`
+	SourceRevision          string                `json:"source_revision"`
+	SourceAssumptionsSHA256 string                `json:"source_assumptions_sha256"`
+	DependencySHA256        string                `json:"dependency_sha256"`
+	EvidenceRequirements    []string              `json:"evidence_requirements"`
+	Scenarios               []EquivalenceScenario `json:"scenarios"`
+	OrdinaryChecks          []OrdinaryCheck       `json:"ordinary_checks"`
+	OwnerDecisions          []OwnerDecision       `json:"owner_decisions"`
+	State                   string                `json:"state"`
+	ResidualDifferences     []string              `json:"residual_differences"`
+	Invalidated             bool                  `json:"invalidated"`
+	InvalidationReasons     []string              `json:"invalidation_reasons,omitempty"`
+	CreatedBy               string                `json:"created_by"`
+	CreatedAt               time.Time             `json:"created_at"`
+	Authority               string                `json:"authority"`
+}
+type Campaign struct {
+	ID                 string             `json:"id"`
+	RequestID          string             `json:"request_id"`
+	RequestDigest      string             `json:"request_digest,omitempty"`
+	RepositoryID       string             `json:"repository_id"`
+	Title              string             `json:"title"`
+	Intent             string             `json:"intent"`
+	AcceptanceCriteria []string           `json:"acceptance_criteria"`
+	Source             Source             `json:"source"`
+	Targets            []Target           `json:"targets"`
+	CompletionPolicy   CompletionPolicy   `json:"completion_policy"`
+	Assessments        []Assessment       `json:"assessments,omitempty"`
+	Contributions      []Contribution     `json:"contributions,omitempty"`
+	EquivalenceProofs  []EquivalenceProof `json:"equivalence_proofs,omitempty"`
+	CreatedBy          string             `json:"created_by"`
+	CreatedAt          time.Time          `json:"created_at"`
+}
+
+func (s *Store) CreateEquivalenceProof(repo, campaignID, actor, digest string, in EquivalenceProof) (Campaign, EquivalenceProof, error) {
+	var campaign Campaign
+	var out EquivalenceProof
+	e := s.lock(func() error {
+		v, e := s.read(repo, campaignID)
+		if e != nil {
+			return e
+		}
+		found := false
+		for _, target := range v.Targets {
+			if target.ID == in.TargetID && target.Kind == "repository" {
+				found = true
+			}
+		}
+		if !found || strings.TrimSpace(in.RequestID) == "" || len(in.TargetRevision) != 40 || len(in.SourceRevision) != 40 || len(in.EvidenceRequirements) == 0 || len(in.Scenarios) == 0 || len(in.OrdinaryChecks) == 0 {
+			return ErrInvalid
+		}
+		for _, x := range v.EquivalenceProofs {
+			if x.RequestID == in.RequestID {
+				if x.RequestDigest != digest {
+					return ErrConflict
+				}
+				campaign, out = v, x
+				return nil
+			}
+		}
+		for _, scenario := range in.Scenarios {
+			if strings.TrimSpace(scenario.Name) == "" || len(scenario.Coverage) == 0 || (scenario.State == "unsupported" && len(scenario.SubstituteEvidence) == 0) || (scenario.State != "unsupported" && scenario.CheckRunID == "") {
+				return ErrInvalid
+			}
+			for _, citation := range scenario.SubstituteEvidence {
+				if strings.TrimSpace(citation.Kind) == "" || strings.TrimSpace(citation.Reference) == "" || citation.Revision != in.TargetRevision {
+					return ErrInvalid
+				}
+			}
+		}
+		in.ID, in.Version, in.RequestDigest, in.CreatedBy, in.CreatedAt = randomID(), 1, digest, actor, s.now()
+		in.Authority = "equivalence evidence grants no Git, check, review, merge, release, deployment, or target authority"
+		v.EquivalenceProofs = append(v.EquivalenceProofs, in)
+		if e = s.write(v); e != nil {
+			return e
+		}
+		campaign, out = v, in
+		return nil
+	})
+	return campaign, out, e
+}
+
+func (s *Store) DecideEquivalenceProof(repo, campaignID, proofID, owner, decision, rationale string, expected int) (Campaign, EquivalenceProof, error) {
+	var campaign Campaign
+	var out EquivalenceProof
+	e := s.lock(func() error {
+		v, e := s.read(repo, campaignID)
+		if e != nil {
+			return e
+		}
+		for i := range v.EquivalenceProofs {
+			p := &v.EquivalenceProofs[i]
+			if p.ID != proofID {
+				continue
+			}
+			if p.Version != expected {
+				return ErrProofVersion
+			}
+			if !map[string]bool{"accepted": true, "rejected": true}[decision] || strings.TrimSpace(rationale) == "" {
+				return ErrInvalid
+			}
+			p.OwnerDecisions = append(p.OwnerDecisions, OwnerDecision{OwnerID: owner, Decision: decision, Rationale: rationale, CreatedAt: s.now()})
+			p.Version++
+			if decision == "rejected" {
+				p.State = "rejected"
+			} else if p.State == "demonstrated" {
+				p.State = "accepted"
+			}
+			if e = s.write(v); e != nil {
+				return e
+			}
+			campaign, out = v, *p
+			return nil
+		}
+		return ErrNotFound
+	})
+	return campaign, out, e
+}
+
 type Store struct {
 	root string
 	mu   sync.Mutex

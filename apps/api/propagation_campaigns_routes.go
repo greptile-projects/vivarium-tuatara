@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/propagationcampaigns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
@@ -18,7 +19,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 )
 
-func registerPropagationCampaignRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, campaigns *propagationcampaigns.Store, pulls *pullrequests.Store, proposalStore *proposals.Store) {
+func registerPropagationCampaignRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, campaigns *propagationcampaigns.Store, pulls *pullrequests.Store, proposalStore *proposals.Store, checks *checkruns.Store) {
 	actorID := func(c auth.Credential) string {
 		if c.AgentID != "" {
 			return c.AgentID
@@ -106,6 +107,33 @@ func registerPropagationCampaignRoutes(mux *http.ServeMux, git *storage.Store, c
 				}
 			}
 		}
+		for i := range v.EquivalenceProofs {
+			p := &v.EquivalenceProofs[i]
+			for _, target := range v.Targets {
+				if target.ID != p.TargetID || target.Kind != "repository" {
+					continue
+				}
+				repo, e := git.Open(target.RepositoryID)
+				if e != nil {
+					p.Invalidated = true
+					p.InvalidationReasons = []string{"target history is unavailable"}
+					continue
+				}
+				reasons := []string{}
+				tip, e := gitOutput(repo.Path(), "rev-parse", "--verify", "refs/heads/"+strings.TrimPrefix(target.ReleaseLine, "refs/heads/")+"^{commit}")
+				if e != nil || tip != p.TargetRevision {
+					reasons = append(reasons, "target release line moved")
+				}
+				if propagationDependencyDigest(repo.Path(), p.TargetRevision) != p.DependencySHA256 {
+					reasons = append(reasons, "target dependency assumptions changed")
+				}
+				source, e := git.Open(v.Source.RepositoryID)
+				if e != nil || propagationSourceAssumptions(source.Path(), p.SourceRevision, v.AcceptanceCriteria) != p.SourceAssumptionsSHA256 {
+					reasons = append(reasons, "source scenarios or acceptance assumptions changed")
+				}
+				p.Invalidated, p.InvalidationReasons = len(reasons) > 0, reasons
+			}
+		}
 		visibleAssessments := make([]propagationcampaigns.Assessment, 0, len(v.Assessments))
 		for _, assessment := range v.Assessments {
 			visible := false
@@ -128,6 +156,15 @@ func registerPropagationCampaignRoutes(mux *http.ServeMux, git *storage.Store, c
 			}
 		}
 		v.Contributions = visibleContributions
+		visibleProofs := make([]propagationcampaigns.EquivalenceProof, 0, len(v.EquivalenceProofs))
+		for _, proof := range v.EquivalenceProofs {
+			for _, target := range v.Targets {
+				if target.ID == proof.TargetID && target.State != "inaccessible" && target.State != "unsupported" {
+					visibleProofs = append(visibleProofs, proof)
+				}
+			}
+		}
+		v.EquivalenceProofs = visibleProofs
 		return v
 	}
 	mux.HandleFunc("GET /repositories/{id}/propagation-campaigns", func(w http.ResponseWriter, r *http.Request) {
@@ -450,6 +487,237 @@ func registerPropagationCampaignRoutes(mux *http.ServeMux, git *storage.Store, c
 		}
 		writeJSON(w, 201, map[string]any{"campaign": project(updated, c), "contribution": contribution, "proposal": proposal, "tasks": tasks})
 	})
+	mux.HandleFunc("POST /repositories/{id}/propagation-campaigns/{campaign_id}/targets/{target_id}/equivalence-proofs", func(w http.ResponseWriter, r *http.Request) {
+		c, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id"))
+		if !ok {
+			return
+		}
+		if checks == nil {
+			writeAPIError(w, 503, "propagation_equivalence_unavailable", "bounded checks are unavailable")
+			return
+		}
+		var in struct {
+			RequestID      string `json:"request_id"`
+			TargetRevision string `json:"target_revision"`
+			Adaptations    []struct {
+				Scenario           string                          `json:"scenario"`
+				Command            string                          `json:"command"`
+				EnvironmentCheck   string                          `json:"environment_check"`
+				Coverage           []string                        `json:"coverage"`
+				Unsupported        bool                            `json:"unsupported"`
+				SubstituteEvidence []propagationcampaigns.Citation `json:"substitute_evidence"`
+				ResidualDifference string                          `json:"residual_difference"`
+			} `json:"adaptations"`
+		}
+		if decodeJSON(r, &in) != nil || !validPropagationRequestID(in.RequestID) {
+			writeAPIError(w, 400, "invalid_request", "a stable equivalence proof request is required")
+			return
+		}
+		campaign, e := campaigns.Get(r.PathValue("id"), r.PathValue("campaign_id"))
+		if e != nil {
+			writeAPIError(w, 404, "propagation_campaign_not_found", "propagation campaign not found")
+			return
+		}
+		var target *propagationcampaigns.Target
+		for i := range campaign.Targets {
+			if campaign.Targets[i].ID == r.PathValue("target_id") {
+				target = &campaign.Targets[i]
+			}
+		}
+		if target == nil || target.Kind != "repository" {
+			writeAPIError(w, 404, "propagation_target_not_found", "repository target not found")
+			return
+		}
+		targetRepo, e := catalog.GetByID(target.RepositoryID)
+		access, _ := catalog.HasCollaborator(c.UserID, target.RepositoryID)
+		if e != nil || (targetRepo.OwnerID != c.UserID && !access) {
+			writeAPIError(w, 403, "propagation_target_forbidden", "current target access is required")
+			return
+		}
+		gr, e := git.Open(target.RepositoryID)
+		if e != nil || len(in.TargetRevision) != 40 || !catalog.HasCommit(target.RepositoryID, in.TargetRevision) {
+			writeAPIError(w, 422, "propagation_target_revision_missing", "the exact target revision must resolve")
+			return
+		}
+		sourceRepo, e := git.Open(campaign.Source.RepositoryID)
+		if e != nil {
+			writeAPIError(w, 422, "propagation_source_invalid", "source scenarios are unavailable")
+			return
+		}
+		sourceRevision := campaign.Source.Commits[len(campaign.Source.Commits)-1]
+		sourceDefs, e := propagationDefinitions(sourceRepo.Path(), sourceRevision)
+		if e != nil || len(sourceDefs) == 0 {
+			writeAPIError(w, 422, "propagation_scenarios_missing", "the source outcome must define reusable ordinary checks")
+			return
+		}
+		targetDefs, e := propagationDefinitions(gr.Path(), in.TargetRevision)
+		if e != nil || len(targetDefs) == 0 {
+			writeAPIError(w, 422, "propagation_target_checks_missing", "the target revision must define ordinary checks")
+			return
+		}
+		adapted := map[string]struct {
+			Command, Environment string
+			Coverage             []string
+			Unsupported          bool
+			Substitutes          []propagationcampaigns.Citation
+			Residual             string
+		}{}
+		for _, a := range in.Adaptations {
+			if _, exists := adapted[a.Scenario]; exists {
+				writeAPIError(w, 422, "propagation_adaptation_invalid", "each source scenario requires one adaptation")
+				return
+			}
+			adapted[a.Scenario] = struct {
+				Command, Environment string
+				Coverage             []string
+				Unsupported          bool
+				Substitutes          []propagationcampaigns.Citation
+				Residual             string
+			}{a.Command, a.EnvironmentCheck, a.Coverage, a.Unsupported, a.SubstituteEvidence, a.ResidualDifference}
+		}
+		covered := map[string]bool{}
+		for _, a := range in.Adaptations {
+			for _, criterion := range a.Coverage {
+				covered[strings.TrimSpace(criterion)] = true
+			}
+		}
+		for _, criterion := range campaign.AcceptanceCriteria {
+			if !covered[criterion] {
+				writeAPIError(w, 422, "propagation_coverage_incomplete", "every source acceptance criterion requires scenario coverage")
+				return
+			}
+		}
+		byTarget := map[string]checkruns.Definition{}
+		for _, d := range targetDefs {
+			byTarget[d.Name] = d
+		}
+		scope := "propagation-" + campaign.ID + "-" + target.ID + "-" + in.RequestID
+		proof := propagationcampaigns.EquivalenceProof{RequestID: in.RequestID, TargetID: target.ID, TargetRevision: in.TargetRevision, SourceRevision: sourceRevision, EvidenceRequirements: append([]string{}, campaign.AcceptanceCriteria...), SourceAssumptionsSHA256: propagationSourceAssumptions(sourceRepo.Path(), sourceRevision, campaign.AcceptanceCriteria), DependencySHA256: propagationDependencyDigest(gr.Path(), in.TargetRevision), State: "demonstrated"}
+		for _, d := range sourceDefs {
+			a, exists := adapted[d.Name]
+			if !exists || len(a.Coverage) == 0 {
+				writeAPIError(w, 422, "propagation_adaptation_missing", "every source scenario requires declared target coverage")
+				return
+			}
+			s := propagationcampaigns.EquivalenceScenario{Name: d.Name, SourceCommand: d.Command, Coverage: a.Coverage}
+			if a.Unsupported {
+				if len(a.Substitutes) == 0 {
+					writeAPIError(w, 422, "propagation_substitute_required", "unsupported scenarios require explicit substitute evidence")
+					return
+				}
+				s.State = "unsupported"
+				s.SubstituteEvidence = a.Substitutes
+				proof.ResidualDifferences = append(proof.ResidualDifferences, a.Residual)
+				proof.State = "residual_differences"
+			} else {
+				base, ok := byTarget[a.Environment]
+				if !ok || strings.TrimSpace(a.Command) == "" {
+					writeAPIError(w, 422, "propagation_adaptation_invalid", "adapted scenarios require a target check environment and exact command")
+					return
+				}
+				base.Name = "equivalence:" + d.Name
+				base.Command = a.Command
+				run := executePropagationCheck(checks, gr.Path(), target.RepositoryID, scope, in.TargetRevision, base, actorID(c))
+				s.TargetCommand = a.Command
+				s.State = run.State
+				s.CheckRunID = run.ID
+				s.Logs, s.Artifacts, s.Cost = propagationRunEvidence(checks, run)
+				if run.State != "succeeded" {
+					proof.State = "failed"
+				}
+			}
+			proof.Scenarios = append(proof.Scenarios, s)
+		}
+		for _, d := range targetDefs {
+			run := executePropagationCheck(checks, gr.Path(), target.RepositoryID, scope, in.TargetRevision, d, actorID(c))
+			o := propagationcampaigns.OrdinaryCheck{Name: d.Name, Command: d.Command, State: run.State, CheckRunID: run.ID}
+			o.Logs, o.Artifacts, o.Cost = propagationRunEvidence(checks, run)
+			if run.State != "succeeded" {
+				proof.State = "failed"
+			}
+			proof.OrdinaryChecks = append(proof.OrdinaryChecks, o)
+		}
+		body, _ := json.Marshal(in)
+		sum := sha256.Sum256(append(body, []byte(proof.SourceAssumptionsSHA256+proof.DependencySHA256)...))
+		updated, out, e := campaigns.CreateEquivalenceProof(campaign.RepositoryID, campaign.ID, actorID(c), hex.EncodeToString(sum[:]), proof)
+		if errors.Is(e, propagationcampaigns.ErrConflict) {
+			writeAPIError(w, 409, "propagation_equivalence_conflict", "this proof request was reused with different evidence")
+			return
+		}
+		if e != nil {
+			writeAPIError(w, 422, "propagation_equivalence_invalid", "equivalence evidence could not be retained")
+			return
+		}
+		writeJSON(w, 201, map[string]any{"campaign": project(updated, c), "equivalence_proof": out})
+	})
+	mux.HandleFunc("POST /repositories/{id}/propagation-campaigns/{campaign_id}/equivalence-proofs/{proof_id}/decisions", func(w http.ResponseWriter, r *http.Request) {
+		c, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id"))
+		if !ok {
+			return
+		}
+		if c.AgentID != "" {
+			writeAPIError(w, 403, "propagation_decision_forbidden", "only a named human target owner may decide equivalence")
+			return
+		}
+		var in struct {
+			ExpectedVersion int    `json:"expected_version"`
+			Decision        string `json:"decision"`
+			Rationale       string `json:"rationale"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "an owner decision is required")
+			return
+		}
+		campaign, e := campaigns.Get(r.PathValue("id"), r.PathValue("campaign_id"))
+		if e != nil {
+			writeAPIError(w, 404, "propagation_campaign_not_found", "propagation campaign not found")
+			return
+		}
+		var proof *propagationcampaigns.EquivalenceProof
+		for i := range campaign.EquivalenceProofs {
+			if campaign.EquivalenceProofs[i].ID == r.PathValue("proof_id") {
+				proof = &campaign.EquivalenceProofs[i]
+			}
+		}
+		owner := false
+		if proof != nil {
+			for _, t := range campaign.Targets {
+				if t.ID == proof.TargetID {
+					for _, id := range t.OwnerIDs {
+						if id == c.UserID {
+							owner = true
+						}
+					}
+				}
+			}
+		}
+		if !owner {
+			writeAPIError(w, 403, "propagation_decision_forbidden", "only a named human target owner may decide equivalence")
+			return
+		}
+		var targetRepositoryID string
+		for _, target := range campaign.Targets {
+			if proof != nil && target.ID == proof.TargetID {
+				targetRepositoryID = target.RepositoryID
+			}
+		}
+		targetRepository, targetErr := catalog.GetByID(targetRepositoryID)
+		targetAccess, _ := catalog.HasCollaborator(c.UserID, targetRepositoryID)
+		if targetErr != nil || (targetRepository.OwnerID != c.UserID && !targetAccess) {
+			writeAPIError(w, 403, "propagation_target_forbidden", "current target access is required to decide equivalence")
+			return
+		}
+		updated, out, e := campaigns.DecideEquivalenceProof(campaign.RepositoryID, campaign.ID, proof.ID, c.UserID, in.Decision, in.Rationale, in.ExpectedVersion)
+		if errors.Is(e, propagationcampaigns.ErrProofVersion) {
+			writeAPIError(w, 409, "propagation_equivalence_changed", "reload the proof before deciding")
+			return
+		}
+		if e != nil {
+			writeAPIError(w, 422, "propagation_decision_invalid", "an accepted or rejected decision with rationale is required")
+			return
+		}
+		writeJSON(w, 201, map[string]any{"campaign": project(updated, c), "equivalence_proof": out})
+	})
 }
 
 func gitOutput(path string, args ...string) (string, error) {
@@ -578,4 +846,88 @@ func propagationSymbolEvidence(diff string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+func propagationDefinitions(gitDir, revision string) ([]checkruns.Definition, error) {
+	b, err := exec.Command("git", "--git-dir="+gitDir, "show", revision+":"+checkruns.ConfigPath).Output()
+	if err != nil {
+		return nil, err
+	}
+	config, err := checkruns.ParseConfig(b)
+	if err != nil {
+		return nil, err
+	}
+	return config.Checks, nil
+}
+
+func propagationSourceAssumptions(gitDir, revision string, criteria []string) string {
+	b, _ := exec.Command("git", "--git-dir="+gitDir, "show", revision+":"+checkruns.ConfigPath).Output()
+	payload, _ := json.Marshal(struct {
+		Config   json.RawMessage `json:"config"`
+		Criteria []string        `json:"criteria"`
+	}{Config: b, Criteria: criteria})
+	sum := sha256.Sum256(payload)
+	return hex.EncodeToString(sum[:])
+}
+
+func propagationDependencyDigest(gitDir, revision string) string {
+	h := sha256.New()
+	for _, path := range []string{"go.mod", "go.sum", "package.json", "bun.lock", ".vivarium/packages.json"} {
+		b, err := exec.Command("git", "--git-dir="+gitDir, "show", revision+":"+path).Output()
+		if err == nil {
+			h.Write([]byte(path))
+			h.Write([]byte{0})
+			h.Write(b)
+			h.Write([]byte{0})
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func executePropagationCheck(store *checkruns.Store, gitDir, repositoryID, scope, revision string, definition checkruns.Definition, actor string) checkruns.Run {
+	runs, err := store.CreateRequested(repositoryID, scope, revision, []checkruns.Definition{definition}, actor)
+	if err != nil || len(runs) == 0 {
+		return checkruns.Run{Definition: definition, CommitID: revision, State: "failed", Failure: "check could not be reserved"}
+	}
+	store.Execute(runs[0], gitDir)
+	run, err := store.Get(repositoryID, scope, runs[0].ID)
+	if err != nil {
+		return runs[0]
+	}
+	return run
+}
+
+func propagationRunEvidence(store *checkruns.Store, run checkruns.Run) (string, []propagationcampaigns.Artifact, float64) {
+	logs := []string{}
+	events, _ := store.Events(run.RepositoryID, run.PullRequestID, run.ID, 0)
+	for _, event := range events {
+		if (event.Stream == "stdout" || event.Stream == "stderr" || event.Kind == "command") && event.Message != "" {
+			logs = append(logs, event.Stream+": "+event.Message)
+		}
+	}
+	artifacts := make([]propagationcampaigns.Artifact, len(run.Artifacts))
+	for i, a := range run.Artifacts {
+		artifacts[i] = propagationcampaigns.Artifact{Path: a.Path, SHA256: a.SHA256, Size: a.Size}
+	}
+	cost := 0.0
+	if run.StartedAt != nil && run.CompletedAt != nil {
+		cpus := run.Definition.CPUs
+		if cpus <= 0 {
+			cpus = 1
+		}
+		cost = run.CompletedAt.Sub(*run.StartedAt).Hours() * cpus
+	}
+	return strings.Join(logs, "\n"), artifacts, cost
+}
+
+func validPropagationRequestID(value string) bool {
+	if value == "" || len(value) > 100 {
+		return false
+	}
+	for _, r := range value {
+		if !(r >= 'a' && r <= 'z') && !(r >= 'A' && r <= 'Z') && !(r >= '0' && r <= '9') && r != '-' && r != '_' {
+			return false
+		}
+	}
+	return true
 }
