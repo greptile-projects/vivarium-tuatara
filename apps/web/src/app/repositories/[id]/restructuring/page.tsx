@@ -1,0 +1,1 @@
+import type {Metadata} from "next";import {RestructuringPlansWorkspace} from "@/components/restructuring-plans-workspace";export const metadata:Metadata={title:"Repository restructuring"};export default async function Page({params}:{params:Promise<{id:string}>}){const{id}=await params;return <RestructuringPlansWorkspace repositoryID={id}/>}

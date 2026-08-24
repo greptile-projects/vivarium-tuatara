@@ -3094,3 +3094,16 @@ there from outside the checkout — as a symlink or a read-only bind mount — a
 is gitignored for that reason. Read it for context on what is being built, but
 never edit it, `git add` it, or delete it, and do not treat its presence as
 uncommitted work.
+Repository restructuring plans at `/repositories/{id}/restructuring-plans` and the repository
+`/restructuring` workspace freeze proposed splits, extractions, consolidations, and ownership
+realignments before identities change beneath `$RESTRUCTURING_PLAN_STORAGE_ROOT`
+(`restructuring-plans`). Human collaborators select exact source commits and declare destination
+names, owners, visibility, default branches, retained identities, content/history mappings,
+deadlines, success criteria, and rollback limits. Every plan explicitly accounts for refs, pulls,
+issues, tasks, releases, packages, documentation, policies, workspaces, automation, consumers, and
+federated relationships as resolved, inaccessible, ambiguous, or shared at a source revision.
+CAS-versioned human or repository-bound read-only-agent findings must cite retained inventory
+items and evidence. Plans are coordination records only and grant no repository creation, Git,
+resource migration, ownership, visibility, policy, or destination authority.
+
+Sensitive history remediations at `/repositories/{id}/history-remediations` and the repository

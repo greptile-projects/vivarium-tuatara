@@ -186,6 +186,26 @@ and becomes an ordinary task pull. The same trail keeps an unsupported repositor
 a newly discovered consumer, and a seven-day upstream-review exception visible rather than allowing minimum coverage to
 hide them. Playwright gives the propagation ledger its own temporary storage root so repeated journeys do not share state.
 
+## Repository restructuring planning
+
+Repository collaborators open topology proposals through `POST
+/repositories/{id}/restructuring-plans` or the repository's Restructuring plans workspace. A
+caller-stable request freezes one or more exact source commits, proposed destination names and
+owners, visibility and default branches, identities that must remain recognizable, path and
+history dispositions, a deadline, success criteria, and explicit rollback limits. Source commits
+must resolve in Git, and repository-bound credentials cannot expand their authority to another
+source.
+
+The plan accounts for all twelve collaboration and delivery boundaries: refs, pull requests,
+issues, tasks, releases, packages, documentation, policies, workspaces, automation, consumers,
+and federated relationships. Each entry names an owner, exact source revision, proposed move,
+remaining or divided destination, citation, and a resolved, inaccessible, ambiguous, or shared
+state; gaps are first-class inventory rather than omitted from a successful plan. Humans and
+repository-bound read-only agents can append version-bound findings only against retained inventory
+items and with citations. This is a review and coordination boundary: it creates no repository,
+moves no Git or collaboration record, changes no owner/visibility/policy, and grants no source or
+destination write authority.
+
 ## Shared regression search boundaries
 
 Repository collaborators open regression investigations through `POST
