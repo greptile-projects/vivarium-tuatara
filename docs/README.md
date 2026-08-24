@@ -35,6 +35,23 @@ the frozen source/base/target revisions, and movement of one target release line
 assessment as stale while preserving the campaign and every unaffected assessment. Assessment records grant no
 Git, package, branch, implementation, review, merge, release, deployment, or target-repository authority.
 
+A current human target-repository maintainer can turn one non-stale, implementable assessment into an ordinary
+locally owned contribution plan at `POST
+/repositories/{id}/propagation-campaigns/{campaign_id}/targets/{target_id}/contributions`. The handoff freezes the
+assessment version and target tip, direct or adapted application, explained deviations, local constraints, chosen
+local-branch, contributor-fork, or federated topology, and ordered human- or agent-owned tasks. Its ordinary proposal
+and task reasoning carries the accepted source intent, relevant commits, original and target acceptance criteria,
+cited assessment findings, and the local verification plan. Direct work explicitly preserves source Git authorship;
+adapted work must explain why the target cannot appropriately take the same patch.
+
+Task agents start through the existing assignment-bound session route, which creates a scoped branch and observable
+workspace at the frozen target revision. Humans may use an ordinary local branch or fork, while federated repositories
+continue through federation's own contribution boundary. Completed work becomes an ordinary task-linked pull request
+and remains subject to target review and merge policy. Unavailable dependencies remain constraints, conflicts require
+adaptation, and restricted or embargoed details stay outside the handoff. Contribution links project only to readers
+who retain target access. Neither campaign ownership nor publication grants Git, fork, session, workspace, pull,
+review, merge, package, release, federation, or cross-repository authority.
+
 ## Shared regression search boundaries
 
 Repository collaborators open regression investigations through `POST

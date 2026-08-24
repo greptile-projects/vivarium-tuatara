@@ -18,6 +18,11 @@ Assessments classify direct applicability, already-satisfied outcomes, required 
 non-applicability without treating similarity as equivalence proof. CAS entries retain cited human/read-only-agent
 findings, risks, uncertainty, and named-human-owner acknowledgements; target movement invalidates only that
 target's assessment and grants no implementation or delivery authority.
+Current human target maintainers can publish revision-bound ordinary contribution plans from implementable assessments.
+Plans retain direct-versus-adapted application, required deviation explanations, local constraints and topology, source
+authorship/commits, acceptance criteria, cited assessment context, and ordered human/agent tasks. Existing scoped task
+sessions, workspaces, forks, federation, pulls, review, and merge paths govern execution; embargoed details remain outside
+the handoff, target access controls its projection, and campaign ownership grants none of those authorities.
 
 Regression investigations at `/repositories/{id}/regression-investigations` and the repository
 `/regressions` workspace turn a suspected regression from an issue, support thread, failed check,

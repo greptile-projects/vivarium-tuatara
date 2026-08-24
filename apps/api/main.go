@@ -1573,8 +1573,8 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	if authStore != nil && repositoryCatalog != nil && regressionInvestigationStore != nil && issueStore != nil && supportThreadStore != nil && checkRunStore != nil && releaseStore != nil && deploymentStore != nil && debugWorkspaceStore != nil && proposalStore != nil && qualityPlanStore != nil {
 		registerRegressionInvestigationRoutes(mux, store, repositoryCatalog, authStore, regressionInvestigationStore, issueStore, supportThreadStore, checkRunStore, releaseStore, deploymentStore, debugWorkspaceStore, pullRequestStore, proposalStore, qualityPlanStore)
 	}
-	if authStore != nil && repositoryCatalog != nil && propagationCampaignStore != nil && pullRequestStore != nil {
-		registerPropagationCampaignRoutes(mux, store, repositoryCatalog, authStore, propagationCampaignStore, pullRequestStore)
+	if authStore != nil && repositoryCatalog != nil && propagationCampaignStore != nil && pullRequestStore != nil && proposalStore != nil {
+		registerPropagationCampaignRoutes(mux, store, repositoryCatalog, authStore, propagationCampaignStore, pullRequestStore, proposalStore)
 	}
 	if authStore != nil && userStore != nil && repositoryCatalog != nil && apiContractStore != nil && pullRequestStore != nil && releaseStore != nil {
 		registerAPIContractRoutes(mux, store, repositoryCatalog, authStore, apiContractStore, pullRequestStore, releaseStore)

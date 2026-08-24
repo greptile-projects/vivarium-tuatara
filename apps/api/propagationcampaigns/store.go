@@ -82,6 +82,22 @@ type Assessment struct {
 	CreatedBy          string            `json:"created_by"`
 	CreatedAt          time.Time         `json:"created_at"`
 }
+type Contribution struct {
+	ID                string    `json:"id"`
+	TargetID          string    `json:"target_id"`
+	AssessmentID      string    `json:"assessment_id"`
+	AssessmentVersion int       `json:"assessment_version"`
+	TargetRevision    string    `json:"target_revision"`
+	Application       string    `json:"application"`
+	Deviation         string    `json:"deviation,omitempty"`
+	Topology          string    `json:"topology"`
+	Constraints       []string  `json:"constraints"`
+	ProposalID        string    `json:"proposal_id"`
+	TaskIDs           []string  `json:"task_ids"`
+	PublishedBy       string    `json:"published_by"`
+	PublishedAt       time.Time `json:"published_at"`
+	Authority         string    `json:"authority"`
+}
 type Campaign struct {
 	ID                 string           `json:"id"`
 	RequestID          string           `json:"request_id"`
@@ -94,6 +110,7 @@ type Campaign struct {
 	Targets            []Target         `json:"targets"`
 	CompletionPolicy   CompletionPolicy `json:"completion_policy"`
 	Assessments        []Assessment     `json:"assessments,omitempty"`
+	Contributions      []Contribution   `json:"contributions,omitempty"`
 	CreatedBy          string           `json:"created_by"`
 	CreatedAt          time.Time        `json:"created_at"`
 }
@@ -229,6 +246,43 @@ func (s *Store) AddAssessmentEntry(repo, campaignID, assessmentID, actor, actorK
 			return nil
 		}
 		return ErrNotFound
+	})
+	return campaign, out, e
+}
+func (s *Store) LinkContribution(repo, campaignID, actor string, in Contribution) (Campaign, Contribution, error) {
+	var campaign Campaign
+	var out Contribution
+	e := s.lock(func() error {
+		v, e := s.read(repo, campaignID)
+		if e != nil {
+			return e
+		}
+		var assessment *Assessment
+		for i := range v.Assessments {
+			if v.Assessments[i].ID == in.AssessmentID && v.Assessments[i].TargetID == in.TargetID {
+				assessment = &v.Assessments[i]
+			}
+		}
+		if assessment == nil || assessment.Version != in.AssessmentVersion || assessment.TargetRevision != in.TargetRevision || !map[string]bool{"direct": true, "adapted": true}[in.Application] || (in.Application == "adapted" && strings.TrimSpace(in.Deviation) == "") || !map[string]bool{"local_branch": true, "fork": true, "federated": true}[in.Topology] || len(in.ProposalID) != 32 || len(in.TaskIDs) == 0 {
+			return ErrInvalid
+		}
+		for _, existing := range v.Contributions {
+			if existing.TargetID == in.TargetID {
+				if existing.AssessmentID != in.AssessmentID || existing.AssessmentVersion != in.AssessmentVersion || existing.ProposalID != in.ProposalID {
+					return ErrConflict
+				}
+				campaign, out = v, existing
+				return nil
+			}
+		}
+		in.ID, in.PublishedBy, in.PublishedAt = randomID(), actor, s.now()
+		in.Authority = "ordinary target repository permissions govern sessions, branches, forks, pulls, review, and merge"
+		v.Contributions = append(v.Contributions, in)
+		if e = s.write(v); e != nil {
+			return e
+		}
+		campaign, out = v, in
+		return nil
 	})
 	return campaign, out, e
 }
