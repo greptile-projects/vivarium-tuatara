@@ -3108,7 +3108,11 @@ unavailable identities remain explicit gaps. Source and finding participation st
 persistence, and a filesystem-wide ledger lock preserves finding CAS across API processes.
 Resolved federated relationships are contribution-authority records with a nonempty peer set and
 must bind the inventory's exact local source/target repository and revision; peer trust alone is
-not evidence that a repository participates in that relationship.
+not evidence that a repository participates in that relationship. Federation retains source and
+target revisions separately. Resolved issue and task inventory requires respectively an exact
+implementation affected revision or assignment base revision. Organization-agent findings hold
+their live repository access grant through persistence rather than requiring the operator to be a
+human repository collaborator.
 CAS-versioned human or repository-bound read-only-agent findings must cite retained inventory
 items and evidence. Plans are coordination records only and grant no repository creation, Git,
 resource migration, ownership, visibility, policy, or destination authority.

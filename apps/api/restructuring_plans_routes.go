@@ -15,6 +15,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/federation"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/governance"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/issues"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
 	packageversions "github.com/greptile-projects/vivarium-tuatara/apps/api/packages"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
@@ -26,7 +27,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/workspaces"
 )
 
-func registerRestructuringPlanRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, plans *restructuringplans.Store, pulls *pullrequests.Store, issueStore *issues.Store, proposalStore *proposals.Store, releaseStore *releases.Store, packageStore *packageversions.Store, docs *docscollections.Store, policies *governance.Store, workspaceStore *workspaces.Store, workflows *collaborationworkflows.Store, consumers *relationships.Store, peers *federation.Store) {
+func registerRestructuringPlanRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, organizationsStore *organizations.Store, plans *restructuringplans.Store, pulls *pullrequests.Store, issueStore *issues.Store, proposalStore *proposals.Store, releaseStore *releases.Store, packageStore *packageversions.Store, docs *docscollections.Store, policies *governance.Store, workspaceStore *workspaces.Store, workflows *collaborationworkflows.Store, consumers *relationships.Store, peers *federation.Store) {
 	actorID := func(c auth.Credential) string {
 		if c.AgentID != "" {
 			return c.AgentID
@@ -143,7 +144,7 @@ func registerRestructuringPlanRoutes(mux *http.ServeMux, git *storage.Store, cat
 			writeAPIError(w, 422, "restructuring_plan_invalid", "sources, destinations, mappings, all inventory kinds, owners, deadline, success criteria, and rollback limits are required")
 			return
 		}
-		if errors.Is(e, repositories.ErrNotFound) || errors.Is(e, repositories.ErrInvalidCollaborator) {
+		if errors.Is(e, repositories.ErrNotFound) || errors.Is(e, repositories.ErrInvalidCollaborator) || errors.Is(e, organizations.ErrNotFound) || errors.Is(e, organizations.ErrInvalid) {
 			writeAPIError(w, 409, "restructuring_authority_changed", "source repository access changed before the plan was retained")
 			return
 		}
@@ -172,11 +173,24 @@ func registerRestructuringPlanRoutes(mux *http.ServeMux, git *storage.Store, cat
 			kind = "read_only_agent"
 		}
 		var out restructuringplans.Plan
-		e := catalog.WithCurrentParticipant(c.UserID, r.PathValue("id"), func() error {
+		persist := func() error {
 			var addErr error
 			out, addErr = plans.AddFinding(r.PathValue("id"), r.PathValue("plan_id"), actorID(c), kind, in)
 			return addErr
-		})
+		}
+		var e error
+		if c.AgentID != "" && c.OrganizationID != "" && c.AccessGrantID != "" {
+			e = organizationsStore.WithCurrentAgentGrant(c.OrganizationID, c.AccessGrantID, c.AgentID, r.PathValue("id"), func() error {
+				return catalog.WithCurrentRepositories([]string{r.PathValue("id")}, func(repositories []repositories.Repository) error {
+					if len(repositories) != 1 || repositories[0].OrganizationID != c.OrganizationID {
+						return organizations.ErrNotFound
+					}
+					return persist()
+				})
+			})
+		} else {
+			e = catalog.WithCurrentParticipant(c.UserID, r.PathValue("id"), persist)
+		}
 		if errors.Is(e, restructuringplans.ErrNotFound) {
 			writeAPIError(w, 404, "restructuring_plan_not_found", "restructuring plan not found")
 			return
@@ -189,7 +203,7 @@ func registerRestructuringPlanRoutes(mux *http.ServeMux, git *storage.Store, cat
 			writeAPIError(w, 422, "restructuring_finding_invalid", "findings require the current version, affected inventory items, bounded prose, and citations")
 			return
 		}
-		if errors.Is(e, repositories.ErrNotFound) || errors.Is(e, repositories.ErrInvalidCollaborator) {
+		if errors.Is(e, repositories.ErrNotFound) || errors.Is(e, repositories.ErrInvalidCollaborator) || errors.Is(e, organizations.ErrNotFound) || errors.Is(e, organizations.ErrInvalid) {
 			writeAPIError(w, 409, "restructuring_authority_changed", "repository participation changed before the finding was retained")
 			return
 		}
@@ -225,14 +239,14 @@ func restructuringInventoryCitationResolves(git *storage.Store, item restructuri
 		return e == nil && v.SourceCommitID == item.Revision
 	case "issue":
 		v, e := issueStore.Get(item.RepositoryID, item.ResourceID)
-		return e == nil && v.RepositoryID == item.RepositoryID
+		return e == nil && v.RepositoryID == item.RepositoryID && v.Implementation != nil && v.Implementation.AffectedRevision == item.Revision
 	case "task":
 		parts := strings.Split(item.ResourceID, "/")
 		if len(parts) != 2 {
 			return false
 		}
-		_, e := proposalStore.GetTask(item.RepositoryID, parts[0], parts[1])
-		return e == nil
+		v, e := proposalStore.GetTask(item.RepositoryID, parts[0], parts[1])
+		return e == nil && v.Assignment != nil && v.Assignment.Access.RepositoryID == item.RepositoryID && v.Assignment.Access.BaseRevision == item.Revision
 	case "release":
 		v, e := releaseStore.Get(item.RepositoryID, item.ResourceID)
 		return e == nil && v.CommitID == item.Revision
@@ -284,7 +298,7 @@ func restructuringInventoryCitationResolves(git *storage.Store, item restructuri
 		return false
 	case "federated_relationship":
 		relationship, e := peers.Contribution(item.ResourceID)
-		return e == nil && len(relationship.InstanceIDs) > 0 && relationship.SourceRevision == item.Revision && (relationship.SourceRepositoryID == item.RepositoryID || relationship.TargetRepositoryID == item.RepositoryID)
+		return e == nil && len(relationship.InstanceIDs) > 0 && ((relationship.SourceRepositoryID == item.RepositoryID && relationship.SourceRevision == item.Revision) || (relationship.TargetRepositoryID == item.RepositoryID && relationship.TargetRevision == item.Revision))
 	}
 	return false
 }

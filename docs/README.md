@@ -206,7 +206,10 @@ items and with citations. Resolved identities must match their authoritative res
 applicable exact revision; unavailable identities remain explicit gaps. Catalog participation is
 held through persistence, and a filesystem-wide ledger lock preserves finding CAS across API
 processes. A federated relationship resolves only through contribution authority bound to the exact
-local source/target repository and revision; an otherwise trusted peer is not sufficient evidence.
+local source or target repository and its distinct corresponding revision; an otherwise trusted
+peer is not sufficient evidence. Issues require an exact implementation affected revision and tasks
+an exact assignment base revision before either can be called resolved. Repository-bound organization
+agents retain findings under their current access-grant boundary without borrowing operator authority.
 This is a review and coordination boundary: it creates no repository,
 moves no Git or collaboration record, changes no owner/visibility/policy, and grants no source or
 destination write authority.

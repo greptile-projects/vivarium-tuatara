@@ -666,6 +666,32 @@ func (s *Store) WithCurrentAgentOperator(agent, user string, fn func(organizatio
 	})
 }
 
+// WithCurrentAgentGrant holds access-grant revocation and narrowing through a
+// dependent repository-bound agent write.
+func (s *Store) WithCurrentAgentGrant(organizationID, grantID, agentID, repositoryID string, fn func() error) error {
+	if !validID(organizationID) || !validID(grantID) || !validID(agentID) || !validID(repositoryID) || fn == nil {
+		return ErrInvalid
+	}
+	return s.locked(func() error {
+		organization, err := s.Get(organizationID)
+		if err != nil {
+			return err
+		}
+		now := s.now()
+		for _, grant := range organization.AccessGrants {
+			if grant.ID != grantID || grant.PrincipalType != "agent" || grant.PrincipalID != agentID || grant.RevokedAt != nil || (grant.ExpiresAt != nil && !grant.ExpiresAt.After(now)) || resourceDenied(grant, ResourceScope{Kind: "repository", ID: repositoryID}) {
+				continue
+			}
+			for _, resource := range grant.Resources {
+				if resource.Kind == "repository" && resource.ID == repositoryID {
+					return fn()
+				}
+			}
+		}
+		return ErrNotFound
+	})
+}
+
 // WithCurrentMember holds membership stable while a dependent store commits.
 // Membership removal uses the same organization lock and therefore cannot
 // interleave between this admission check and the callback write.

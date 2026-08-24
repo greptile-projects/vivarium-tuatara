@@ -1605,8 +1605,8 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		registerHistoryRewriteRoutes(mux, store, repositoryCatalog, authStore, historyRemediationStore)
 		registerHistoryContainmentRoutes(mux, store, repositoryCatalog, authStore, historyRemediationStore)
 	}
-	if authStore != nil && repositoryCatalog != nil && restructuringPlanStore != nil && store != nil && pullRequestStore != nil && issueStore != nil && proposalStore != nil && releaseStore != nil && packageStore != nil && documentationStore != nil && governanceStore != nil && workspaceStore != nil && collaborationWorkflowStore != nil && relationshipStore != nil && federationStore != nil {
-		registerRestructuringPlanRoutes(mux, store, repositoryCatalog, authStore, restructuringPlanStore, pullRequestStore, issueStore, proposalStore, releaseStore, packageStore, documentationStore, governanceStore, workspaceStore, collaborationWorkflowStore, relationshipStore, federationStore)
+	if authStore != nil && repositoryCatalog != nil && organizationStore != nil && restructuringPlanStore != nil && store != nil && pullRequestStore != nil && issueStore != nil && proposalStore != nil && releaseStore != nil && packageStore != nil && documentationStore != nil && governanceStore != nil && workspaceStore != nil && collaborationWorkflowStore != nil && relationshipStore != nil && federationStore != nil {
+		registerRestructuringPlanRoutes(mux, store, repositoryCatalog, authStore, organizationStore, restructuringPlanStore, pullRequestStore, issueStore, proposalStore, releaseStore, packageStore, documentationStore, governanceStore, workspaceStore, collaborationWorkflowStore, relationshipStore, federationStore)
 	}
 	if authStore != nil && userStore != nil && repositoryCatalog != nil && apiContractStore != nil && pullRequestStore != nil && releaseStore != nil {
 		registerAPIContractRoutes(mux, store, repositoryCatalog, authStore, apiContractStore, pullRequestStore, releaseStore)

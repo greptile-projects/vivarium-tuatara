@@ -81,8 +81,8 @@ func TestDuplicateFederatedRevisionRetryReturnsBeforeGitSideEffects(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if boundary.SourceRevision != revision {
-		t.Fatalf("contribution revision changed during retry: %q", boundary.SourceRevision)
+	if boundary.SourceRevision != revision || boundary.TargetRevision != revision {
+		t.Fatalf("contribution revisions changed during retry: source=%q target=%q", boundary.SourceRevision, boundary.TargetRevision)
 	}
 }
 

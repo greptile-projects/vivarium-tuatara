@@ -36,6 +36,14 @@ func TestRestructuringResolvedIssueMustExistInAuthoritativeStore(t *testing.T) {
 	if restructuringInventoryCitationResolves(gitStore, item, nil, issueStore, nil, nil, nil, nil, nil, nil, nil, nil, nil) {
 		t.Fatal("fabricated resolved issue was accepted")
 	}
+	created, err := issueStore.Create(issues.Issue{RepositoryID: repositoryID, ReporterID: strings.Repeat("a", 32), Title: "Affected issue", ExpectedBehavior: "works", ObservedBehavior: "fails", Environment: "test", Severity: "medium", Visibility: "repository", ReproductionSteps: []string{"run"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	item.ResourceID = created.ID
+	if restructuringInventoryCitationResolves(gitStore, item, nil, issueStore, nil, nil, nil, nil, nil, nil, nil, nil, nil) {
+		t.Fatal("issue without exact revision provenance was accepted")
+	}
 	item.State = "inaccessible"
 	if !restructuringInventoryCitationResolves(gitStore, item, nil, issueStore, nil, nil, nil, nil, nil, nil, nil, nil, nil) {
 		t.Fatal("explicit inaccessible inventory gap was rejected")
@@ -78,5 +86,20 @@ func TestRestructuringFederatedRelationshipBindsRepositoryAndRevision(t *testing
 	item.ResourceID = "exact-relationship"
 	if !restructuringInventoryCitationResolves(gitStore, item, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, peers) {
 		t.Fatal("exact repository/revision relationship was rejected")
+	}
+	targetID := strings.Repeat("3", 32)
+	target, err := gitStore.Create(targetID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetTree, _ := target.WriteObject(storage.TreeObject, nil)
+	targetCommit, _ := target.WriteObject(storage.CommitObject, []byte("tree "+string(targetTree)+"\nauthor Test <test@example.com> 1 +0000\ncommitter Test <test@example.com> 1 +0000\n\ntarget\n"))
+	if err = peers.BindContributionTarget("exact-relationship", targetID, "pull", string(targetCommit)); err != nil {
+		t.Fatal(err)
+	}
+	item.RepositoryID = targetID
+	item.Revision = string(targetCommit)
+	if !restructuringInventoryCitationResolves(gitStore, item, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, peers) {
+		t.Fatal("exact target repository/revision relationship was rejected")
 	}
 }
