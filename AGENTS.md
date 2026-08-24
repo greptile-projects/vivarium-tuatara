@@ -12,6 +12,12 @@ repository access, ownership, branch availability, and exact Git-tree equivalenc
 unsupported, inaccessible, and already-equivalent targets remain explicit without rewriting the
 campaign. Campaigns record provenance and coordination only and grant no Git, package, branch,
 release, review, merge, deployment, repository, or delivery authority.
+Permitted repository targets can retain revision-exact applicability assessments comparing history, changed
+blobs and declared symbols, dependencies, interfaces, schemas, prior target fixes, and release commitments.
+Assessments classify direct applicability, already-satisfied outcomes, required adaptation, conflicts, and
+non-applicability without treating similarity as equivalence proof. CAS entries retain cited human/read-only-agent
+findings, risks, uncertainty, and named-human-owner acknowledgements; target movement invalidates only that
+target's assessment and grants no implementation or delivery authority.
 
 Regression investigations at `/repositories/{id}/regression-investigations` and the repository
 `/regressions` workspace turn a suspected regression from an issue, support thread, failed check,

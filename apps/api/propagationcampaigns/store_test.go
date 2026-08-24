@@ -72,3 +72,27 @@ func TestListIsRepositoryScoped(t *testing.T) {
 		t.Fatalf("unexpected list: %#v %v", values, e)
 	}
 }
+
+func TestAssessmentLedgerIsRevisionBoundAndCASVersioned(t *testing.T) {
+	s, _ := New(t.TempDir())
+	v, e := s.Create(validCampaign(), "owner-1", "campaign")
+	if e != nil {
+		t.Fatal(e)
+	}
+	comparisons := make([]Comparison, 7)
+	for i, kind := range []string{"histories", "symbols", "dependencies", "interfaces", "schemas", "prior_fixes", "release_commitments"} {
+		comparisons[i] = Comparison{Kind: kind, Status: "review_required", Summary: "bounded comparison"}
+	}
+	v, assessment, e := s.CreateAssessment(v.RepositoryID, v.ID, "owner-1", Assessment{TargetID: "target-1", Classification: "adaptation_required", TargetRevision: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", SourceRevision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Comparisons: comparisons})
+	if e != nil || assessment.Version != 1 || len(v.Assessments) != 1 {
+		t.Fatalf("assessment not retained: %#v %v", assessment, e)
+	}
+	entry := AssessmentEntry{Kind: "risk", Body: "The older parser exposes a different callback.", Citations: []Citation{{Kind: "commit", Reference: "target tip", Revision: assessment.TargetRevision}}}
+	_, assessment, e = s.AddAssessmentEntry(v.RepositoryID, v.ID, assessment.ID, "agent-1", "read_only_agent", 1, entry)
+	if e != nil || assessment.Version != 2 || assessment.Entries[0].ActorKind != "read_only_agent" {
+		t.Fatalf("entry not retained: %#v %v", assessment, e)
+	}
+	if _, _, e = s.AddAssessmentEntry(v.RepositoryID, v.ID, assessment.ID, "owner-1", "human", 1, entry); !errors.Is(e, ErrVersion) {
+		t.Fatalf("want CAS conflict, got %v", e)
+	}
+}
