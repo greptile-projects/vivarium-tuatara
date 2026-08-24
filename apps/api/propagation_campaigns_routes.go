@@ -184,19 +184,17 @@ func registerPropagationCampaignRoutes(mux *http.ServeMux, git *storage.Store, c
 			}
 			d := retained
 			d.ReviewState, d.QueueState, d.Blockers, d.ObservedOutcomes = "pending", "not_queued", []string{}, []string{}
+			proofCurrent := propagationProofCurrent(v.EquivalenceProofs, d)
+			if !proofCurrent {
+				d.Blockers = append(d.Blockers, "equivalence proof is stale, rejected, or superseded")
+				d.NextAction = "target owner refreshes and accepts equivalence evidence"
+			}
 			pull, e := pulls.Get(target.RepositoryID, d.PullRequestID)
 			if e != nil {
 				d.Blockers, d.NextAction = append(d.Blockers, "linked pull is unavailable"), "restore access to the ordinary target contribution"
 			} else {
 				reviews, _ := pulls.ListReviews(target.RepositoryID, pull.ID)
-				for _, review := range reviews {
-					if review.Decision == pullrequests.Approved {
-						d.ReviewState = "approved"
-					}
-					if review.Decision == pullrequests.ChangesRequested {
-						d.ReviewState = "changes_requested"
-					}
-				}
+				d.ReviewState = propagationReviewState(reviews)
 				if pull.Status == pullrequests.Merged && pull.MergeCommitID != nil {
 					d.ReviewState, d.QueueState, d.MergeRevision = "approved", "merged", *pull.MergeCommitID
 				} else if pull.QueuePaused {
@@ -245,7 +243,7 @@ func registerPropagationCampaignRoutes(mux *http.ServeMux, git *storage.Store, c
 					d.NextAction = "target deployment owner starts an ordinary rollout"
 				} else if d.RolloutState == "failed" || d.RolloutState == "paused" {
 					d.Blockers, d.NextAction = append(d.Blockers, "rollout is "+d.RolloutState), "target deployment owner decides recovery for this path"
-				} else if d.RolloutState == "succeeded" {
+				} else if d.RolloutState == "succeeded" && proofCurrent {
 					d.Exposed, d.NextAction = true, "observe supported-user outcomes"
 					delivered[d.TargetID] = true
 					for _, group := range d.SupportedUserGroups {
@@ -254,6 +252,10 @@ func registerPropagationCampaignRoutes(mux *http.ServeMux, git *storage.Store, c
 				} else {
 					d.NextAction = "target deployment owner advances the governed rollout"
 				}
+			}
+			if !proofCurrent {
+				d.Exposed = false
+				d.NextAction = "target owner refreshes and accepts equivalence evidence"
 			}
 			for _, blocker := range d.Blockers {
 				coverageBlockers = append(coverageBlockers, d.TargetID+": "+blocker)
@@ -1026,6 +1028,29 @@ func gitOutput(path string, args ...string) (string, error) {
 	all := append([]string{"--git-dir=" + path}, args...)
 	b, e := exec.Command("git", all...).Output()
 	return strings.TrimSpace(string(b)), e
+}
+
+func propagationReviewState(reviews []pullrequests.Review) string {
+	approved := false
+	for _, review := range reviews {
+		if review.Decision == pullrequests.ChangesRequested {
+			return "changes_requested"
+		}
+		approved = approved || review.Decision == pullrequests.Approved
+	}
+	if approved {
+		return "approved"
+	}
+	return "pending"
+}
+
+func propagationProofCurrent(proofs []propagationcampaigns.EquivalenceProof, delivery propagationcampaigns.DeliveryPath) bool {
+	for _, proof := range proofs {
+		if proof.ID == delivery.EquivalenceProofID && proof.Version == delivery.ProofVersion && proof.State == "accepted" && !proof.Invalidated {
+			return true
+		}
+	}
+	return false
 }
 func comparePropagationTarget(gitStore *storage.Store, campaign propagationcampaigns.Campaign, target propagationcampaigns.Target) (propagationcampaigns.Assessment, error) {
 	source, e := gitStore.Open(campaign.Source.RepositoryID)
