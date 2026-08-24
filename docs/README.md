@@ -3,6 +3,37 @@
 Notes on how this project fits together. Mostly empty for now — things get
 written down here as they're decided, not before.
 
+## Sensitive history remediation
+
+Current repository maintainers open restricted history-repair coordination through `POST
+/repositories/{id}/history-remediations` or the repository's Sensitive history remediation page. A
+caller-stable request freezes its security-finding, privacy-incident, support-case, or selected-object source;
+a short payload-free description and reason; and exact repository objects plus optional revisions, refs,
+releases, packages, artifact digests, and environments. The creator must currently maintain every affected
+repository, and supplied commit revisions must resolve before publication.
+Scope kinds are closed and authoritative: Git objects and refs resolve from stock Git, releases and
+environments resolve from their repository stores, packages bind their published artifact ID and SHA-256, and
+check artifacts bind `pull/run/artifact` identity plus digest. Repository-bound credentials cannot name another
+repository. Exact retry reconciliation happens before these mutable checks, while new publication holds current
+source participants and affected-repository maintainer access stable through persistence.
+Reconciled POST responses use the same retained audience check as GET projections. Git refs are additionally
+bound to the exact claimed object and optional revision, rather than accepted as an unrelated existing ref.
+
+Discovery evidence retains only its source identity and SHA-256 digest, classification, safe note, and human
+attribution. Matches, false matches, inaccessible resources, legal holds, and conflicting retention or
+continuity commitments remain separate visible facts instead of being silently discarded. The API rejects
+multiline or unbounded content descriptions so the remediation workspace does not become another copy of the
+unsafe payload.
+Whole-record screening rejects both labelled credentials and bare JWT-shaped values in root descriptions,
+evidence notes, constraint reasons, and every other persisted string field.
+
+Every record names a restricted disclosure audience, response owners, and approval roles with explicit
+thresholds. Those principals must be current participants in the source repository; list and detail reads
+return the record only to the creator, audience, owners, or approvers. Files are stored with owner-only
+permissions beneath `$HISTORY_REMEDIATION_STORAGE_ROOT`. The ledger agrees on what must disappear and who may
+coordinate, but grants no inspection, Git, object deletion, ref rewrite, package, artifact, release,
+environment, disclosure, or delivery authority.
+
 ## Propagation campaigns
 
 An authorized repository collaborator opens a durable shared delivery boundary through `POST

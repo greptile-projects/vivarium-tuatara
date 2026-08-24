@@ -2,6 +2,28 @@
 
 Guidance for coding agents working in this repository.
 
+Sensitive history remediations at `/repositories/{id}/history-remediations` and the repository
+`/history-remediation` workspace give current maintainers a private, retry-stable coordination boundary
+for a security finding, privacy incident, support case, or selected object. Records retain a bounded
+payload-free description, exact repository/object/revision/ref/release/package/artifact/environment scope,
+SHA-256 discovery evidence, attributable false matches and inaccessible resources, legal/retention/continuity
+constraints, explicit audience, response owners, and required approval roles beneath
+`$HISTORY_REMEDIATION_STORAGE_ROOT` (`history-remediations`). Only the creator, audience, owners, and approvers
+can read a retained record, and every named principal must remain a source-repository participant at creation.
+The creator must maintain every affected repository and exact revisions must resolve. These records establish
+coordination only and grant no inspection, Git, object deletion, ref rewrite, package, artifact, release,
+environment, disclosure, or delivery authority.
+Creates reconcile a retained request before mutable source/scope/participant validation. New publication runs
+under the catalog's serialized source-participant and affected-repository maintainer boundary; repository-bound
+credentials cannot cross repositories. Closed scope kinds resolve Git objects/refs, releases, package artifacts,
+environments, and check artifacts through their authoritative stores, and all caller prose is bounded and
+credential-screened before persistence.
+Credential screening includes unlabelled JWT-shaped values across the complete serialized record, not only
+labelled bearer tokens or provider-prefixed secrets.
+Idempotent POST reconciliation applies the same record audience predicate as list/detail reads, so knowing a
+request identity and body grants no disclosure. A scoped Git ref must resolve to the exact claimed object and,
+when present, the same declared revision; independently valid Git identifiers cannot be combined.
+
 Propagation campaigns at `/repositories/{id}/propagation-campaigns` and the repository
 `/propagation` workspace freeze an exact source outcome from a merged pull, security repair,
 regression correction, policy change, package release, or interface evolution. A caller-stable
