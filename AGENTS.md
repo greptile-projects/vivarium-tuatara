@@ -35,6 +35,12 @@ and next actions from ordinary target stores; failed paths pause independently. 
 superseded targets, and maximum-30-day exceptions remain visible gaps, and derived policy satisfaction cannot hide them
 or grant review, queue, merge, release, deployment, environment, repository, or target authority.
 
+The connected `propagation-campaign-journey.spec.ts` browser/API/stock-Git journey covers an exact verified regression
+repair reaching an independently owned divergent consumer through a human-authored adaptation and agent-authored audit
+task, failed-first and passing bounded equivalence, ordinary target checks, human acceptance, and an ordinary task pull.
+It retains an unsupported repository, rejected cross-owner delivery action, newly discovered consumer, and bounded
+upstream-review exception while projecting authority, costs, users, blockers, and next actions.
+
 Regression investigations at `/repositories/{id}/regression-investigations` and the repository
 `/regressions` workspace turn a suspected regression from an issue, support thread, failed check,
 release, deployment, or demonstrated reproduction into a durable shared search boundary beneath

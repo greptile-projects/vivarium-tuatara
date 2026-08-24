@@ -921,7 +921,7 @@ export function PropagationCampaignsWorkspace({
                             </tbody>
                           </table>
                         </div>
-                        {proof.residual_differences
+                        {(proof.residual_differences ?? [])
                           .filter(Boolean)
                           .map((difference) => (
                             <p key={difference} className="text-xs">
