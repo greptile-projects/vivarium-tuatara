@@ -507,10 +507,17 @@ func registerRestructuringPlanRoutes(mux *http.ServeMux, git *storage.Store, cat
 			writeAPIError(w, 404, "restructuring_cutover_not_found", "cutover not found")
 			return
 		}
+		type publication struct {
+			repository *storage.Repository
+			candidate  restructuringplans.CandidateRepository
+			ref        string
+			path       string
+		}
+		publications := make([]publication, 0, len(p.Destinations))
 		for _, d := range p.Destinations {
 			rid := in.Repositories[d.ID]
 			target, e := catalog.GetByID(rid)
-			if e != nil || target.OwnerID != d.OwnerIDs[0] || target.Name != d.Name {
+			if e != nil || !contains(d.OwnerIDs, target.OwnerID) || target.Name != d.Name {
 				writeAPIError(w, 422, "restructuring_destination_mismatch", "each destination must be the declared owner's exact repository")
 				return
 			}
@@ -529,22 +536,56 @@ func registerRestructuringPlanRoutes(mux *http.ServeMux, git *storage.Store, cat
 					}
 				}
 			}
-			source, cleanup, e := storage.OpenBundle(plans.CandidatePath(p.RepositoryID, p.ID, p.Cutover.CandidateID, d.ID))
+			if candidate.Tip == "" {
+				writeAPIError(w, 422, "restructuring_candidate_unavailable", "retained candidate repository is incomplete")
+				return
+			}
+			ref := "refs/heads/" + d.DefaultBranch
+			if current, readErr := dst.ReadReference(ref); readErr == nil && (current.Symbolic || current.Target != candidate.Tip) {
+				writeAPIError(w, 409, "restructuring_destination_changed", "destination default refs must be empty or already name the exact candidate tip")
+				return
+			} else if readErr != nil && !errors.Is(readErr, storage.ErrReferenceNotFound) {
+				writeAPIError(w, 422, "restructuring_destination_unavailable", "destination refs could not be inspected")
+				return
+			}
+			path := plans.CandidatePath(p.RepositoryID, p.ID, p.Cutover.CandidateID, d.ID)
+			source, cleanup, e := storage.OpenBundle(path)
 			if e != nil {
 				writeAPIError(w, 422, "restructuring_candidate_unavailable", "retained candidate repository is unavailable")
 				return
 			}
-			e = dst.ImportCommit(source, storage.ObjectID(candidate.Tip))
+			_, e = source.ReadCommit(storage.ObjectID(candidate.Tip))
 			cleanup()
-			if e == nil {
-				e = dst.CreateReference(storage.Reference{Name: "refs/heads/" + d.DefaultBranch, Target: candidate.Tip})
-			}
 			if e != nil {
-				writeAPIError(w, 409, "restructuring_destination_changed", "destination is no longer empty; no authoritative ref was replaced")
+				writeAPIError(w, 422, "restructuring_candidate_unavailable", "candidate tip does not resolve in retained rehearsal material")
 				return
 			}
+			publications = append(publications, publication{dst, candidate, ref, path})
 		}
-		out, e := plans.ActivateCutover(p.RepositoryID, p.ID, c.UserID, in.ExpectedVersion, in.Repositories)
+		out, e := plans.ActivateCutoverWith(p.RepositoryID, p.ID, c.UserID, in.ExpectedVersion, in.Repositories, func() error {
+			created := []publication{}
+			for _, item := range publications {
+				if current, readErr := item.repository.ReadReference(item.ref); readErr == nil && !current.Symbolic && current.Target == item.candidate.Tip {
+					continue
+				}
+				source, cleanup, openErr := storage.OpenBundle(item.path)
+				if openErr == nil {
+					openErr = item.repository.ImportCommit(source, storage.ObjectID(item.candidate.Tip))
+					cleanup()
+				}
+				if openErr == nil {
+					openErr = item.repository.CreateReference(storage.Reference{Name: item.ref, Target: item.candidate.Tip})
+				}
+				if openErr != nil {
+					for i := len(created) - 1; i >= 0; i-- {
+						_ = created[i].repository.DeleteReferenceIfTarget(created[i].ref, created[i].candidate.Tip)
+					}
+					return openErr
+				}
+				created = append(created, item)
+			}
+			return nil
+		})
 		if e != nil {
 			writeAPIError(w, 409, "restructuring_activation_blocked", "all current destination-owner approvals are required")
 			return

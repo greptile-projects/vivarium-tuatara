@@ -500,19 +500,21 @@ func (s *Store) FinishCutover(repo, id, actor string, expected int, rollback boo
 		v.Version++
 		return v, s.write(v)
 	}
-	required := map[string]bool{"build": false, "release": false, "permission": false, "link": false, "consumer": false, "contribution": false, "git_traffic": false}
+	requiredKinds := []string{"build", "release", "permission", "link", "consumer", "contribution", "git_traffic"}
 	latest := map[string]CutoverObservation{}
 	for _, o := range v.Cutover.Observations {
 		latest[o.Kind+"\x00"+o.ResourceID] = o
 	}
-	for _, o := range latest {
-		if o.State != "passed" {
-			return Plan{}, ErrInvalid
+	for _, destination := range v.Cutover.Destinations {
+		for _, kind := range requiredKinds {
+			o, ok := latest[kind+"\x00"+destination.DestinationID]
+			if !ok || o.State != "passed" {
+				return Plan{}, ErrInvalid
+			}
 		}
-		required[o.Kind] = true
 	}
-	for _, ok := range required {
-		if !ok {
+	for _, o := range latest {
+		if o.Kind == "late_write" && o.State != "passed" {
 			return Plan{}, ErrInvalid
 		}
 	}
