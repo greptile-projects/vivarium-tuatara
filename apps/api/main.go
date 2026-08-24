@@ -1690,6 +1690,10 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		required := "git:read"
 		if service == receivePackService {
 			required = "git:write"
+			if blocked, guidance := historyRewritePushPaused(historyRemediationStore, r.PathValue("remote")); blocked {
+				http.Error(w, guidance, http.StatusConflict)
+				return
+			}
 		}
 		onlyBranch := ""
 		if authStore != nil {
@@ -1732,6 +1736,10 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		runGitService(w, r, repo, uploadPackService, false, false, onlyBranch)
 	})
 	mux.HandleFunc("POST /git/{remote}/git-receive-pack", func(w http.ResponseWriter, r *http.Request) {
+		if blocked, guidance := historyRewritePushPaused(historyRemediationStore, r.PathValue("remote")); blocked {
+			http.Error(w, guidance, http.StatusConflict)
+			return
+		}
 		contributor := false
 		onlyBranch := ""
 		if authStore != nil {
@@ -1755,6 +1763,31 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		runGitService(w, r, repo, receivePackService, false, contributor, onlyBranch)
 	})
 	return mux
+}
+
+func historyRewritePushPaused(store *historyremediations.Store, remote string) (bool, string) {
+	if store == nil {
+		return false, ""
+	}
+	repositoryID, ok := strings.CutSuffix(remote, ".git")
+	if !ok {
+		return false, ""
+	}
+	items, err := store.List(repositoryID)
+	if err != nil {
+		return true, "push paused: remediation state is unavailable; retry after a maintainer confirms migration"
+	}
+	for _, item := range items {
+		if item.Publication == nil || (item.Publication.State != "publishing" && item.Publication.State != "migration_in_progress") {
+			continue
+		}
+		for _, system := range item.Publication.PausedSystems {
+			if system == "pushes" {
+				return true, "push rejected: authoritative history was rewritten; fetch the replacement refs, create a backup of local work, then rebase or reset using the remediation migration mapping before pushing"
+			}
+		}
+	}
+	return false, ""
 }
 
 func newerAssuranceAssessment(candidate, current assuranceimpact.Assessment) bool {

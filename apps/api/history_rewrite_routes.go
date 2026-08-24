@@ -124,6 +124,189 @@ func registerHistoryRewriteRoutes(mux *http.ServeMux, git *storage.Store, catalo
 		}
 		writeJSON(w, 201, historyRemediationPublic(out))
 	})
+	mux.HandleFunc("POST /repositories/{id}/history-remediations/{remediation_id}/rewrite-candidates/{candidate_id}/publish", func(w http.ResponseWriter, r *http.Request) {
+		c, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		v, err := store.Get(r.PathValue("id"), r.PathValue("remediation_id"))
+		if err != nil || !historyRemediationCanPublish(v, c) {
+			writeAPIError(w, 404, "history_remediation_not_found", "history remediation not found")
+			return
+		}
+		var in struct {
+			ExpectedVersion int                             `json:"expected_version"`
+			Publication     historyremediations.Publication `json:"publication"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "an approved publication is required")
+			return
+		}
+		in.Publication.CandidateID = r.PathValue("candidate_id")
+		var candidate *historyremediations.RewriteCandidate
+		for i := range v.RewriteCandidates {
+			if v.RewriteCandidates[i].ID == in.Publication.CandidateID {
+				candidate = &v.RewriteCandidates[i]
+			}
+		}
+		if candidate == nil {
+			writeAPIError(w, 404, "history_rewrite_candidate_not_found", "rewrite candidate not found")
+			return
+		}
+		passed := false
+		for _, rehearsal := range candidate.Rehearsals {
+			if rehearsal.State == "passed" {
+				passed = true
+			}
+		}
+		if !passed {
+			writeAPIError(w, 409, "history_rewrite_rehearsal_required", "a complete passing rehearsal is required before publication")
+			return
+		}
+		if !historyPublicationReady(v, in.ExpectedVersion, in.Publication) {
+			writeAPIError(w, 422, "history_rewrite_publication_invalid", "required role approvals, pauses, and owner migration instructions are required")
+			return
+		}
+		_, err = store.ReservePublication(v.RepositoryID, v.ID, in.ExpectedVersion, in.Publication, c.UserID)
+		switch {
+		case errors.Is(err, historyremediations.ErrVersionConflict):
+			writeAPIError(w, 409, "history_remediation_version_conflict", "the remediation changed; reload before publishing")
+			return
+		case errors.Is(err, historyremediations.ErrConflict):
+			writeAPIError(w, 409, "history_rewrite_already_published", "another candidate is already authoritative")
+			return
+		case errors.Is(err, historyremediations.ErrInvalid):
+			writeAPIError(w, 422, "history_rewrite_publication_invalid", "required role approvals, enforced push pause, and owner migration instructions are required")
+			return
+		case err != nil:
+			writeAPIError(w, 500, "history_rewrite_publication_unavailable", "publication containment could not be reserved")
+			return
+		}
+		repo, openErr := git.Open(v.RepositoryID)
+		if openErr != nil {
+			writeAPIError(w, 422, "history_rewrite_repository_unavailable", "repository refs could not be resolved")
+			return
+		}
+		if err = publishHistoryRefs(repo.Path(), candidate.CandidateRefs); err != nil {
+			writeAPIError(w, 409, "history_rewrite_refs_changed", err.Error())
+			return
+		}
+		out, err := store.CompletePublication(v.RepositoryID, v.ID, in.Publication.RequestID, candidate.ID)
+		switch {
+		case errors.Is(err, historyremediations.ErrConflict):
+			writeAPIError(w, 409, "history_rewrite_already_published", "another candidate is already authoritative")
+		case err != nil:
+			writeAPIError(w, 500, "history_rewrite_publication_unavailable", "the durable publication intent remains active; retry the exact request to reconcile finalization")
+		default:
+			writeJSON(w, 201, historyRemediationPublic(out))
+		}
+	})
+	mux.HandleFunc("POST /repositories/{id}/history-remediations/{remediation_id}/publication-approvals", func(w http.ResponseWriter, r *http.Request) {
+		c, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:read")
+		if !ok {
+			return
+		}
+		v, err := store.Get(r.PathValue("id"), r.PathValue("remediation_id"))
+		if err != nil || !historyRemediationCanSee(v, c.UserID) || c.AgentID != "" {
+			writeAPIError(w, 404, "history_remediation_not_found", "history remediation not found")
+			return
+		}
+		var in struct {
+			ExpectedVersion int    `json:"expected_version"`
+			Role            string `json:"role"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "an approval role is required")
+			return
+		}
+		out, err := store.ApprovePublication(v.RepositoryID, v.ID, in.ExpectedVersion, in.Role, c.UserID)
+		if errors.Is(err, historyremediations.ErrInvalid) {
+			writeAPIError(w, 403, "history_rewrite_approval_forbidden", "only a named approver may attest their own required role")
+			return
+		}
+		if errors.Is(err, historyremediations.ErrVersionConflict) {
+			writeAPIError(w, 409, "history_remediation_version_conflict", "the remediation changed; reload before approving")
+			return
+		}
+		if err != nil {
+			writeAPIError(w, 500, "history_rewrite_approval_unavailable", "approval could not be retained")
+			return
+		}
+		writeJSON(w, 201, historyRemediationPublic(out))
+	})
+}
+
+func historyPublicationReady(v historyremediations.Remediation, expected int, in historyremediations.Publication) bool {
+	if v.Publication != nil {
+		return v.Publication.RequestID == in.RequestID && v.Publication.CandidateID == in.CandidateID
+	}
+	if v.Version != expected || in.RequestID == "" || len(in.PausedSystems) != 1 || in.PausedSystems[0] != "pushes" || len(in.MigrationTargets) == 0 {
+		return false
+	}
+	roles := map[string]map[string]bool{}
+	for _, approval := range v.PublicationApprovals {
+		if roles[approval.Role] == nil {
+		}
+		roles[approval.Role][approval.ApproverID] = true
+	}
+	for _, required := range v.RequiredApprovals {
+		count := 0
+		for _, id := range required.ApproverIDs {
+			if roles[required.Role][id] {
+				count++
+			}
+		}
+		if count < required.Required {
+			return false
+		}
+	}
+	for _, target := range in.MigrationTargets {
+		if target.ID == "" || target.ResourceID == "" || target.OwnerID == "" || target.Instructions == "" || !map[string]bool{"local_branch": true, "fork": true, "federated_copy": true, "pull_request": true, "integration": true}[target.Kind] {
+			return false
+		}
+	}
+	return true
+}
+
+func historyRemediationOwner(v historyremediations.Remediation, actor string) bool {
+	for _, id := range v.OwnerIDs {
+		if id == actor {
+			return true
+		}
+	}
+	return false
+}
+
+func historyRemediationCanPublish(v historyremediations.Remediation, credential auth.Credential) bool {
+	return credential.AgentID == "" && historyRemediationOwner(v, credential.UserID)
+}
+
+func publishHistoryRefs(gitDir string, refs []historyremediations.CandidateRef) error {
+	if len(refs) == 0 {
+		return errors.New("candidate has no replacement refs")
+	}
+	var transaction strings.Builder
+	transaction.WriteString("start\n")
+	for _, ref := range refs {
+		current, err := historyGitOutput(gitDir, "rev-parse", "--verify", ref.Name)
+		if err != nil {
+			return fmt.Errorf("%s no longer resolves", ref.Name)
+		}
+		if current == ref.NewTip {
+			continue
+		} // exact retry after a committed transaction
+		if current != ref.OldTip {
+			return fmt.Errorf("%s moved; assemble and rehearse a new candidate", ref.Name)
+		}
+		fmt.Fprintf(&transaction, "update %s %s %s\n", ref.Name, ref.NewTip, ref.OldTip)
+	}
+	transaction.WriteString("prepare\ncommit\n")
+	cmd := exec.Command("git", "--git-dir="+gitDir, "update-ref", "--stdin")
+	cmd.Stdin = strings.NewReader(transaction.String())
+	if output, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("replacement refs were not published: %s", strings.TrimSpace(string(output)))
+	}
+	return nil
 }
 
 func historyRemediationCanRespond(v historyremediations.Remediation, actor string) bool {
