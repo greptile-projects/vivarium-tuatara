@@ -517,10 +517,9 @@ func (s *Store) AddRehearsal(repo, id, candidateID string, expected int, in Rehe
 	return Remediation{}, ErrNotFound
 }
 
-// Publish records the already-committed authoritative ref transaction. The
-// route performs the Git compare-and-swap while holding its repository lock;
-// exact retries reconcile here without attempting a second rewrite.
-func (s *Store) Publish(repo, id string, expected int, in Publication, actor string) (Remediation, error) {
+// ReservePublication durably activates containment before authoritative refs
+// move. Exact retries reconcile the same intent; a different request conflicts.
+func (s *Store) ReservePublication(repo, id string, expected int, in Publication, actor string) (Remediation, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	b, err := os.ReadFile(s.path(repo, id))
@@ -540,6 +539,12 @@ func (s *Store) Publish(repo, id string, expected int, in Publication, actor str
 		z.ID, z.State, z.PublishedBy, z.PublishedAt = "", "", "", time.Time{}
 		a.QuarantinedObjects, z.QuarantinedObjects = nil, nil
 		a.Approvals, z.Approvals = nil, nil
+		for i := range a.MigrationTargets {
+			a.MigrationTargets[i].State, a.MigrationTargets[i].AcknowledgedBy = "", ""
+		}
+		for i := range z.MigrationTargets {
+			z.MigrationTargets[i].State, z.MigrationTargets[i].AcknowledgedBy = "", ""
+		}
 		ab, _ := json.Marshal(a)
 		zb, _ := json.Marshal(z)
 		if v.Publication.RequestID == in.RequestID && string(ab) == string(zb) {
@@ -556,7 +561,7 @@ func (s *Store) Publish(repo, id string, expected int, in Publication, actor str
 			candidate = &v.RewriteCandidates[i]
 		}
 	}
-	if candidate == nil || in.RequestID == "" || len(in.PausedSystems) == 0 || len(in.MigrationTargets) == 0 {
+	if candidate == nil || in.RequestID == "" || len(in.PausedSystems) != 1 || in.PausedSystems[0] != "pushes" || len(in.MigrationTargets) == 0 {
 		return Remediation{}, ErrInvalid
 	}
 	passed := false
@@ -604,12 +609,46 @@ func (s *Store) Publish(repo, id string, expected int, in Publication, actor str
 	in.ID = randomID()
 	in.PublishedBy = actor
 	in.PublishedAt = s.now()
-	in.State = "migration_in_progress"
+	in.State = "publishing"
 	in.QuarantinedObjects = []string{}
 	for _, scope := range v.Scopes {
 		in.QuarantinedObjects = append(in.QuarantinedObjects, scope.ObjectID)
 	}
 	v.Publication = &in
+	v.Version++
+	out, _ := json.MarshalIndent(v, "", "  ")
+	if err = atomicWrite(s.path(repo, id), out, s.beforeReplace); err != nil {
+		return Remediation{}, err
+	}
+	return v, nil
+}
+
+// CompletePublication finalizes only the matching durable intent after the Git
+// ref transaction has committed. A lost response can safely retry this step.
+func (s *Store) CompletePublication(repo, id, requestID, candidateID string) (Remediation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	b, err := os.ReadFile(s.path(repo, id))
+	if os.IsNotExist(err) {
+		return Remediation{}, ErrNotFound
+	}
+	if err != nil {
+		return Remediation{}, err
+	}
+	var v Remediation
+	if err = json.Unmarshal(b, &v); err != nil {
+		return Remediation{}, err
+	}
+	if v.Publication == nil || v.Publication.RequestID != requestID || v.Publication.CandidateID != candidateID {
+		return Remediation{}, ErrConflict
+	}
+	if v.Publication.State == "migration_in_progress" {
+		return v, nil
+	}
+	if v.Publication.State != "publishing" {
+		return Remediation{}, ErrConflict
+	}
+	v.Publication.State = "migration_in_progress"
 	v.Version++
 	out, _ := json.MarshalIndent(v, "", "  ")
 	if err = atomicWrite(s.path(repo, id), out, s.beforeReplace); err != nil {

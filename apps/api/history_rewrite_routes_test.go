@@ -153,3 +153,13 @@ func TestPublishHistoryRefsIsAtomicAndRetryStable(t *testing.T) {
 		}
 	}
 }
+
+func TestHistoryRewritePublicationRequiresNamedOwner(t *testing.T) {
+	v := historyremediations.Remediation{CreatedBy: "creator", OwnerIDs: []string{"owner"}}
+	if historyRemediationOwner(v, "creator") {
+		t.Fatal("non-owner creator received publication authority")
+	}
+	if !historyRemediationOwner(v, "owner") {
+		t.Fatal("named owner lacks publication authority")
+	}
+}

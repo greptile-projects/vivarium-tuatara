@@ -39,7 +39,7 @@ func registerHistoryRewriteRoutes(mux *http.ServeMux, git *storage.Store, catalo
 			return
 		}
 		v, err := store.Get(r.PathValue("id"), r.PathValue("remediation_id"))
-		if err != nil || !historyRemediationCanRespond(v, c.UserID) {
+		if err != nil || c.AgentID != "" || !historyRemediationOwner(v, c.UserID) {
 			writeAPIError(w, 404, "history_remediation_not_found", "history remediation not found")
 			return
 		}
@@ -167,6 +167,21 @@ func registerHistoryRewriteRoutes(mux *http.ServeMux, git *storage.Store, catalo
 			writeAPIError(w, 422, "history_rewrite_publication_invalid", "required role approvals, pauses, and owner migration instructions are required")
 			return
 		}
+		_, err = store.ReservePublication(v.RepositoryID, v.ID, in.ExpectedVersion, in.Publication, c.UserID)
+		switch {
+		case errors.Is(err, historyremediations.ErrVersionConflict):
+			writeAPIError(w, 409, "history_remediation_version_conflict", "the remediation changed; reload before publishing")
+			return
+		case errors.Is(err, historyremediations.ErrConflict):
+			writeAPIError(w, 409, "history_rewrite_already_published", "another candidate is already authoritative")
+			return
+		case errors.Is(err, historyremediations.ErrInvalid):
+			writeAPIError(w, 422, "history_rewrite_publication_invalid", "required role approvals, enforced push pause, and owner migration instructions are required")
+			return
+		case err != nil:
+			writeAPIError(w, 500, "history_rewrite_publication_unavailable", "publication containment could not be reserved")
+			return
+		}
 		repo, openErr := git.Open(v.RepositoryID)
 		if openErr != nil {
 			writeAPIError(w, 422, "history_rewrite_repository_unavailable", "repository refs could not be resolved")
@@ -176,16 +191,12 @@ func registerHistoryRewriteRoutes(mux *http.ServeMux, git *storage.Store, catalo
 			writeAPIError(w, 409, "history_rewrite_refs_changed", err.Error())
 			return
 		}
-		out, err := store.Publish(v.RepositoryID, v.ID, in.ExpectedVersion, in.Publication, c.UserID)
+		out, err := store.CompletePublication(v.RepositoryID, v.ID, in.Publication.RequestID, candidate.ID)
 		switch {
-		case errors.Is(err, historyremediations.ErrVersionConflict):
-			writeAPIError(w, 409, "history_remediation_version_conflict", "the remediation changed; reload before publishing")
 		case errors.Is(err, historyremediations.ErrConflict):
 			writeAPIError(w, 409, "history_rewrite_already_published", "another candidate is already authoritative")
-		case errors.Is(err, historyremediations.ErrInvalid):
-			writeAPIError(w, 422, "history_rewrite_publication_invalid", "required role approvals, pauses, and owner migration instructions are required")
 		case err != nil:
-			writeAPIError(w, 500, "history_rewrite_publication_unavailable", "the ref transaction committed; retry the exact request to reconcile publication")
+			writeAPIError(w, 500, "history_rewrite_publication_unavailable", "the durable publication intent remains active; retry the exact request to reconcile finalization")
 		default:
 			writeJSON(w, 201, historyRemediationPublic(out))
 		}
@@ -226,13 +237,15 @@ func registerHistoryRewriteRoutes(mux *http.ServeMux, git *storage.Store, catalo
 }
 
 func historyPublicationReady(v historyremediations.Remediation, expected int, in historyremediations.Publication) bool {
-	if v.Publication != nil || v.Version != expected || in.RequestID == "" || len(in.PausedSystems) == 0 || len(in.MigrationTargets) == 0 {
+	if v.Publication != nil {
+		return v.Publication.RequestID == in.RequestID && v.Publication.CandidateID == in.CandidateID
+	}
+	if v.Version != expected || in.RequestID == "" || len(in.PausedSystems) != 1 || in.PausedSystems[0] != "pushes" || len(in.MigrationTargets) == 0 {
 		return false
 	}
 	roles := map[string]map[string]bool{}
 	for _, approval := range v.PublicationApprovals {
 		if roles[approval.Role] == nil {
-			roles[approval.Role] = map[string]bool{}
 		}
 		roles[approval.Role][approval.ApproverID] = true
 	}
@@ -253,6 +266,15 @@ func historyPublicationReady(v historyremediations.Remediation, expected int, in
 		}
 	}
 	return true
+}
+
+func historyRemediationOwner(v historyremediations.Remediation, actor string) bool {
+	for _, id := range v.OwnerIDs {
+		if id == actor {
+			return true
+		}
+	}
+	return false
 }
 
 func publishHistoryRefs(gitDir string, refs []historyremediations.CandidateRef) error {

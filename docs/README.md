@@ -69,12 +69,14 @@ the rehearsal failed, and all evidence remains inside the remediation audience. 
 grant no ref update, object deletion, release, package, collaborator-machine, or publication authority.
 
 Publication is a separate `POST .../rewrite-candidates/{candidate_id}/publish` milestone available only to a
-named human creator or response owner after a complete passing rehearsal and every retained approval-role
-threshold is represented by an eligible approver. The server derives approval time and quarantined scope,
-then uses one Git `update-ref` transaction to compare-and-swap every selected old tip to its attested candidate
-tip. One moved ref aborts all updates; an exact retry after a committed transaction reconciles the already-new
-tips. The retained migration record freezes paused pushes, queues, sessions, workflows, and releases plus
-audience-appropriate instructions for local branches, forks, federated copies, pull requests, and integrations.
+named human response owner after a complete passing rehearsal and every retained approval-role threshold is
+represented by an eligible approver. The server derives approval time and quarantined scope, durably reserves a
+`publishing` intent that activates the stock-Git push pause, then uses one Git `update-ref` transaction to
+compare-and-swap every selected old tip to its attested candidate tip before finalizing the intent. One moved
+ref aborts all updates; an exact retry reconciles either an active intent or already-new tips. Only the enforced
+`pushes` pause is accepted; queue, session, workflow, release, and credential claims fail closed until their
+authoritative stores expose containment adapters. The retained migration record freezes audience-appropriate
+instructions for local branches, forks, federated copies, pull requests, and integrations.
 Ordinary receive-pack discovery and pushes fail with actionable fetch/backup/rebase-or-reset guidance during
 migration. Independently controlled targets project as `awaiting_owner`: the coordinator can explain and track
 the necessary rewrite but gains no authority to perform it.

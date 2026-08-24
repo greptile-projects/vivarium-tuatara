@@ -1778,7 +1778,7 @@ func historyRewritePushPaused(store *historyremediations.Store, remote string) (
 		return true, "push paused: remediation state is unavailable; retry after a maintainer confirms migration"
 	}
 	for _, item := range items {
-		if item.Publication == nil || item.Publication.State != "migration_in_progress" {
+		if item.Publication == nil || (item.Publication.State != "publishing" && item.Publication.State != "migration_in_progress") {
 			continue
 		}
 		for _, system := range item.Publication.PausedSystems {
