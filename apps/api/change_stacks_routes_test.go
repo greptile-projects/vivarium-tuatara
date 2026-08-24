@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -44,7 +45,19 @@ func TestChangeStackRangeViewJoinsDistinctObjectStores(t *testing.T) {
 		return bare, run("-C", dir, "rev-parse", "HEAD")
 	}
 	baseRepo, base := makeRepo("base", "base\n")
-	headRepo, head := makeRepo("head", "head\n")
+	headRepo, originalHead := makeRepo("head", "head\n")
+	raw, err := exec.Command("git", "--git-dir="+headRepo, "cat-file", "commit", originalHead).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw = bytes.Replace(raw, []byte("\n\n"), []byte("\nparent "+base+"\n\n"), 1)
+	write := exec.Command("git", "--git-dir="+headRepo, "hash-object", "-w", "-t", "commit", "--stdin")
+	write.Stdin = bytes.NewReader(raw)
+	written, err := write.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	head := strings.TrimSpace(string(written))
 	view, cleanup, err := stackRangeView(headRepo, baseRepo, base, head)
 	if err != nil {
 		t.Fatal(err)

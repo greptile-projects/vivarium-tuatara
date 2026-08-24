@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
@@ -295,7 +297,12 @@ func registerChangeStackRoutes(mux *http.ServeMux, git *storage.Store, catalog *
 			}
 			marker := "Change stack: " + out.ID + "/" + m.ID
 			var p pullrequests.PullRequest
-			for _, existing := range mustListPulls(pulls, out.RepositoryID) {
+			existingPulls, listErr := pulls.List(out.RepositoryID)
+			if listErr != nil {
+				writeAPIError(w, 503, "change_stack_publication_pending", "pull reconciliation is unavailable; retry with the same request_id")
+				return
+			}
+			for _, existing := range existingPulls {
 				if existing.AuthorID == actor.UserID && existing.SourceRepositoryID == m.SourceRepositoryID && existing.SourceBranch == m.SourceBranch && existing.TargetBranch == targetBranch && strings.Contains(existing.Body, marker) {
 					p = existing
 					break
@@ -305,7 +312,8 @@ func registerChangeStackRoutes(mux *http.ServeMux, git *storage.Store, catalog *
 				var createErr error
 				p, createErr = pulls.CreateFrom(out.RepositoryID, m.SourceRepositoryID, actor.UserID, m.Title, out.Outcome+"\n\nAcceptance criteria:\n- "+strings.Join(m.AcceptanceCriteria, "\n- ")+"\n\n"+marker, m.SourceBranch, targetBranch, nil)
 				if createErr != nil && !errors.Is(createErr, pullrequests.ErrDurabilityUncertain) {
-					continue
+					writeAPIError(w, 409, "change_stack_publication_pending", "a member pull could not be published; restore its branch and retry with the same request_id")
+					return
 				}
 			}
 			now := time.Now().UTC()
@@ -319,14 +327,6 @@ func registerChangeStackRoutes(mux *http.ServeMux, git *storage.Store, catalog *
 	})
 }
 
-func mustListPulls(store *pullrequests.Store, repo string) []pullrequests.PullRequest {
-	items, err := store.List(repo)
-	if err != nil {
-		return nil
-	}
-	return items
-}
-
 func stackRangeView(headRepositoryPath, baseRepositoryPath, base, head string) (string, func(), error) {
 	dir, err := os.MkdirTemp("", "vivarium-change-stack-range-")
 	if err != nil {
@@ -337,22 +337,85 @@ func stackRangeView(headRepositoryPath, baseRepositoryPath, base, head string) (
 		cleanup()
 		return "", func() {}, errors.New(strings.TrimSpace(string(output)))
 	}
-	fetch := func(repositoryPath, revision, ref string) error {
-		command := exec.Command("git", "--git-dir="+dir, "fetch", "--quiet", "--no-tags", repositoryPath, revision+":"+ref)
-		if output, fetchErr := command.CombinedOutput(); fetchErr != nil {
-			return errors.New(strings.TrimSpace(string(output)))
-		}
-		return nil
-	}
-	if err = fetch(baseRepositoryPath, base, "refs/vivarium/base"); err != nil {
+	seen := map[string]bool{}
+	remaining := int64(256 << 20)
+	if err = importStackObject(baseRepositoryPath, dir, base, seen, &remaining); err != nil {
 		cleanup()
 		return "", func() {}, err
 	}
-	if err = fetch(headRepositoryPath, head, "refs/vivarium/head"); err != nil {
+	if err = importStackObject(headRepositoryPath, dir, head, seen, &remaining); err != nil {
 		cleanup()
 		return "", func() {}, err
 	}
 	return filepath.Clean(dir), cleanup, nil
+}
+
+func importStackObject(sourcePath, destinationPath, id string, seen map[string]bool, remaining *int64) error {
+	if seen[id] {
+		return nil
+	}
+	if len(seen) >= 100000 {
+		return errors.New("change-stack range exceeds object limit")
+	}
+	if commitExists(destinationPath, id) {
+		seen[id] = true
+		return nil
+	}
+	typeName, err := gitOutput(sourcePath, "cat-file", "-t", id)
+	if err != nil {
+		return err
+	}
+	sizeText, err := gitOutput(sourcePath, "cat-file", "-s", id)
+	if err != nil {
+		return err
+	}
+	size, err := strconv.ParseInt(sizeText, 10, 64)
+	if err != nil || size < 0 || size > storage.MaxObjectSize || size > *remaining {
+		return errors.New("change-stack object exceeds size limit")
+	}
+	*remaining -= size
+	raw, err := exec.Command("git", "--git-dir="+sourcePath, "cat-file", typeName, id).Output()
+	if err != nil || int64(len(raw)) != size {
+		return errors.New("change-stack object could not be read exactly")
+	}
+	dependencies := []string{}
+	switch typeName {
+	case "commit":
+		for _, line := range strings.Split(string(raw), "\n") {
+			if strings.HasPrefix(line, "tree ") || strings.HasPrefix(line, "parent ") {
+				fields := strings.Fields(line)
+				if len(fields) == 2 {
+					dependencies = append(dependencies, fields[1])
+				}
+			}
+		}
+	case "tree":
+		listing, listErr := exec.Command("git", "--git-dir="+sourcePath, "ls-tree", "-z", id).Output()
+		if listErr != nil {
+			return listErr
+		}
+		for _, entry := range bytes.Split(listing, []byte{0}) {
+			fields := bytes.Fields(entry)
+			if len(fields) >= 3 {
+				dependencies = append(dependencies, string(fields[2]))
+			}
+		}
+	}
+	for _, dependency := range dependencies {
+		if objectErr := importStackObject(sourcePath, destinationPath, dependency, seen, remaining); objectErr != nil {
+			if _, destinationErr := gitOutput(destinationPath, "cat-file", "-e", dependency); destinationErr != nil {
+				return objectErr
+			}
+		}
+	}
+	command := exec.Command("git", "--git-dir="+destinationPath, "hash-object", "-w", "-t", typeName, "--stdin")
+	command.Stdin = bytes.NewReader(raw)
+	written, err := command.Output()
+	if err != nil || strings.TrimSpace(string(written)) != id {
+		return fmt.Errorf("change-stack object identity mismatch")
+	}
+	seen[id] = true
+	return nil
 }
 
 func diag(code, message string, blocking bool) changestacks.Diagnostic {
