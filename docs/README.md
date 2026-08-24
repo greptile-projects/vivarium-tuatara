@@ -24,6 +24,8 @@ attribution. Matches, false matches, inaccessible resources, legal holds, and co
 continuity commitments remain separate visible facts instead of being silently discarded. The API rejects
 multiline or unbounded content descriptions so the remediation workspace does not become another copy of the
 unsafe payload.
+Whole-record screening rejects both labelled credentials and bare JWT-shaped values in root descriptions,
+evidence notes, constraint reasons, and every other persisted string field.
 
 Every record names a restricted disclosure audience, response owners, and approval roles with explicit
 thresholds. Those principals must be current participants in the source repository; list and detail reads

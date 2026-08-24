@@ -48,9 +48,12 @@ func TestRejectsPayloadLikeMultilineDescriptionAndIncompleteEvidence(t *testing.
 		t.Fatalf("weak evidence = %v", e)
 	}
 	for name, mutate := range map[string]func(*Remediation){
-		"evidence note credential":     func(v *Remediation) { v.Evidence[0].Note = "Authorization: Bearer abcdefghijklmnop" },
-		"constraint reason credential": func(v *Remediation) { v.Constraints[0].Reason = "api_key=abcdefghijklmnop" },
-		"unbounded evidence note":      func(v *Remediation) { v.Evidence[0].Note = strings.Repeat("x", 301) },
+		"evidence note credential":      func(v *Remediation) { v.Evidence[0].Note = "Authorization: Bearer abcdefghijklmnop" },
+		"constraint reason credential":  func(v *Remediation) { v.Constraints[0].Reason = "api_key=abcdefghijklmnop" },
+		"unbounded evidence note":       func(v *Remediation) { v.Evidence[0].Note = strings.Repeat("x", 301) },
+		"bare JWT in evidence note":     func(v *Remediation) { v.Evidence[0].Note = testJWT() },
+		"bare JWT in constraint reason": func(v *Remediation) { v.Constraints[0].Reason = testJWT() },
+		"bare JWT in root description":  func(v *Remediation) { v.ContentDescription = testJWT() },
 	} {
 		t.Run(name, func(t *testing.T) {
 			v := fixture()
@@ -60,6 +63,10 @@ func TestRejectsPayloadLikeMultilineDescriptionAndIncompleteEvidence(t *testing.
 			}
 		})
 	}
+}
+
+func testJWT() string {
+	return "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJzZW5zaXRpdmUtaGlzdG9yeSJ9.dGVzdC1zaWduYXR1cmUtZG8tbm90LXVzZQ"
 }
 
 func TestReconcilePrecedesMutableValidation(t *testing.T) {
