@@ -20,6 +20,7 @@ var ErrInvalid = errors.New("invalid propagation campaign")
 var ErrConflict = errors.New("propagation campaign request changed")
 var ErrVersion = errors.New("propagation campaign assessment changed")
 var ErrProofVersion = errors.New("propagation campaign equivalence proof changed")
+var ErrDeliveryVersion = errors.New("propagation campaign delivery path changed")
 
 type Source struct {
 	Kind         string   `json:"kind"`
@@ -153,6 +154,52 @@ type EquivalenceProof struct {
 	CreatedAt               time.Time             `json:"created_at"`
 	Authority               string                `json:"authority"`
 }
+type DeliveryPath struct {
+	ID                  string    `json:"id"`
+	TargetID            string    `json:"target_id"`
+	ContributionID      string    `json:"contribution_id"`
+	EquivalenceProofID  string    `json:"equivalence_proof_id"`
+	ProofVersion        int       `json:"proof_version"`
+	PullRequestID       string    `json:"pull_request_id"`
+	SupportedUserGroups []string  `json:"supported_user_groups"`
+	Version             int       `json:"version"`
+	ReviewState         string    `json:"review_state,omitempty"`
+	QueueState          string    `json:"queue_state,omitempty"`
+	MergeRevision       string    `json:"merge_revision,omitempty"`
+	ReleaseID           string    `json:"release_id,omitempty"`
+	ReleaseVersion      string    `json:"release_version,omitempty"`
+	DeploymentID        string    `json:"deployment_id,omitempty"`
+	EnvironmentID       string    `json:"environment_id,omitempty"`
+	RolloutState        string    `json:"rollout_state,omitempty"`
+	ObservedOutcomes    []string  `json:"observed_outcomes,omitempty"`
+	Blockers            []string  `json:"blockers,omitempty"`
+	NextAction          string    `json:"next_action,omitempty"`
+	Exposed             bool      `json:"exposed"`
+	PublishedBy         string    `json:"published_by"`
+	PublishedAt         time.Time `json:"published_at"`
+	Authority           string    `json:"authority"`
+}
+type ScopeEvent struct {
+	ID                   string    `json:"id"`
+	Kind                 string    `json:"kind"`
+	TargetID             string    `json:"target_id,omitempty"`
+	ConsumerRepositoryID string    `json:"consumer_repository_id,omitempty"`
+	SupportedUserGroups  []string  `json:"supported_user_groups,omitempty"`
+	Reason               string    `json:"reason"`
+	FollowUp             string    `json:"follow_up"`
+	ExpiresAt            time.Time `json:"expires_at,omitempty"`
+	ActorID              string    `json:"actor_id"`
+	CreatedAt            time.Time `json:"created_at"`
+}
+type Coverage struct {
+	State               string   `json:"state"`
+	PolicySatisfied     bool     `json:"policy_satisfied"`
+	DeliveredTargets    int      `json:"delivered_targets"`
+	TotalTargets        int      `json:"total_targets"`
+	SupportedUserGroups []string `json:"supported_user_groups"`
+	Blockers            []string `json:"blockers"`
+	NextActions         []string `json:"next_actions"`
+}
 type Campaign struct {
 	ID                 string             `json:"id"`
 	RequestID          string             `json:"request_id"`
@@ -167,8 +214,99 @@ type Campaign struct {
 	Assessments        []Assessment       `json:"assessments,omitempty"`
 	Contributions      []Contribution     `json:"contributions,omitempty"`
 	EquivalenceProofs  []EquivalenceProof `json:"equivalence_proofs,omitempty"`
+	DeliveryPaths      []DeliveryPath     `json:"delivery_paths,omitempty"`
+	ScopeEvents        []ScopeEvent       `json:"scope_events,omitempty"`
+	Coverage           Coverage           `json:"coverage"`
 	CreatedBy          string             `json:"created_by"`
 	CreatedAt          time.Time          `json:"created_at"`
+}
+
+func (s *Store) LinkDeliveryPath(repo, campaignID, actor string, in DeliveryPath) (Campaign, DeliveryPath, error) {
+	var campaign Campaign
+	var out DeliveryPath
+	e := s.lock(func() error {
+		v, e := s.read(repo, campaignID)
+		if e != nil {
+			return e
+		}
+		var contribution *Contribution
+		var proof *EquivalenceProof
+		for i := range v.Contributions {
+			if v.Contributions[i].ID == in.ContributionID && v.Contributions[i].TargetID == in.TargetID {
+				contribution = &v.Contributions[i]
+			}
+		}
+		for i := range v.EquivalenceProofs {
+			if v.EquivalenceProofs[i].ID == in.EquivalenceProofID && v.EquivalenceProofs[i].TargetID == in.TargetID {
+				proof = &v.EquivalenceProofs[i]
+			}
+		}
+		if contribution == nil || proof == nil || proof.Version != in.ProofVersion || proof.State != "accepted" || proof.Invalidated || strings.TrimSpace(in.PullRequestID) == "" || len(in.SupportedUserGroups) == 0 || len(in.SupportedUserGroups) > 50 {
+			return ErrInvalid
+		}
+		for _, value := range in.SupportedUserGroups {
+			if strings.TrimSpace(value) == "" || len(value) > 200 {
+				return ErrInvalid
+			}
+		}
+		for _, existing := range v.DeliveryPaths {
+			if existing.TargetID == in.TargetID {
+				if existing.ContributionID != in.ContributionID || existing.EquivalenceProofID != in.EquivalenceProofID || existing.ProofVersion != in.ProofVersion || existing.PullRequestID != in.PullRequestID || strings.Join(existing.SupportedUserGroups, "\x00") != strings.Join(in.SupportedUserGroups, "\x00") {
+					return ErrConflict
+				}
+				campaign, out = v, existing
+				return nil
+			}
+		}
+		in.ID, in.Version, in.PublishedBy, in.PublishedAt = randomID(), 1, actor, s.now()
+		in.Authority = "campaign tracking grants no review, queue, merge, release, deployment, environment, or target authority"
+		v.DeliveryPaths = append(v.DeliveryPaths, in)
+		if e = s.write(v); e != nil {
+			return e
+		}
+		campaign, out = v, in
+		return nil
+	})
+	return campaign, out, e
+}
+
+func (s *Store) AddScopeEvent(repo, campaignID, actor string, in ScopeEvent) (Campaign, ScopeEvent, error) {
+	var campaign Campaign
+	var out ScopeEvent
+	e := s.lock(func() error {
+		v, e := s.read(repo, campaignID)
+		if e != nil {
+			return e
+		}
+		validKind := map[string]bool{"consumer_discovered": true, "target_superseded": true, "bounded_exception": true}
+		if !validKind[in.Kind] || strings.TrimSpace(in.Reason) == "" || strings.TrimSpace(in.FollowUp) == "" {
+			return ErrInvalid
+		}
+		if in.Kind == "consumer_discovered" {
+			if strings.TrimSpace(in.ConsumerRepositoryID) == "" || len(in.SupportedUserGroups) == 0 {
+				return ErrInvalid
+			}
+		} else {
+			found := false
+			for _, t := range v.Targets {
+				found = found || t.ID == in.TargetID
+			}
+			if !found {
+				return ErrInvalid
+			}
+		}
+		if in.Kind == "bounded_exception" && (in.ExpiresAt.IsZero() || !in.ExpiresAt.After(s.now()) || in.ExpiresAt.After(s.now().Add(30*24*time.Hour))) {
+			return ErrInvalid
+		}
+		in.ID, in.ActorID, in.CreatedAt = randomID(), actor, s.now()
+		v.ScopeEvents = append(v.ScopeEvents, in)
+		if e = s.write(v); e != nil {
+			return e
+		}
+		campaign, out = v, in
+		return nil
+	})
+	return campaign, out, e
 }
 
 func (s *Store) CreateEquivalenceProof(repo, campaignID, actor, digest string, in EquivalenceProof) (Campaign, EquivalenceProof, error) {

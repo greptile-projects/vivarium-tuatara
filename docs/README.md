@@ -66,6 +66,20 @@ declared residual difference. Read projection rechecks the target release line, 
 scenario/acceptance digest so movement invalidates only the affected proof while its historical execution stays intact.
 The proof records provenance only and grant no check execution, Git, review, merge, release, deployment, or target authority.
 
+Once a current proof is accepted, a named human target owner may bind it to the exact ordinary task-linked pull through
+`POST /repositories/{id}/propagation-campaigns/{campaign_id}/targets/{target_id}/delivery-paths`. The owner names the
+supported-user groups served by that path, but the campaign does not queue, merge, release, or deploy anything. Reads
+instead project current target review decisions and integration-queue state, the release that includes the pull, its
+ordinary deployment rollout and health signals, exposed users, path-local blockers, and the next decision from the pull,
+release, and deployment stores. A failed or paused rollout therefore pauses only its target path.
+
+Human coordinators can retain a newly discovered consumer, while named target owners can retain a superseded target or
+an exception expiring within 30 days, at the campaign `scope-events` route. Each event requires a reason and follow-up.
+Coverage is always derived: it distinguishes partial adoption, completion, and a completion policy whose threshold is met
+while visible gaps remain. Rejections, unresolved discoveries, superseded paths, and live exceptions stay attributable
+blockers, so minimum-target policy cannot turn them into hidden delivery. These records grant no review, queue, merge,
+release, deployment, environment, repository, or target authority.
+
 ## Shared regression search boundaries
 
 Repository collaborators open regression investigations through `POST

@@ -90,6 +90,34 @@ type EquivalenceProof = {
   owner_decisions: { owner_id: string; decision: string; rationale: string }[];
   authority: string;
 };
+type DeliveryPath = {
+  id: string;
+  target_id: string;
+  pull_request_id: string;
+  supported_user_groups: string[];
+  review_state?: string;
+  queue_state?: string;
+  merge_revision?: string;
+  release_version?: string;
+  environment_id?: string;
+  rollout_state?: string;
+  observed_outcomes?: string[];
+  blockers?: string[];
+  next_action?: string;
+  exposed: boolean;
+  authority: string;
+};
+type ScopeEvent = {
+  id: string;
+  kind: string;
+  target_id?: string;
+  consumer_repository_id?: string;
+  supported_user_groups?: string[];
+  reason: string;
+  follow_up: string;
+  expires_at?: string;
+  actor_id: string;
+};
 type Campaign = {
   id: string;
   title: string;
@@ -105,6 +133,17 @@ type Campaign = {
   assessments?: Assessment[];
   contributions?: Contribution[];
   equivalence_proofs?: EquivalenceProof[];
+  delivery_paths?: DeliveryPath[];
+  scope_events?: ScopeEvent[];
+  coverage: {
+    state: string;
+    policy_satisfied: boolean;
+    delivered_targets: number;
+    total_targets: number;
+    supported_user_groups: string[];
+    blockers: string[];
+    next_actions: string[];
+  };
   completion_policy: {
     mode: string;
     minimum_targets?: number;
@@ -227,6 +266,53 @@ export function PropagationCampaignsWorkspace({
     } finally {
       setSaving(false);
     }
+  }
+  async function trackDelivery(
+    event: FormEvent<HTMLFormElement>,
+    campaignID: string,
+    targetID: string,
+    contribution: Contribution,
+    proof: EquivalenceProof,
+  ) {
+    event.preventDefault();
+    setSaving(true);
+    const f = new FormData(event.currentTarget);
+    try {
+      await api(
+        `/repositories/${repositoryID}/propagation-campaigns/${campaignID}/targets/${targetID}/delivery-paths`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            contribution_id: contribution.id,
+            equivalence_proof_id: proof.id,
+            proof_version: proof.version,
+            pull_request_id: String(f.get("pull_id")),
+            supported_user_groups: lines(f.get("users")),
+          }),
+        },
+        token,
+      );
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Delivery path could not be tracked.");
+    } finally {
+      setSaving(false);
+    }
+  }
+  async function discoverConsumer(event: FormEvent<HTMLFormElement>, campaignID: string) {
+    event.preventDefault();
+    setSaving(true);
+    const form = event.currentTarget, f = new FormData(form);
+    try {
+      await api(`/repositories/${repositoryID}/propagation-campaigns/${campaignID}/scope-events`, {
+        method: "POST",
+        body: JSON.stringify({ kind: "consumer_discovered", consumer_repository_id: String(f.get("consumer")), supported_user_groups: lines(f.get("users")), reason: String(f.get("reason")), follow_up: String(f.get("follow_up")) }),
+      }, token);
+      form.reset();
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Consumer discovery could not be retained.");
+    } finally { setSaving(false); }
   }
   async function addEntry(
     event: FormEvent<HTMLFormElement>,
@@ -515,6 +601,30 @@ export function PropagationCampaignsWorkspace({
               {c.source.commits.length} exact commit
               {c.source.commits.length === 1 ? "" : "s"}
             </p>
+            <div className="mt-4 rounded-lg bg-[var(--surface-subtle)] p-4">
+              <div className="flex flex-wrap items-center gap-2">
+                <strong className="text-sm">Campaign coverage</strong>
+                <Badge tone={c.coverage.state === "complete" ? "success" : c.coverage.blockers.length ? "danger" : "info"}>
+                  {c.coverage.state.replaceAll("_", " ")}
+                </Badge>
+                <span className="text-xs">{c.coverage.delivered_targets}/{c.coverage.total_targets} targets delivered</span>
+              </div>
+              <p className="mt-2 text-xs">
+                Supported users exposed: {c.coverage.supported_user_groups.join(", ") || "none yet"}
+              </p>
+              {c.coverage.blockers.map((x) => <p key={x} className="mt-1 text-xs text-[var(--danger)]">Blocked: {x}</p>)}
+              {c.coverage.next_actions.map((x) => <p key={x} className="mt-1 text-xs">Next: {x}</p>)}
+              {c.scope_events?.map((x) => (
+                <p key={x.id} className="mt-2 text-xs"><strong>{x.kind.replaceAll("_", " ")}</strong> by {x.actor_id}: {x.reason} · {x.follow_up}</p>
+              ))}
+              <form onSubmit={(e) => discoverConsumer(e, c.id)} className="mt-3 grid gap-2 border-t pt-3 md:grid-cols-2">
+                <input name="consumer" required placeholder="New consumer repository ID" className="rounded border p-2 text-xs" />
+                <input name="reason" required placeholder="How this consumer was discovered" className="rounded border p-2 text-xs" />
+                <textarea name="users" required placeholder="Affected supported user groups, one per line" className="rounded border p-2 text-xs" />
+                <input name="follow_up" required placeholder="Named next action" className="rounded border p-2 text-xs" />
+                <Button disabled={saving} type="submit">Record newly discovered consumer</Button>
+              </form>
+            </div>
             <div className="mt-4 grid gap-3 md:grid-cols-2">
               {c.targets.map((t) => {
                 const assessment = c.assessments
@@ -525,7 +635,8 @@ export function PropagationCampaignsWorkspace({
                   ),
                   proof = c.equivalence_proofs
                     ?.filter((x) => x.target_id === t.id)
-                    .at(-1);
+                    .at(-1),
+                  delivery = c.delivery_paths?.find((x) => x.target_id === t.id);
                 return (
                   <article
                     key={t.id}
@@ -851,6 +962,24 @@ export function PropagationCampaignsWorkspace({
                         <p className="text-xs text-[var(--muted)]">
                           {proof.authority}
                         </p>
+                        {delivery ? (
+                          <div className="rounded-lg border p-3 text-xs">
+                            <div className="flex gap-2"><strong>Supported-user delivery</strong><Badge tone={delivery.exposed ? "success" : delivery.blockers?.length ? "danger" : "info"}>{delivery.rollout_state ?? delivery.queue_state ?? "tracked"}</Badge></div>
+                            <p className="mt-2">Users: {delivery.supported_user_groups.join(", ")}</p>
+                            <p>Review {delivery.review_state} · queue {delivery.queue_state} · release {delivery.release_version ?? "not released"} · environment {delivery.environment_id ?? "not deployed"}</p>
+                            {delivery.observed_outcomes?.map((x) => <p key={x}>Observed: {x}</p>)}
+                            {delivery.blockers?.map((x) => <p key={x} className="text-[var(--danger)]">Blocked: {x}</p>)}
+                            <p>Next: {delivery.next_action}</p>
+                            <p className="mt-1 text-[var(--muted)]">{delivery.authority}</p>
+                          </div>
+                        ) : contribution && proof.state === "accepted" && !proof.invalidated ? (
+                          <form onSubmit={(e) => trackDelivery(e, c.id, t.id, contribution, proof)} className="grid gap-2 border-t pt-3">
+                            <strong className="text-xs">Track ordinary delivery</strong>
+                            <input name="pull_id" required placeholder="Task-linked pull request ID" className="rounded border p-2 text-xs" />
+                            <textarea name="users" required placeholder="Supported user groups served, one per line" className="rounded border p-2 text-xs" />
+                            <Button disabled={saving} type="submit">Bind delivery path</Button>
+                          </form>
+                        ) : null}
                       </div>
                     ) : assessment &&
                       !assessment.invalidated &&

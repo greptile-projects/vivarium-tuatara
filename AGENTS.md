@@ -29,6 +29,11 @@ revision-exact executor. The campaign matrix retains commands, coverage, logs, d
 residual differences, and named-owner decisions. Unsupported source scenarios require revision-bound substitute evidence;
 target-line, dependency-manifest, and source-assumption movement project only the affected proof stale without rewriting
 historical execution or granting check, Git, review, merge, release, deployment, or target authority.
+Accepted propagation proofs can be bound by a current named human target owner to their exact ordinary task pull and its
+declared supported-user groups. Campaign reads derive review, queue, merge, release, rollout, health, exposure, blockers,
+and next actions from ordinary target stores; failed paths pause independently. Attributable consumer discoveries,
+superseded targets, and maximum-30-day exceptions remain visible gaps, and derived policy satisfaction cannot hide them
+or grant review, queue, merge, release, deployment, environment, repository, or target authority.
 
 Regression investigations at `/repositories/{id}/regression-investigations` and the repository
 `/regressions` workspace turn a suspected regression from an issue, support thread, failed check,

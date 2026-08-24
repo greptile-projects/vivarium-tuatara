@@ -150,3 +150,36 @@ func TestEquivalenceProofRequiresSubstitutesAndOwnerDecisionIsCASVersioned(t *te
 		t.Fatalf("want proof CAS conflict, got %v", err)
 	}
 }
+
+func TestDeliveryPathBindsAcceptedProofAndKeepsScopeGaps(t *testing.T) {
+	s, _ := New(t.TempDir())
+	v, _ := s.Create(validCampaign(), "owner-1", "campaign")
+	comparisons := make([]Comparison, 7)
+	for i, kind := range []string{"histories", "symbols", "dependencies", "interfaces", "schemas", "prior_fixes", "release_commitments"} {
+		comparisons[i] = Comparison{Kind: kind, Status: "review_required", Summary: "bounded comparison"}
+	}
+	v, assessment, _ := s.CreateAssessment(v.RepositoryID, v.ID, "owner-1", Assessment{TargetID: "target-1", Classification: "directly_applicable", TargetRevision: strings.Repeat("b", 40), SourceRevision: strings.Repeat("a", 40), Comparisons: comparisons})
+	v, contribution, _ := s.LinkContribution(v.RepositoryID, v.ID, "owner-1", Contribution{TargetID: "target-1", AssessmentID: assessment.ID, AssessmentVersion: assessment.Version, TargetRevision: assessment.TargetRevision, Application: "direct", Topology: "local_branch", ProposalID: strings.Repeat("c", 32), TaskIDs: []string{strings.Repeat("d", 32)}})
+	proofInput := EquivalenceProof{RequestID: "delivery-proof", TargetID: "target-1", TargetRevision: strings.Repeat("b", 40), SourceRevision: strings.Repeat("a", 40), SourceAssumptionsSHA256: strings.Repeat("e", 64), DependencySHA256: strings.Repeat("f", 64), EvidenceRequirements: []string{"same outcome"}, Scenarios: []EquivalenceScenario{{Name: "behavior", SourceCommand: "test", TargetCommand: "test", Coverage: []string{"same outcome"}, State: "succeeded", CheckRunID: "run-1"}}, OrdinaryChecks: []OrdinaryCheck{{Name: "unit", Command: "test", State: "succeeded", CheckRunID: "run-2"}}, State: "demonstrated"}
+	v, proof, _ := s.CreateEquivalenceProof(v.RepositoryID, v.ID, "owner-1", "delivery-digest", proofInput)
+	v, proof, _ = s.DecideEquivalenceProof(v.RepositoryID, v.ID, proof.ID, "owner-1", "accepted", "Evidence covers the supported users.", proof.Version)
+	in := DeliveryPath{TargetID: "target-1", ContributionID: contribution.ID, EquivalenceProofID: proof.ID, ProofVersion: proof.Version, PullRequestID: "pull-1", SupportedUserGroups: []string{"stable line users"}}
+	updated, delivery, err := s.LinkDeliveryPath(v.RepositoryID, v.ID, "owner-1", in)
+	if err != nil || len(updated.DeliveryPaths) != 1 || delivery.Authority == "" || delivery.Version != 1 {
+		t.Fatalf("delivery path not retained: %#v %v", delivery, err)
+	}
+	changed := in
+	changed.PullRequestID = "pull-2"
+	if _, _, err = s.LinkDeliveryPath(v.RepositoryID, v.ID, "owner-1", changed); !errors.Is(err, ErrConflict) {
+		t.Fatalf("changed path must conflict: %v", err)
+	}
+	event := ScopeEvent{Kind: "consumer_discovered", ConsumerRepositoryID: "consumer-repo", SupportedUserGroups: []string{"preview users"}, Reason: "runtime inventory found another caller", FollowUp: "admit the consumer as a target"}
+	updated, retained, err := s.AddScopeEvent(v.RepositoryID, v.ID, "coordinator", event)
+	if err != nil || len(updated.ScopeEvents) != 1 || retained.ActorID != "coordinator" {
+		t.Fatalf("scope gap not retained: %#v %v", retained, err)
+	}
+	exception := ScopeEvent{Kind: "bounded_exception", TargetID: "target-1", Reason: "release freeze", FollowUp: "retry after freeze", ExpiresAt: time.Now().UTC().Add(31 * 24 * time.Hour)}
+	if _, _, err = s.AddScopeEvent(v.RepositoryID, v.ID, "owner-1", exception); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("unbounded exception must fail: %v", err)
+	}
+}
