@@ -23,6 +23,12 @@ labelled bearer tokens or provider-prefixed secrets.
 Idempotent POST reconciliation applies the same record audience predicate as list/detail reads, so knowing a
 request identity and body grants no disclosure. A scoped Git ref must resolve to the exact claimed object and,
 when present, the same declared revision; independently valid Git identifiers cannot be combined.
+Restricted remediation exposure maps append CAS-versioned, retry-stable cited findings for branches, tags,
+pulls, forks, federation, workspaces, checkpoints, caches, packages, release artifacts, documentation,
+deployments, backups, and active clones. Findings may name only the remediation's affected object IDs and
+bounded derived-data categories, classify confirmed, suspected, unreachable, independently controlled, or
+unverifiable copies, and retain human or repository-bound read-only-agent attribution. Restricted copy and
+citation identities are redacted on API/web projection while their state and uncertainty remain visible.
 
 Propagation campaigns at `/repositories/{id}/propagation-campaigns` and the repository
 `/propagation` workspace freeze an exact source outcome from a merged pull, security repair,
