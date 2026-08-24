@@ -9,17 +9,20 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/deployments"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/propagationcampaigns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 )
 
-func registerPropagationCampaignRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, campaigns *propagationcampaigns.Store, pulls *pullrequests.Store, proposalStore *proposals.Store, checks *checkruns.Store) {
+func registerPropagationCampaignRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, campaigns *propagationcampaigns.Store, pulls *pullrequests.Store, proposalStore *proposals.Store, checks *checkruns.Store, releaseStore *releases.Store, deploymentStore *deployments.Store) {
 	actorID := func(c auth.Credential) string {
 		if c.AgentID != "" {
 			return c.AgentID
@@ -165,6 +168,178 @@ func registerPropagationCampaignRoutes(mux *http.ServeMux, git *storage.Store, c
 			}
 		}
 		v.EquivalenceProofs = visibleProofs
+		visibleDeliveries := make([]propagationcampaigns.DeliveryPath, 0, len(v.DeliveryPaths))
+		delivered := map[string]bool{}
+		groups := map[string]bool{}
+		coverageBlockers, nextActions := []string{}, []string{}
+		for _, retained := range v.DeliveryPaths {
+			var target *propagationcampaigns.Target
+			for i := range v.Targets {
+				if v.Targets[i].ID == retained.TargetID {
+					target = &v.Targets[i]
+				}
+			}
+			if target == nil || target.State == "inaccessible" || target.State == "unsupported" {
+				continue
+			}
+			d := retained
+			d.ReviewState, d.QueueState, d.Blockers, d.ObservedOutcomes = "pending", "not_queued", []string{}, []string{}
+			proofCurrent := propagationProofCurrent(v.EquivalenceProofs, d)
+			if !proofCurrent {
+				d.Blockers = append(d.Blockers, "equivalence proof is stale, rejected, or superseded")
+				d.NextAction = "target owner refreshes and accepts equivalence evidence"
+			}
+			pull, e := pulls.Get(target.RepositoryID, d.PullRequestID)
+			if e != nil {
+				d.Blockers, d.NextAction = append(d.Blockers, "linked pull is unavailable"), "restore access to the ordinary target contribution"
+			} else {
+				reviews, _ := pulls.ListReviews(target.RepositoryID, pull.ID)
+				d.ReviewState = propagationReviewState(reviews)
+				if pull.Status == pullrequests.Merged && pull.MergeCommitID != nil {
+					d.ReviewState, d.QueueState, d.MergeRevision = "approved", "merged", *pull.MergeCommitID
+				} else if pull.QueuePaused {
+					d.QueueState = "paused"
+				} else if pull.QueuedAt != nil {
+					d.QueueState = "queued"
+				}
+				switch {
+				case d.ReviewState == "changes_requested":
+					d.Blockers, d.NextAction = append(d.Blockers, "target review requested changes"), "target contributor addresses review"
+				case d.MergeRevision == "" && d.QueueState == "paused":
+					d.Blockers, d.NextAction = append(d.Blockers, "target integration queue is paused"), "target owner resolves queue blockers"
+				case d.MergeRevision == "" && d.ReviewState != "approved":
+					d.NextAction = "target reviewers independently review the pull"
+				case d.MergeRevision == "":
+					d.NextAction = "target owner queues and merges through ordinary policy"
+				}
+			}
+			if d.MergeRevision != "" {
+				releaseItems, _ := releaseStore.List(target.RepositoryID)
+				for _, release := range releaseItems {
+					included := false
+					for _, id := range release.Inclusions.PullRequestIDs {
+						included = included || id == d.PullRequestID
+					}
+					if included {
+						d.ReleaseID, d.ReleaseVersion = release.ID, release.Version
+					}
+				}
+				if d.ReleaseID == "" {
+					d.NextAction = "target release owner publishes an ordinary release"
+				}
+			}
+			if d.ReleaseID != "" {
+				promotions, _ := deploymentStore.ListPromotions(target.RepositoryID)
+				for _, p := range promotions {
+					if p.ReleaseID == d.ReleaseID && (d.DeploymentID == "" || p.CreationSequence > 0) {
+						d.DeploymentID, d.EnvironmentID, d.RolloutState = p.ID, p.EnvironmentID, p.State
+						d.ObservedOutcomes = nil
+						for _, signal := range p.Evidence {
+							d.ObservedOutcomes = append(d.ObservedOutcomes, signal.Stage+": "+signal.Signal+" "+signal.State)
+						}
+					}
+				}
+				if d.DeploymentID == "" {
+					d.NextAction = "target deployment owner starts an ordinary rollout"
+				} else if d.RolloutState == "failed" || d.RolloutState == "paused" {
+					d.Blockers, d.NextAction = append(d.Blockers, "rollout is "+d.RolloutState), "target deployment owner decides recovery for this path"
+				} else if d.RolloutState == "succeeded" && proofCurrent {
+					d.Exposed, d.NextAction = true, "observe supported-user outcomes"
+					delivered[d.TargetID] = true
+					for _, group := range d.SupportedUserGroups {
+						groups[group] = true
+					}
+				} else {
+					d.NextAction = "target deployment owner advances the governed rollout"
+				}
+			}
+			if !proofCurrent {
+				d.Exposed = false
+				d.NextAction = "target owner refreshes and accepts equivalence evidence"
+			}
+			for _, blocker := range d.Blockers {
+				coverageBlockers = append(coverageBlockers, d.TargetID+": "+blocker)
+			}
+			if d.NextAction != "" {
+				nextActions = append(nextActions, d.TargetID+": "+d.NextAction)
+			}
+			visibleDeliveries = append(visibleDeliveries, d)
+		}
+		v.DeliveryPaths = visibleDeliveries
+		for _, target := range v.Targets {
+			if delivered[target.ID] {
+				continue
+			}
+			if target.State == "inaccessible" || target.State == "unsupported" || target.State == "unknown" {
+				coverageBlockers = append(coverageBlockers, target.ID+": "+target.Diagnostic)
+				nextActions = append(nextActions, target.ID+": restore target visibility or support")
+			}
+			latestProofState := ""
+			for _, proof := range v.EquivalenceProofs {
+				if proof.TargetID == target.ID {
+					latestProofState = proof.State
+				}
+			}
+			if latestProofState == "rejected" {
+				coverageBlockers = append(coverageBlockers, target.ID+": target owner rejected equivalence evidence")
+				nextActions = append(nextActions, target.ID+": revise the adaptation or evidence")
+			}
+			hasDelivery := false
+			for _, delivery := range v.DeliveryPaths {
+				hasDelivery = hasDelivery || delivery.TargetID == target.ID
+			}
+			if !hasDelivery && target.State != "inaccessible" && target.State != "unsupported" {
+				nextActions = append(nextActions, target.ID+": prove, accept, and bind an ordinary target contribution")
+			}
+			for _, dependency := range target.DependsOn {
+				if !delivered[dependency] {
+					coverageBlockers = append(coverageBlockers, target.ID+": waiting for dependency "+dependency)
+				}
+			}
+		}
+		for _, event := range v.ScopeEvents {
+			if event.Kind == "consumer_discovered" {
+				coverageBlockers = append(coverageBlockers, "new consumer "+event.ConsumerRepositoryID+": "+event.Reason)
+				nextActions = append(nextActions, event.FollowUp)
+			}
+			if event.Kind == "bounded_exception" && time.Now().UTC().Before(event.ExpiresAt) {
+				coverageBlockers = append(coverageBlockers, event.TargetID+": bounded exception until "+event.ExpiresAt.Format(time.RFC3339))
+				nextActions = append(nextActions, event.FollowUp)
+			}
+			if event.Kind == "target_superseded" {
+				coverageBlockers = append(coverageBlockers, event.TargetID+": superseded target remains unresolved by successor work")
+				nextActions = append(nextActions, event.FollowUp)
+			}
+		}
+		groupList := make([]string, 0, len(groups))
+		for group := range groups {
+			groupList = append(groupList, group)
+		}
+		sort.Strings(groupList)
+		deliveredCount := len(delivered)
+		policySatisfied := deliveredCount == len(v.Targets)
+		if v.CompletionPolicy.Mode == "minimum" {
+			policySatisfied = deliveredCount >= v.CompletionPolicy.MinimumTargets
+		}
+		if v.CompletionPolicy.Mode == "ordered" {
+			policySatisfied = deliveredCount == len(v.Targets)
+			for _, target := range v.Targets {
+				if delivered[target.ID] {
+					for _, dependency := range target.DependsOn {
+						policySatisfied = policySatisfied && delivered[dependency]
+					}
+				}
+			}
+		}
+		state := "in_progress"
+		if policySatisfied && len(coverageBlockers) == 0 {
+			state = "complete"
+		} else if policySatisfied {
+			state = "policy_satisfied_with_visible_gaps"
+		} else if deliveredCount > 0 {
+			state = "partial_adoption"
+		}
+		v.Coverage = propagationcampaigns.Coverage{State: state, PolicySatisfied: policySatisfied, DeliveredTargets: deliveredCount, TotalTargets: len(v.Targets), SupportedUserGroups: groupList, Blockers: coverageBlockers, NextActions: nextActions}
 		return v
 	}
 	mux.HandleFunc("GET /repositories/{id}/propagation-campaigns", func(w http.ResponseWriter, r *http.Request) {
@@ -718,12 +893,164 @@ func registerPropagationCampaignRoutes(mux *http.ServeMux, git *storage.Store, c
 		}
 		writeJSON(w, 201, map[string]any{"campaign": project(updated, c), "equivalence_proof": out})
 	})
+	mux.HandleFunc("POST /repositories/{id}/propagation-campaigns/{campaign_id}/targets/{target_id}/delivery-paths", func(w http.ResponseWriter, r *http.Request) {
+		c, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id"))
+		if !ok {
+			return
+		}
+		if c.AgentID != "" {
+			writeAPIError(w, 403, "propagation_delivery_forbidden", "only a named human target owner may publish delivery tracking")
+			return
+		}
+		var in propagationcampaigns.DeliveryPath
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "an accepted proof, contribution pull, and supported users are required")
+			return
+		}
+		campaign, e := campaigns.Get(r.PathValue("id"), r.PathValue("campaign_id"))
+		if e != nil {
+			writeAPIError(w, 404, "propagation_campaign_not_found", "propagation campaign not found")
+			return
+		}
+		var target *propagationcampaigns.Target
+		var contribution *propagationcampaigns.Contribution
+		var proof *propagationcampaigns.EquivalenceProof
+		for i := range campaign.Targets {
+			if campaign.Targets[i].ID == r.PathValue("target_id") {
+				target = &campaign.Targets[i]
+			}
+		}
+		for i := range campaign.Contributions {
+			if campaign.Contributions[i].ID == in.ContributionID {
+				contribution = &campaign.Contributions[i]
+			}
+		}
+		for i := range campaign.EquivalenceProofs {
+			if campaign.EquivalenceProofs[i].ID == in.EquivalenceProofID {
+				proof = &campaign.EquivalenceProofs[i]
+			}
+		}
+		owner := false
+		if target != nil {
+			for _, id := range target.OwnerIDs {
+				owner = owner || id == c.UserID
+			}
+		}
+		if !owner || target == nil || target.Kind != "repository" {
+			writeAPIError(w, 403, "propagation_delivery_forbidden", "current named target-owner authority is required")
+			return
+		}
+		repo, repoErr := catalog.GetByID(target.RepositoryID)
+		access, _ := catalog.HasCollaborator(c.UserID, target.RepositoryID)
+		if repoErr != nil || (repo.OwnerID != c.UserID && !access) {
+			writeAPIError(w, 403, "propagation_target_forbidden", "current target repository access is required")
+			return
+		}
+		pull, pullErr := pulls.Get(target.RepositoryID, in.PullRequestID)
+		taskLinked := false
+		if pullErr == nil && pull.TaskID != nil && contribution != nil {
+			for _, id := range contribution.TaskIDs {
+				taskLinked = taskLinked || id == *pull.TaskID
+			}
+		}
+		proofCurrent := false
+		if proof != nil {
+			if gr, openErr := git.Open(target.RepositoryID); openErr == nil {
+				tip, tipErr := gitOutput(gr.Path(), "rev-parse", "--verify", "refs/heads/"+strings.TrimPrefix(target.ReleaseLine, "refs/heads/")+"^{commit}")
+				if source, sourceErr := git.Open(campaign.Source.RepositoryID); tipErr == nil && sourceErr == nil {
+					proofCurrent = tip == proof.TargetRevision && propagationDependencyDigest(gr.Path(), proof.TargetRevision) == proof.DependencySHA256 && propagationSourceAssumptions(source.Path(), proof.SourceRevision, campaign.AcceptanceCriteria) == proof.SourceAssumptionsSHA256
+				}
+			}
+		}
+		if contribution == nil || proof == nil || proof.Version != in.ProofVersion || proof.State != "accepted" || !proofCurrent || pullErr != nil || !taskLinked || pull.SourceCommitID != proof.TargetRevision {
+			writeAPIError(w, 422, "propagation_delivery_invalid", "delivery must bind the current accepted proof to its exact ordinary task pull")
+			return
+		}
+		in.TargetID = target.ID
+		updated, out, e := campaigns.LinkDeliveryPath(campaign.RepositoryID, campaign.ID, c.UserID, in)
+		if errors.Is(e, propagationcampaigns.ErrConflict) {
+			writeAPIError(w, 409, "propagation_delivery_conflict", "this target already tracks different delivery work")
+			return
+		}
+		if e != nil {
+			writeAPIError(w, 422, "propagation_delivery_invalid", "supported-user delivery tracking could not be retained")
+			return
+		}
+		writeJSON(w, 201, map[string]any{"campaign": project(updated, c), "delivery_path": out})
+	})
+	mux.HandleFunc("POST /repositories/{id}/propagation-campaigns/{campaign_id}/scope-events", func(w http.ResponseWriter, r *http.Request) {
+		c, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		if c.AgentID != "" {
+			writeAPIError(w, 403, "propagation_scope_forbidden", "scope decisions require an accountable human")
+			return
+		}
+		var in propagationcampaigns.ScopeEvent
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "an attributable scope event is required")
+			return
+		}
+		campaign, e := campaigns.Get(r.PathValue("id"), r.PathValue("campaign_id"))
+		if e != nil {
+			writeAPIError(w, 404, "propagation_campaign_not_found", "propagation campaign not found")
+			return
+		}
+		if in.Kind != "consumer_discovered" {
+			owner := false
+			targetRepositoryID := ""
+			for _, target := range campaign.Targets {
+				if target.ID == in.TargetID {
+					targetRepositoryID = target.RepositoryID
+					for _, id := range target.OwnerIDs {
+						owner = owner || id == c.UserID
+					}
+				}
+			}
+			targetRepository, targetErr := catalog.GetByID(targetRepositoryID)
+			targetAccess, _ := catalog.HasCollaborator(c.UserID, targetRepositoryID)
+			if !owner || targetErr != nil || (targetRepository.OwnerID != c.UserID && !targetAccess) {
+				writeAPIError(w, 403, "propagation_scope_forbidden", "only a named target owner may supersede or except that path")
+				return
+			}
+		}
+		updated, out, e := campaigns.AddScopeEvent(campaign.RepositoryID, campaign.ID, c.UserID, in)
+		if e != nil {
+			writeAPIError(w, 422, "propagation_scope_invalid", "discoveries need users and follow-up; exceptions must expire within 30 days")
+			return
+		}
+		writeJSON(w, 201, map[string]any{"campaign": project(updated, c), "scope_event": out})
+	})
 }
 
 func gitOutput(path string, args ...string) (string, error) {
 	all := append([]string{"--git-dir=" + path}, args...)
 	b, e := exec.Command("git", all...).Output()
 	return strings.TrimSpace(string(b)), e
+}
+
+func propagationReviewState(reviews []pullrequests.Review) string {
+	approved := false
+	for _, review := range reviews {
+		if review.Decision == pullrequests.ChangesRequested {
+			return "changes_requested"
+		}
+		approved = approved || review.Decision == pullrequests.Approved
+	}
+	if approved {
+		return "approved"
+	}
+	return "pending"
+}
+
+func propagationProofCurrent(proofs []propagationcampaigns.EquivalenceProof, delivery propagationcampaigns.DeliveryPath) bool {
+	for _, proof := range proofs {
+		if proof.ID == delivery.EquivalenceProofID && proof.Version == delivery.ProofVersion && proof.State == "accepted" && !proof.Invalidated {
+			return true
+		}
+	}
+	return false
 }
 func comparePropagationTarget(gitStore *storage.Store, campaign propagationcampaigns.Campaign, target propagationcampaigns.Target) (propagationcampaigns.Assessment, error) {
 	source, e := gitStore.Open(campaign.Source.RepositoryID)
