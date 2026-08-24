@@ -437,6 +437,164 @@ func registerRestructuringPlanRoutes(mux *http.ServeMux, git *storage.Store, cat
 		}
 		writeJSON(w, 200, map[string]any{"schema": "vivarium.restructuring-dependency-map/v1", "repository_id": p.RepositoryID, "plan_id": p.ID, "version": p.Version, "migrations": xs})
 	})
+	mux.HandleFunc("POST /repositories/{id}/restructuring-plans/{plan_id}/cutover", func(w http.ResponseWriter, r *http.Request) {
+		c, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		if c.AgentID != "" {
+			writeAPIError(w, 403, "restructuring_cutover_human_required", "a human collaborator must control cutover")
+			return
+		}
+		var in struct {
+			ExpectedVersion int                        `json:"expected_version"`
+			Cutover         restructuringplans.Cutover `json:"cutover"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_restructuring_cutover", "a cutover request is required")
+			return
+		}
+		out, e := plans.StartCutover(r.PathValue("id"), r.PathValue("plan_id"), c.UserID, in.ExpectedVersion, in.Cutover)
+		if e != nil {
+			writeAPIError(w, 409, "restructuring_cutover_blocked", "current passing rehearsal, approved collaboration mappings, and a valid cleanup boundary are required")
+			return
+		}
+		writeJSON(w, 201, out)
+	})
+	mux.HandleFunc("POST /repositories/{id}/restructuring-plans/{plan_id}/cutover/approvals", func(w http.ResponseWriter, r *http.Request) {
+		c, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		if c.AgentID != "" {
+			writeAPIError(w, 403, "restructuring_cutover_human_required", "destination owners approve cutover personally")
+			return
+		}
+		var in struct {
+			ExpectedVersion int                                `json:"expected_version"`
+			Approval        restructuringplans.CutoverApproval `json:"approval"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_restructuring_approval", "an approval is required")
+			return
+		}
+		out, e := plans.ApproveCutover(r.PathValue("id"), r.PathValue("plan_id"), c.UserID, in.ExpectedVersion, in.Approval)
+		if e != nil {
+			writeAPIError(w, 403, "restructuring_approval_forbidden", "only a declared destination owner may approve")
+			return
+		}
+		writeJSON(w, 201, out)
+	})
+	mux.HandleFunc("POST /repositories/{id}/restructuring-plans/{plan_id}/cutover/activate", func(w http.ResponseWriter, r *http.Request) {
+		c, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		if c.AgentID != "" {
+			writeAPIError(w, 403, "restructuring_cutover_human_required", "a human controller must activate cutover")
+			return
+		}
+		var in struct {
+			ExpectedVersion int               `json:"expected_version"`
+			Repositories    map[string]string `json:"repositories"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_restructuring_activation", "destination repository identities are required")
+			return
+		}
+		p, e := plans.Get(r.PathValue("id"), r.PathValue("plan_id"))
+		if e != nil || p.Cutover == nil {
+			writeAPIError(w, 404, "restructuring_cutover_not_found", "cutover not found")
+			return
+		}
+		for _, d := range p.Destinations {
+			rid := in.Repositories[d.ID]
+			target, e := catalog.GetByID(rid)
+			if e != nil || target.OwnerID != d.OwnerIDs[0] || target.Name != d.Name {
+				writeAPIError(w, 422, "restructuring_destination_mismatch", "each destination must be the declared owner's exact repository")
+				return
+			}
+			dst, e := git.Open(rid)
+			if e != nil {
+				writeAPIError(w, 422, "restructuring_destination_unavailable", "destination Git repository is unavailable")
+				return
+			}
+			var candidate restructuringplans.CandidateRepository
+			for _, set := range p.CandidateSets {
+				if set.ID == p.Cutover.CandidateID {
+					for _, x := range set.Repositories {
+						if x.DestinationID == d.ID {
+							candidate = x
+						}
+					}
+				}
+			}
+			source, cleanup, e := storage.OpenBundle(plans.CandidatePath(p.RepositoryID, p.ID, p.Cutover.CandidateID, d.ID))
+			if e != nil {
+				writeAPIError(w, 422, "restructuring_candidate_unavailable", "retained candidate repository is unavailable")
+				return
+			}
+			e = dst.ImportCommit(source, storage.ObjectID(candidate.Tip))
+			cleanup()
+			if e == nil {
+				e = dst.CreateReference(storage.Reference{Name: "refs/heads/" + d.DefaultBranch, Target: candidate.Tip})
+			}
+			if e != nil {
+				writeAPIError(w, 409, "restructuring_destination_changed", "destination is no longer empty; no authoritative ref was replaced")
+				return
+			}
+		}
+		out, e := plans.ActivateCutover(p.RepositoryID, p.ID, c.UserID, in.ExpectedVersion, in.Repositories)
+		if e != nil {
+			writeAPIError(w, 409, "restructuring_activation_blocked", "all current destination-owner approvals are required")
+			return
+		}
+		writeJSON(w, 201, out)
+	})
+	mux.HandleFunc("POST /repositories/{id}/restructuring-plans/{plan_id}/cutover/observations", func(w http.ResponseWriter, r *http.Request) {
+		c, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var in struct {
+			ExpectedVersion int                                   `json:"expected_version"`
+			Observation     restructuringplans.CutoverObservation `json:"observation"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_restructuring_observation", "an observation is required")
+			return
+		}
+		out, e := plans.ObserveCutover(r.PathValue("id"), r.PathValue("plan_id"), actorID(c), in.ExpectedVersion, in.Observation)
+		if e != nil {
+			writeAPIError(w, 409, "restructuring_observation_rejected", "refresh the active cutover before reporting bounded evidence")
+			return
+		}
+		writeJSON(w, 201, out)
+	})
+	mux.HandleFunc("POST /repositories/{id}/restructuring-plans/{plan_id}/cutover/finish", func(w http.ResponseWriter, r *http.Request) {
+		c, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		if c.AgentID != "" {
+			writeAPIError(w, 403, "restructuring_cutover_human_required", "a human controller must finish or roll back cutover")
+			return
+		}
+		var in struct {
+			ExpectedVersion int  `json:"expected_version"`
+			Rollback        bool `json:"rollback"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_restructuring_finish", "a finish request is required")
+			return
+		}
+		out, e := plans.FinishCutover(r.PathValue("id"), r.PathValue("plan_id"), c.UserID, in.ExpectedVersion, in.Rollback)
+		if e != nil {
+			writeAPIError(w, 409, "restructuring_cleanup_blocked", "passing topology evidence and adopted dependents are required; late writes or residual use block cleanup")
+			return
+		}
+		writeJSON(w, 201, out)
+	})
 }
 
 func restructuringInventoryOwners(item restructuringplans.InventoryItem, catalog *repositories.Store, pulls *pullrequests.Store, issueStore *issues.Store, proposalStore *proposals.Store, releaseStore *releases.Store, packageStore *packageversions.Store, docs *docscollections.Store, policies *governance.Store, workspaceStore *workspaces.Store, workflows *collaborationworkflows.Store, consumers *relationships.Store) ([]string, error) {

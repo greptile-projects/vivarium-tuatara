@@ -1756,6 +1756,10 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 			http.Error(w, guidance, http.StatusConflict)
 			return
 		}
+		if blocked, guidance := restructuringPushPaused(restructuringPlanStore, r.PathValue("remote")); blocked {
+			http.Error(w, guidance, http.StatusConflict)
+			return
+		}
 		contributor := false
 		onlyBranch := ""
 		if authStore != nil {
@@ -1779,6 +1783,26 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		runGitService(w, r, repo, receivePackService, false, contributor, onlyBranch)
 	})
 	return mux
+}
+
+func restructuringPushPaused(store *restructuringplans.Store, remote string) (bool, string) {
+	if store == nil {
+		return false, ""
+	}
+	repositoryID, ok := strings.CutSuffix(remote, ".git")
+	if !ok {
+		return false, ""
+	}
+	items, err := store.List(repositoryID)
+	if err != nil {
+		return true, "push paused: restructuring state is unavailable"
+	}
+	for _, p := range items {
+		if p.Cutover != nil && p.Cutover.State == "active" && p.Cutover.SourceState == "writes_paused" {
+			return true, "push rejected: repository authority moved during restructuring; use the retained destination mapping or ask the cutover controller to roll back"
+		}
+	}
+	return false, ""
 }
 
 func historyRewritePushPaused(store *historyremediations.Store, remote string) (bool, string) {

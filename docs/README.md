@@ -266,6 +266,15 @@ target-repository task, pull, and release work; it records coordination without 
 team authority in that repository. These records grant no Git, package, API, extension, workflow,
 documentation, deployment, federation, pull, release, or consumer authority.
 
+After a gap-free candidate's latest rehearsal passes and active-work mappings are approved or archived, a human
+collaborator can stage cutover. Each destination owner approves independently. Activation binds exact pre-created
+destination repositories, imports the immutable candidate commits, publishes default refs, and activates a source
+write boundary; stock Git rejects pushes to the old authority with migration guidance. The workspace and API retain
+live source/destination state, active controls, approvals, dependency adoption, and bounded build, release,
+permission, link, supported-consumer, ordinary-contribution, and Git-traffic evidence. Failed or residual current
+evidence, late writes, and unadopted dependents prevent cleanup. A complete passing matrix applies the declared
+read-only, archive, or removal policy; rollback restores source authority without erasing retained history.
+
 ## Shared regression search boundaries
 
 Repository collaborators open regression investigations through `POST

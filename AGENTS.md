@@ -3150,5 +3150,14 @@ evidence. Creation holds both the proposer and named owner's current source-repo
 persistence, and event writes revalidate the retained owner under the same catalog boundary, so access loss
 blocks progress rather than stranding a falsely actionable owner. Unavailable, rejected, stale-credential, and unmigrated consumers remain visible. Optional
 human/agent propagation references point at ordinary task/pull/release work and grant no consumer authority.
+Cutover control starts only from a gap-free candidate whose latest complete rehearsal passed and whose active
+collaboration mappings are approved or deliberately archived. Every destination owner separately approves before
+the human plan creator binds exact pre-created repositories, imports retained candidate tips, publishes default
+refs, and activates the source write boundary. The ledger exposes source/destination health, active pause kinds,
+approvals, bounded topology observations, and rollback; stock Git rejects source pushes while active. Cleanup
+requires current passing build, release, permission, link, supported-consumer, ordinary-contribution, and Git-traffic
+evidence plus adoption of every dependent. Residual traffic and late writes block read-only/archive/removal policy
+completion. Rollback restores source authority without deleting evidence or candidates, and the ledger grants no
+general repository, Git, policy, collaboration, release, dependent, or cleanup authority.
 
 Sensitive history remediations at `/repositories/{id}/history-remediations` and the repository

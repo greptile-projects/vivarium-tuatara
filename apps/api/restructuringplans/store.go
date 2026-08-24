@@ -222,6 +222,47 @@ type DependentMigration struct {
 	CreatedAt           time.Time               `json:"created_at"`
 	Authority           string                  `json:"authority"`
 }
+type CutoverApproval struct {
+	RequestID     string    `json:"request_id"`
+	ActorID       string    `json:"actor_id"`
+	DestinationID string    `json:"destination_id"`
+	Decision      string    `json:"decision"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+type CutoverDestination struct {
+	DestinationID string `json:"destination_id"`
+	RepositoryID  string `json:"repository_id,omitempty"`
+	State         string `json:"state"`
+	Revision      string `json:"revision,omitempty"`
+	Health        string `json:"health"`
+}
+type CutoverObservation struct {
+	RequestID  string    `json:"request_id"`
+	ActorID    string    `json:"actor_id"`
+	Kind       string    `json:"kind"`
+	ResourceID string    `json:"resource_id"`
+	State      string    `json:"state"`
+	Evidence   string    `json:"evidence"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+type Cutover struct {
+	ID            string               `json:"id"`
+	RequestID     string               `json:"request_id"`
+	CandidateID   string               `json:"candidate_id"`
+	State         string               `json:"state"`
+	SourceState   string               `json:"source_state"`
+	PauseKinds    []string             `json:"pause_kinds"`
+	CleanupPolicy string               `json:"cleanup_policy"`
+	Approvals     []CutoverApproval    `json:"approvals,omitempty"`
+	Destinations  []CutoverDestination `json:"destinations"`
+	Observations  []CutoverObservation `json:"observations,omitempty"`
+	Blockers      []string             `json:"blockers,omitempty"`
+	CreatedBy     string               `json:"created_by"`
+	CreatedAt     time.Time            `json:"created_at"`
+	ActivatedAt   *time.Time           `json:"activated_at,omitempty"`
+	CompletedAt   *time.Time           `json:"completed_at,omitempty"`
+	Authority     string               `json:"authority"`
+}
 type Plan struct {
 	ID                    string                 `json:"id"`
 	RequestID             string                 `json:"request_id"`
@@ -240,10 +281,255 @@ type Plan struct {
 	CandidateSets         []CandidateSet         `json:"candidate_sets,omitempty"`
 	CollaborationMappings []CollaborationMapping `json:"collaboration_mappings,omitempty"`
 	DependentMigrations   []DependentMigration   `json:"dependent_migrations,omitempty"`
+	Cutover               *Cutover               `json:"cutover,omitempty"`
 	Version               int                    `json:"version"`
 	CreatedBy             string                 `json:"created_by"`
 	CreatedAt             time.Time              `json:"created_at"`
 	Authority             string                 `json:"authority"`
+}
+
+func (s *Store) StartCutover(repo, id, actor string, expected int, in Cutover) (Plan, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lockRoot()
+	if err != nil {
+		return Plan{}, err
+	}
+	defer unlock()
+	v, err := s.read(repo, id)
+	if err != nil {
+		return Plan{}, err
+	}
+	if v.Cutover != nil {
+		if v.Cutover.RequestID == in.RequestID && v.Cutover.CandidateID == in.CandidateID {
+			return v, nil
+		}
+		return Plan{}, ErrConflict
+	}
+	if expected != v.Version || !bounded(in.RequestID, 1, 200) || !map[string]bool{"read_only": true, "archive": true, "remove": true}[in.CleanupPolicy] || len(in.PauseKinds) == 0 {
+		return Plan{}, ErrInvalid
+	}
+	var candidate *CandidateSet
+	for i := range v.CandidateSets {
+		if v.CandidateSets[i].ID == in.CandidateID {
+			candidate = &v.CandidateSets[i]
+		}
+	}
+	if candidate == nil || len(candidate.Gaps) != 0 || len(candidate.Rehearsals) == 0 || candidate.Rehearsals[len(candidate.Rehearsals)-1].State != "passed" {
+		return Plan{}, ErrInvalid
+	}
+	for _, m := range v.CollaborationMappings {
+		if m.State != "approved" && m.State != "archived" {
+			return Plan{}, ErrInvalid
+		}
+	}
+	seen := map[string]bool{}
+	for _, k := range in.PauseKinds {
+		if seen[k] || !map[string]bool{"git": true, "collaboration": true, "automation": true, "release": true}[k] {
+			return Plan{}, ErrInvalid
+		}
+		seen[k] = true
+	}
+	in.ID = randomID()
+	in.State = "awaiting_approval"
+	in.SourceState = "active"
+	in.CreatedBy = actor
+	in.CreatedAt = s.now()
+	in.Approvals = nil
+	in.Observations = nil
+	in.Blockers = nil
+	in.Destinations = nil
+	for _, d := range candidate.Repositories {
+		in.Destinations = append(in.Destinations, CutoverDestination{DestinationID: d.DestinationID, State: "candidate", Revision: d.Tip, Health: "pending"})
+	}
+	in.Authority = "cutover coordination only; each source and destination owner retains repository, Git, policy, collaboration, release, and cleanup authority"
+	v.Cutover = &in
+	v.Version++
+	return v, s.write(v)
+}
+
+func (s *Store) ApproveCutover(repo, id, actor string, expected int, in CutoverApproval) (Plan, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, e := s.lockRoot()
+	if e != nil {
+		return Plan{}, e
+	}
+	defer unlock()
+	v, e := s.read(repo, id)
+	if e != nil {
+		return Plan{}, e
+	}
+	if v.Cutover == nil {
+		return Plan{}, ErrNotFound
+	}
+	for _, x := range v.Cutover.Approvals {
+		if x.RequestID == in.RequestID {
+			if x.ActorID == actor && x.DestinationID == in.DestinationID && x.Decision == in.Decision {
+				return v, nil
+			}
+			return Plan{}, ErrConflict
+		}
+	}
+	if expected != v.Version || v.Cutover.State != "awaiting_approval" || in.Decision != "approve" || !bounded(in.RequestID, 1, 200) {
+		return Plan{}, ErrInvalid
+	}
+	var owners []string
+	for _, d := range v.Destinations {
+		if d.ID == in.DestinationID {
+			owners = d.OwnerIDs
+		}
+	}
+	if !contains(owners, actor) {
+		return Plan{}, ErrInvalid
+	}
+	in.ActorID = actor
+	in.CreatedAt = s.now()
+	v.Cutover.Approvals = append(v.Cutover.Approvals, in)
+	v.Version++
+	return v, s.write(v)
+}
+
+func (s *Store) ActivateCutover(repo, id, actor string, expected int, repositories map[string]string) (Plan, error) {
+	return s.ActivateCutoverWith(repo, id, actor, expected, repositories, nil)
+}
+func (s *Store) ActivateCutoverWith(repo, id, actor string, expected int, repositories map[string]string, publish func() error) (Plan, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, e := s.lockRoot()
+	if e != nil {
+		return Plan{}, e
+	}
+	defer unlock()
+	v, e := s.read(repo, id)
+	if e != nil {
+		return Plan{}, e
+	}
+	if v.Cutover == nil {
+		return Plan{}, ErrNotFound
+	}
+	if expected != v.Version || v.Cutover.State != "awaiting_approval" || v.CreatedBy != actor {
+		return Plan{}, ErrInvalid
+	}
+	for _, d := range v.Destinations {
+		ok := false
+		for _, a := range v.Cutover.Approvals {
+			if a.DestinationID == d.ID && contains(d.OwnerIDs, a.ActorID) {
+				ok = true
+			}
+		}
+		if !ok || repositories[d.ID] == "" {
+			return Plan{}, ErrInvalid
+		}
+	}
+	if publish != nil {
+		if e = publish(); e != nil {
+			return Plan{}, e
+		}
+	}
+	now := s.now()
+	v.Cutover.State = "active"
+	v.Cutover.SourceState = "writes_paused"
+	v.Cutover.ActivatedAt = &now
+	for i := range v.Cutover.Destinations {
+		v.Cutover.Destinations[i].RepositoryID = repositories[v.Cutover.Destinations[i].DestinationID]
+		v.Cutover.Destinations[i].State = "authoritative"
+		v.Cutover.Destinations[i].Health = "observing"
+	}
+	v.Version++
+	return v, s.write(v)
+}
+
+func (s *Store) ObserveCutover(repo, id, actor string, expected int, in CutoverObservation) (Plan, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, e := s.lockRoot()
+	if e != nil {
+		return Plan{}, e
+	}
+	defer unlock()
+	v, e := s.read(repo, id)
+	if e != nil {
+		return Plan{}, e
+	}
+	if v.Cutover == nil {
+		return Plan{}, ErrNotFound
+	}
+	for _, x := range v.Cutover.Observations {
+		if x.RequestID == in.RequestID {
+			if x.ActorID == actor && x.Kind == in.Kind && x.ResourceID == in.ResourceID && x.State == in.State && x.Evidence == in.Evidence {
+				return v, nil
+			}
+			return Plan{}, ErrConflict
+		}
+	}
+	if expected != v.Version || v.Cutover.State != "active" || !map[string]bool{"build": true, "release": true, "permission": true, "link": true, "consumer": true, "contribution": true, "git_traffic": true, "late_write": true}[in.Kind] || !map[string]bool{"passed": true, "failed": true, "residual": true}[in.State] || !bounded(in.ResourceID, 1, 500) || !bounded(in.Evidence, 1, 1000) {
+		return Plan{}, ErrInvalid
+	}
+	in.ActorID = actor
+	in.CreatedAt = s.now()
+	v.Cutover.Observations = append(v.Cutover.Observations, in)
+	v.Version++
+	return v, s.write(v)
+}
+
+func (s *Store) FinishCutover(repo, id, actor string, expected int, rollback bool) (Plan, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, e := s.lockRoot()
+	if e != nil {
+		return Plan{}, e
+	}
+	defer unlock()
+	v, e := s.read(repo, id)
+	if e != nil {
+		return Plan{}, e
+	}
+	if v.Cutover == nil {
+		return Plan{}, ErrNotFound
+	}
+	if expected != v.Version || v.Cutover.State != "active" || v.CreatedBy != actor {
+		return Plan{}, ErrInvalid
+	}
+	if rollback {
+		v.Cutover.State = "rolled_back"
+		v.Cutover.SourceState = "active"
+		for i := range v.Cutover.Destinations {
+			v.Cutover.Destinations[i].State = "inactive"
+		}
+		v.Version++
+		return v, s.write(v)
+	}
+	required := map[string]bool{"build": false, "release": false, "permission": false, "link": false, "consumer": false, "contribution": false, "git_traffic": false}
+	latest := map[string]CutoverObservation{}
+	for _, o := range v.Cutover.Observations {
+		latest[o.Kind+"\x00"+o.ResourceID] = o
+	}
+	for _, o := range latest {
+		if o.State != "passed" {
+			return Plan{}, ErrInvalid
+		}
+		required[o.Kind] = true
+	}
+	for _, ok := range required {
+		if !ok {
+			return Plan{}, ErrInvalid
+		}
+	}
+	for _, d := range v.DependentMigrations {
+		if d.State != "adopted" {
+			return Plan{}, ErrInvalid
+		}
+	}
+	now := s.now()
+	v.Cutover.State = "completed"
+	v.Cutover.SourceState = v.Cutover.CleanupPolicy
+	v.Cutover.CompletedAt = &now
+	for i := range v.Cutover.Destinations {
+		v.Cutover.Destinations[i].Health = "healthy"
+	}
+	v.Version++
+	return v, s.write(v)
 }
 
 func (s *Store) AddDependentMigration(repo, id, actor string, expected int, in DependentMigration) (Plan, error) {
