@@ -13,6 +13,9 @@ can read a retained record, and every named principal must remain a source-repos
 The creator must maintain every affected repository and exact revisions must resolve. These records establish
 coordination only and grant no inspection, Git, object deletion, ref rewrite, package, artifact, release,
 environment, disclosure, or delivery authority.
+The connected `history-remediation-journey.spec.ts` browser/API/stock-Git journey covers digest-only discovery,
+false matches, collaboration and delivery spread, failed-first rehearsal, governed publication, stale-clone
+rejection, an independently owned fork rewrite, protected-copy blockers, containment, and scoped restoration.
 Creates reconcile a retained request before mutable source/scope/participant validation. New publication runs
 under the catalog's serialized source-participant and affected-repository maintainer boundary; repository-bound
 credentials cannot cross repositories. Closed scope kinds resolve Git objects/refs, releases, package artifacts,

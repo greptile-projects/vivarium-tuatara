@@ -170,3 +170,23 @@ func TestHistoryRewritePublicationRequiresNamedOwner(t *testing.T) {
 		t.Fatal("named owner lacks publication authority")
 	}
 }
+
+func TestHistoryPublicationReadyCountsRetainedApprovals(t *testing.T) {
+	v := historyremediations.Remediation{
+		Version:              4,
+		RequiredApprovals:    []historyremediations.Approval{{Role: "security", ApproverIDs: []string{"approver"}, Required: 1}},
+		PublicationApprovals: []historyremediations.PublicationApproval{{Role: "security", ApproverID: "approver"}},
+	}
+	in := historyremediations.Publication{
+		RequestID:     "publish-once",
+		CandidateID:   "candidate",
+		PausedSystems: []string{"pushes"},
+		MigrationTargets: []historyremediations.MigrationTarget{{
+			ID: "local", Kind: "local_branch", ResourceID: "main", OwnerID: "owner",
+			Instructions: "fetch and reset to the replacement", ReplacementRef: "refs/heads/main",
+		}},
+	}
+	if !historyPublicationReady(v, v.Version, in) {
+		t.Fatal("a retained eligible approval did not satisfy publication readiness")
+	}
+}
