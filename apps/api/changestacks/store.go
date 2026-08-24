@@ -183,25 +183,50 @@ type TimelineEvent struct {
 	ChangedUpstream   []string          `json:"changed_upstream,omitempty"`
 }
 
+// IntegrationCandidate freezes the history and ordinary delivery evidence for
+// one ready stack prefix. CandidateRevision is an unreferenced commit; it is
+// never inferred again from moving member branches.
+type IntegrationCandidate struct {
+	ID                string            `json:"id"`
+	RequestID         string            `json:"request_id"`
+	RequestDigest     string            `json:"request_digest"`
+	TargetRevision    string            `json:"target_revision"`
+	MemberRevisions   map[string]string `json:"member_revisions"`
+	MemberID          string            `json:"member_id"`
+	Position          int               `json:"position"`
+	ParentRevision    string            `json:"parent_revision"`
+	CandidateRevision string            `json:"candidate_revision"`
+	RequiredChecks    []string          `json:"required_checks"`
+	CheckRunIDs       []string          `json:"check_run_ids,omitempty"`
+	Status            string            `json:"status"`
+	Diagnostics       []Diagnostic      `json:"diagnostics,omitempty"`
+	CreatedBy         string            `json:"created_by"`
+	CreatedAt         time.Time         `json:"created_at"`
+	SupersededAt      *time.Time        `json:"superseded_at,omitempty"`
+	SupersededReason  string            `json:"superseded_reason,omitempty"`
+	Authority         string            `json:"authority"`
+}
+
 type Stack struct {
-	ID              string                       `json:"id"`
-	RequestID       string                       `json:"request_id"`
-	RequestDigest   string                       `json:"request_digest,omitempty"`
-	RepositoryID    string                       `json:"repository_id"`
-	Title           string                       `json:"title"`
-	Outcome         string                       `json:"outcome"`
-	TargetBranch    string                       `json:"target_branch"`
-	TargetRevision  string                       `json:"target_revision,omitempty"`
-	Members         []Member                     `json:"members"`
-	Diagnostics     []Diagnostic                 `json:"diagnostics"`
-	CreatedBy       string                       `json:"created_by"`
-	CreatedAt       time.Time                    `json:"created_at"`
-	Authority       string                       `json:"authority"`
-	Restacks        []Restack                    `json:"restacks,omitempty"`
-	RevisionLineage map[string][]RevisionLineage `json:"revision_lineage,omitempty"`
-	Assignments     []Assignment                 `json:"assignments,omitempty"`
-	WorkLaunches    []WorkLaunch                 `json:"work_launches,omitempty"`
-	Timeline        []TimelineEvent              `json:"timeline,omitempty"`
+	ID                    string                       `json:"id"`
+	RequestID             string                       `json:"request_id"`
+	RequestDigest         string                       `json:"request_digest,omitempty"`
+	RepositoryID          string                       `json:"repository_id"`
+	Title                 string                       `json:"title"`
+	Outcome               string                       `json:"outcome"`
+	TargetBranch          string                       `json:"target_branch"`
+	TargetRevision        string                       `json:"target_revision,omitempty"`
+	Members               []Member                     `json:"members"`
+	Diagnostics           []Diagnostic                 `json:"diagnostics"`
+	CreatedBy             string                       `json:"created_by"`
+	CreatedAt             time.Time                    `json:"created_at"`
+	Authority             string                       `json:"authority"`
+	Restacks              []Restack                    `json:"restacks,omitempty"`
+	RevisionLineage       map[string][]RevisionLineage `json:"revision_lineage,omitempty"`
+	Assignments           []Assignment                 `json:"assignments,omitempty"`
+	WorkLaunches          []WorkLaunch                 `json:"work_launches,omitempty"`
+	Timeline              []TimelineEvent              `json:"timeline,omitempty"`
+	IntegrationCandidates []IntegrationCandidate       `json:"integration_candidates,omitempty"`
 }
 
 type Store struct {
@@ -306,6 +331,40 @@ func (s *Store) list(repo string) ([]Stack, error) {
 	return out, nil
 }
 func (s *Store) Update(v Stack) error { s.mu.Lock(); defer s.mu.Unlock(); return s.write(v) }
+
+// RetainIntegration appends an immutable prefix candidate. Exact retries are
+// stable; a target move supersedes only still-unlanded evidence.
+func (s *Store) RetainIntegration(repo, stackID string, candidate IntegrationCandidate) (Stack, IntegrationCandidate, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v, err := s.read(repo, stackID)
+	if err != nil {
+		return Stack{}, IntegrationCandidate{}, err
+	}
+	if candidate.RequestID == "" || candidate.RequestDigest == "" || candidate.CreatedBy == "" || candidate.Position < 1 || candidate.Position > len(v.Members) || candidate.CandidateRevision == "" || candidate.TargetRevision == "" {
+		return Stack{}, IntegrationCandidate{}, ErrInvalid
+	}
+	for _, prior := range v.IntegrationCandidates {
+		if prior.RequestID != candidate.RequestID {
+			continue
+		}
+		if prior.RequestDigest != candidate.RequestDigest {
+			return Stack{}, IntegrationCandidate{}, ErrInvalid
+		}
+		return v, prior, nil
+	}
+	now := time.Now().UTC()
+	for i := range v.IntegrationCandidates {
+		prior := &v.IntegrationCandidates[i]
+		if prior.SupersededAt == nil && prior.Status != "merged" && prior.TargetRevision != candidate.TargetRevision {
+			prior.SupersededAt, prior.SupersededReason = &now, "target_moved"
+		}
+	}
+	candidate.ID, candidate.CreatedAt = randomID(), now
+	candidate.Authority = "candidate evidence grants no Git, queue, review, or merge authority"
+	v.IntegrationCandidates = append(v.IntegrationCandidates, candidate)
+	return v, candidate, s.write(v)
+}
 
 // ProposeRestack appends one immutable, caller-stable preview. Git and
 // authorization validation is performed by the public route before this

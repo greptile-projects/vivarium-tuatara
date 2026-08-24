@@ -232,6 +232,43 @@ func registerChangeStackRoutes(mux *http.ServeMux, git *storage.Store, catalog *
 			}
 		}
 		v.Timeline = timeline
+		for i := range v.IntegrationCandidates {
+			candidate := &v.IntegrationCandidates[i]
+			if candidate.SupersededAt != nil {
+				candidate.Status = "superseded"
+				continue
+			}
+			pullID := ""
+			for _, member := range v.Members {
+				if member.ID == candidate.MemberID {
+					pullID = member.PullRequestID
+					break
+				}
+			}
+			runs, runErr := checks.List(v.RepositoryID, pullID)
+			if runErr != nil {
+				candidate.Status = "evidence_unavailable"
+				continue
+			}
+			state, matched := "passed", 0
+			candidate.CheckRunIDs = []string{}
+			for _, run := range runs {
+				if run.CommitID != candidate.CandidateRevision {
+					continue
+				}
+				matched++
+				candidate.CheckRunIDs = append(candidate.CheckRunIDs, run.ID)
+				if run.State == "failed" || run.State == "cancelled" {
+					state = "failed"
+				} else if run.State != "passed" && state != "failed" {
+					state = "verifying"
+				}
+			}
+			if matched < len(candidate.RequiredChecks) && state != "failed" {
+				state = "verifying"
+			}
+			candidate.Status = state
+		}
 		return v
 	}
 	mux.HandleFunc("GET /repositories/{id}/change-stacks", func(w http.ResponseWriter, r *http.Request) {
@@ -479,6 +516,117 @@ func registerChangeStackRoutes(mux *http.ServeMux, git *storage.Store, catalog *
 		}
 		writeJSON(w, 201, project(out, actor, true))
 	})
+	mux.HandleFunc("POST /repositories/{id}/change-stacks/{stack_id}/integration-candidates", func(w http.ResponseWriter, r *http.Request) {
+		actor, owner, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		if !owner || actor.AgentID != "" {
+			writeAPIError(w, 403, "stack_integration_forbidden", "only a current human repository maintainer may prepare stack integration")
+			return
+		}
+		var in struct {
+			RequestID       string `json:"request_id"`
+			ThroughPosition int    `json:"through_position"`
+		}
+		if decodeJSON(r, &in) != nil || strings.TrimSpace(in.RequestID) == "" {
+			writeAPIError(w, 400, "invalid_request", "request_id and through_position are required")
+			return
+		}
+		retained, err := stacks.Get(r.PathValue("id"), r.PathValue("stack_id"))
+		if err != nil {
+			writeAPIError(w, 404, "change_stack_not_found", "change stack not found")
+			return
+		}
+		if in.ThroughPosition < 1 || in.ThroughPosition > len(retained.Members) {
+			writeAPIError(w, 422, "stack_prefix_invalid", "through_position must identify a complete stack prefix")
+			return
+		}
+		digestBody, _ := json.Marshal(in)
+		digestBytes := sha256.Sum256(digestBody)
+		digest := hex.EncodeToString(digestBytes[:])
+		for _, prior := range retained.IntegrationCandidates {
+			if prior.RequestID == in.RequestID {
+				if prior.RequestDigest != digest {
+					writeAPIError(w, 409, "stack_integration_request_conflict", "request_id was already used for different input")
+					return
+				}
+				writeJSON(w, 200, prior)
+				return
+			}
+		}
+		repository, err := git.Open(retained.RepositoryID)
+		if err != nil {
+			writeAPIError(w, 422, "stack_target_missing", "target repository is unavailable")
+			return
+		}
+		target, err := gitOutput(repository.Path(), "rev-parse", "--verify", "refs/heads/"+strings.TrimPrefix(retained.TargetBranch, "refs/heads/")+"^{commit}")
+		if err != nil {
+			writeAPIError(w, 422, "stack_target_missing", "target branch is unavailable")
+			return
+		}
+		parent := target
+		revisions := map[string]string{}
+		var candidate changestacks.IntegrationCandidate
+		for i := 0; i < in.ThroughPosition; i++ {
+			member := retained.Members[i]
+			if member.SourceRepositoryID != "" && member.SourceRepositoryID != retained.RepositoryID {
+				writeAPIError(w, 409, "stack_member_independently_owned", "cross-repository members must integrate through their ordinary owner")
+				return
+			}
+			pull, pullErr := pulls.Get(retained.RepositoryID, member.PullRequestID)
+			if pullErr != nil || pull.Status != pullrequests.Open || pull.SourceCommitID != member.Revision {
+				writeAPIError(w, 409, "stack_prefix_stale", "a prefix member is missing, closed, or moved")
+				return
+			}
+			readiness, readyErr := pulls.Readiness(retained.RepositoryID, member.PullRequestID, true)
+			if readyErr != nil || !readiness.CanMerge {
+				writeAPIError(w, 409, "stack_prefix_not_ready", "ordinary review, checks, preview, or policy does not permit this prefix")
+				return
+			}
+			tree, mergeErr := stackMergeTree(repository, parent, member.Revision)
+			if mergeErr != nil {
+				writeAPIError(w, 409, "stack_prefix_conflict", "this member conflicts with the candidate history")
+				return
+			}
+			stamp := "0 +0000"
+			content := fmt.Sprintf("tree %s\nparent %s\nparent %s\nauthor Vivarium Stack Integration <stack@vivarium> %s\ncommitter Vivarium Stack Integration <stack@vivarium> %s\n\nVerify stack %s through member %s\n", tree, parent, member.Revision, stamp, stamp, retained.ID, member.ID)
+			written, writeErr := repository.WriteObject(storage.CommitObject, []byte(content))
+			if writeErr != nil {
+				writeAPIError(w, 500, "stack_integration_unavailable", "candidate could not be assembled")
+				return
+			}
+			parent = string(written)
+			revisions[member.ID] = member.Revision
+		}
+		required, err := catalog.RequiredChecks(retained.RepositoryID, retained.TargetBranch)
+		if err != nil {
+			writeAPIError(w, 500, "stack_integration_unavailable", "required policy could not be resolved")
+			return
+		}
+		definitions, err := stackRequiredDefinitions(repository, parent, required)
+		if err != nil {
+			writeAPIError(w, 409, "stack_candidate_policy_invalid", "candidate does not contain every required check definition")
+			return
+		}
+		runs, err := checks.CreateRequested(retained.RepositoryID, retained.Members[in.ThroughPosition-1].PullRequestID, parent, definitions, actor.UserID)
+		if err != nil {
+			writeAPIError(w, 500, "stack_integration_unavailable", "candidate checks could not be reserved")
+			return
+		}
+		ids := make([]string, len(runs))
+		for i := range runs {
+			ids[i] = runs[i].ID
+		}
+		candidate = changestacks.IntegrationCandidate{RequestID: in.RequestID, RequestDigest: digest, TargetRevision: target, MemberRevisions: revisions, MemberID: retained.Members[in.ThroughPosition-1].ID, Position: in.ThroughPosition, ParentRevision: target, CandidateRevision: parent, RequiredChecks: required, CheckRunIDs: ids, Status: "verifying", CreatedBy: actor.UserID}
+		_, candidate, err = stacks.RetainIntegration(retained.RepositoryID, retained.ID, candidate)
+		if err != nil {
+			writeAPIError(w, 500, "stack_integration_unavailable", "candidate could not be retained")
+			return
+		}
+		startBoundCheckRuns(git, checks, retained.RepositoryID, retained.Members[in.ThroughPosition-1].PullRequestID, parent, definitions)
+		writeJSON(w, 201, candidate)
+	})
 	registerChangeStackRestackRoutes(mux, git, catalog, credentials, stacks, pulls, checks)
 	registerChangeStackCollaborationRoutes(mux, catalog, organizationsStore, credentials, stacks)
 }
@@ -621,6 +769,90 @@ func stackNote(note string) string {
 		return ""
 	}
 	return ": " + note
+}
+
+func stackRequiredDefinitions(repository *storage.Repository, commitID string, required []string) ([]checkruns.Definition, error) {
+	if len(required) == 0 {
+		return []checkruns.Definition{}, nil
+	}
+	data, err := exec.Command("git", "--git-dir="+repository.Path(), "show", commitID+":"+checkruns.ConfigPath).Output()
+	if err != nil {
+		return nil, err
+	}
+	config, err := checkruns.ParseConfig(data)
+	if err != nil {
+		return nil, err
+	}
+	byName := map[string]checkruns.Definition{}
+	for _, definition := range config.Checks {
+		byName[definition.Name] = definition
+	}
+	out := make([]checkruns.Definition, 0, len(required))
+	for _, name := range required {
+		definition, ok := byName[name]
+		if !ok {
+			return nil, errors.New("required check missing")
+		}
+		out = append(out, definition)
+	}
+	return out, nil
+}
+
+func stackMergeTree(repository *storage.Repository, target, source string) (storage.ObjectID, error) {
+	temporary, err := os.MkdirTemp("", "vivarium-stack-integration-")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(temporary)
+	objects := filepath.Join(temporary, "objects")
+	if err = os.Mkdir(objects, 0700); err != nil {
+		return "", err
+	}
+	env := append(os.Environ(), "GIT_OBJECT_DIRECTORY="+objects, "GIT_ALTERNATE_OBJECT_DIRECTORIES="+filepath.Join(repository.Path(), "objects"))
+	command := exec.Command("git", "-C", repository.Path(), "merge-tree", "--write-tree", target, source)
+	command.Env = env
+	output, err := command.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("calculate stack merge tree: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	id := storage.ObjectID(strings.TrimSpace(string(output)))
+	seen := map[storage.ObjectID]bool{}
+	var importTree func(storage.ObjectID) error
+	importTree = func(tree storage.ObjectID) error {
+		if seen[tree] {
+			return nil
+		}
+		seen[tree] = true
+		cat := exec.Command("git", "-C", repository.Path(), "cat-file", "tree", string(tree))
+		cat.Env = env
+		content, e := cat.Output()
+		if e != nil {
+			return e
+		}
+		written, e := repository.WriteObject(storage.TreeObject, content)
+		if e != nil || written != tree {
+			return fmt.Errorf("import stack merge tree %s: %v", tree, e)
+		}
+		list := exec.Command("git", "-C", repository.Path(), "ls-tree", "-z", string(tree))
+		list.Env = env
+		listed, e := list.Output()
+		if e != nil {
+			return e
+		}
+		for _, record := range strings.Split(string(listed), "\x00") {
+			fields := strings.Fields(record)
+			if len(fields) >= 3 && fields[1] == "tree" {
+				if e = importTree(storage.ObjectID(fields[2])); e != nil {
+					return e
+				}
+			}
+		}
+		return nil
+	}
+	if err = importTree(id); err != nil {
+		return "", err
+	}
+	return id, nil
 }
 
 func stackRangeView(headRepositoryPath, baseRepositoryPath, base, head string, authorizedRepositoryPaths ...string) (string, func(), error) {

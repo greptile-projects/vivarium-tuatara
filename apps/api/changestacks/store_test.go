@@ -193,3 +193,35 @@ func TestSequentialDistinctRestackRequestIDsDoNotReconcile(t *testing.T) {
 		t.Fatalf("distinct requests reconciled: %#v %#v", one, two)
 	}
 }
+
+func TestIntegrationCandidatesReconcileAndSupersedeOnlyUnmergedTargetEvidence(t *testing.T) {
+	s, _ := New(t.TempDir())
+	member := Member{ID: "one", Title: "One", SourceBranch: "one", Revision: strings.Repeat("1", 40), AcceptanceCriteria: []string{"passes"}}
+	created, err := s.Create(Stack{RequestID: "stack-integration", RequestDigest: "stack-digest", RepositoryID: "repo", Title: "Outcome", Outcome: "shared", TargetBranch: "main", Members: []Member{member}}, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstInput := IntegrationCandidate{RequestID: "candidate-one", RequestDigest: "same", TargetRevision: strings.Repeat("0", 40), MemberRevisions: map[string]string{"one": member.Revision}, MemberID: "one", Position: 1, ParentRevision: strings.Repeat("0", 40), CandidateRevision: strings.Repeat("2", 40), Status: "verifying", CreatedBy: "owner"}
+	_, first, err := s.RetainIntegration("repo", created.ID, firstInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, retry, err := s.RetainIntegration("repo", created.ID, firstInput)
+	if err != nil || retry.ID != first.ID {
+		t.Fatalf("retry = %#v, %v", retry, err)
+	}
+	changed := firstInput
+	changed.RequestDigest = "changed"
+	if _, _, err = s.RetainIntegration("repo", created.ID, changed); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("changed retry = %v", err)
+	}
+	secondInput := firstInput
+	secondInput.RequestID, secondInput.TargetRevision, secondInput.CandidateRevision = "candidate-two", strings.Repeat("3", 40), strings.Repeat("4", 40)
+	updated, _, err := s.RetainIntegration("repo", created.ID, secondInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.IntegrationCandidates[0].SupersededAt == nil || updated.IntegrationCandidates[0].SupersededReason != "target_moved" {
+		t.Fatalf("old evidence was not retained as superseded: %#v", updated.IntegrationCandidates)
+	}
+}
