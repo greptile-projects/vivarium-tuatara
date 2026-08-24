@@ -116,3 +116,40 @@ func TestHistoryRewriteCandidateInputRejectsDerivedAuditFields(t *testing.T) {
 		t.Fatal("client-supplied derived audit projection was accepted")
 	}
 }
+
+func TestPublishHistoryRefsIsAtomicAndRetryStable(t *testing.T) {
+	repo := t.TempDir()
+	historyGit(t, repo, "init", "-b", "main")
+	if err := os.WriteFile(filepath.Join(repo, "value"), []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	historyGit(t, repo, "add", "value")
+	historyGit(t, repo, "commit", "-m", "old")
+	old := historyGit(t, repo, "rev-parse", "HEAD")
+	historyGit(t, repo, "branch", "release")
+	if err := os.WriteFile(filepath.Join(repo, "value"), []byte("new"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	historyGit(t, repo, "commit", "-am", "new")
+	newTip := historyGit(t, repo, "rev-parse", "HEAD")
+	historyGit(t, repo, "reset", "--hard", old)
+	refs := []historyremediations.CandidateRef{{Name: "refs/heads/main", OldTip: old, NewTip: newTip}, {Name: "refs/heads/release", OldTip: strings.Repeat("a", 40), NewTip: newTip}}
+	if err := publishHistoryRefs(filepath.Join(repo, ".git"), refs); err == nil {
+		t.Fatal("transaction with one stale ref succeeded")
+	}
+	if got := historyGit(t, repo, "rev-parse", "refs/heads/main"); got != old {
+		t.Fatalf("partial ref publication: %s", got)
+	}
+	refs[1].OldTip = old
+	if err := publishHistoryRefs(filepath.Join(repo, ".git"), refs); err != nil {
+		t.Fatal(err)
+	}
+	if err := publishHistoryRefs(filepath.Join(repo, ".git"), refs); err != nil {
+		t.Fatalf("exact retry: %v", err)
+	}
+	for _, name := range []string{"refs/heads/main", "refs/heads/release"} {
+		if got := historyGit(t, repo, "rev-parse", name); got != newTip {
+			t.Fatalf("%s = %s", name, got)
+		}
+	}
+}

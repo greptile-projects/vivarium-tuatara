@@ -68,6 +68,17 @@ integrity and local transport scenarios are server-defined. Missing revision-app
 the rehearsal failed, and all evidence remains inside the remediation audience. Candidate assembly and rehearsal
 grant no ref update, object deletion, release, package, collaborator-machine, or publication authority.
 
+Publication is a separate `POST .../rewrite-candidates/{candidate_id}/publish` milestone available only to a
+named human creator or response owner after a complete passing rehearsal and every retained approval-role
+threshold is represented by an eligible approver. The server derives approval time and quarantined scope,
+then uses one Git `update-ref` transaction to compare-and-swap every selected old tip to its attested candidate
+tip. One moved ref aborts all updates; an exact retry after a committed transaction reconciles the already-new
+tips. The retained migration record freezes paused pushes, queues, sessions, workflows, and releases plus
+audience-appropriate instructions for local branches, forks, federated copies, pull requests, and integrations.
+Ordinary receive-pack discovery and pushes fail with actionable fetch/backup/rebase-or-reset guidance during
+migration. Independently controlled targets project as `awaiting_owner`: the coordinator can explain and track
+the necessary rewrite but gains no authority to perform it.
+
 ## Propagation campaigns
 
 An authorized repository collaborator opens a durable shared delivery boundary through `POST

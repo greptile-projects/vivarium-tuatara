@@ -180,4 +180,20 @@ func TestRewriteCandidateAndRehearsalAreCASVersionedAndRetryStable(t *testing.T)
 	if err != nil || finished.Version != 3 || finished.RewriteCandidates[0].Rehearsals[0].State != "passed" {
 		t.Fatalf("rehearsal = %#v, %v", finished, err)
 	}
+	approved, err := s.ApprovePublication("repo", created.ID, 3, "legal", "counsel")
+	if err != nil || approved.Version != 4 {
+		t.Fatalf("approval = %#v, %v", approved.PublicationApprovals, err)
+	}
+	publication := Publication{RequestID: "publish-1", CandidateID: finished.RewriteCandidates[0].ID, PausedSystems: []string{"pushes", "queues", "sessions", "workflows", "releases"}, MigrationTargets: []MigrationTarget{{ID: "fork-1", Kind: "fork", ResourceID: "fork-repo", RepositoryID: "consumer", OwnerID: "consumer-owner", IndependentlyControlled: true, Instructions: "fetch replacement refs and rewrite the fork under consumer authority"}}}
+	published, err := s.Publish("repo", created.ID, 4, publication, "maintainer")
+	if err != nil || published.Version != 5 || published.Publication.State != "migration_in_progress" || published.Publication.MigrationTargets[0].State != "awaiting_owner" {
+		t.Fatalf("publication = %#v, %v", published.Publication, err)
+	}
+	if published.Publication.Approvals[0].ApprovedAt.IsZero() || len(published.Publication.QuarantinedObjects) != 1 {
+		t.Fatalf("server-derived publication evidence = %#v", published.Publication)
+	}
+	retry, err = s.Publish("repo", created.ID, 4, publication, "maintainer")
+	if err != nil || retry.Version != 5 {
+		t.Fatalf("publication retry = %#v, %v", retry.Publication, err)
+	}
 }

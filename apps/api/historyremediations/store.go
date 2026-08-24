@@ -157,28 +157,104 @@ type Rehearsal struct {
 	CreatedAt      time.Time           `json:"created_at"`
 	ComputeSeconds int64               `json:"compute_seconds"`
 }
-type Remediation struct {
-	ID                 string             `json:"id"`
-	RepositoryID       string             `json:"repository_id"`
-	RequestID          string             `json:"request_id"`
-	RequestDigest      string             `json:"request_digest,omitempty"`
-	Title              string             `json:"title"`
-	Source             Source             `json:"source"`
-	ContentDescription string             `json:"content_description"`
-	Reason             string             `json:"reason"`
-	Scopes             []Scope            `json:"scopes"`
-	Evidence           []Evidence         `json:"discovery_evidence"`
-	Constraints        []Constraint       `json:"constraints"`
-	AudienceIDs        []string           `json:"audience_ids"`
-	OwnerIDs           []string           `json:"owner_ids"`
-	RequiredApprovals  []Approval         `json:"required_approvals"`
-	CreatedBy          string             `json:"created_by"`
-	CreatedAt          time.Time          `json:"created_at"`
-	Authority          string             `json:"authority"`
-	Version            int                `json:"version"`
-	ExposureMap        []ExposureFinding  `json:"exposure_map"`
-	RewriteCandidates  []RewriteCandidate `json:"rewrite_candidates"`
+type PublicationApproval struct {
+	Role       string    `json:"role"`
+	ApproverID string    `json:"approver_id"`
+	ApprovedAt time.Time `json:"approved_at"`
 }
+type MigrationTarget struct {
+	ID                      string `json:"id"`
+	Kind                    string `json:"kind"`
+	ResourceID              string `json:"resource_id"`
+	OwnerID                 string `json:"owner_id"`
+	RepositoryID            string `json:"repository_id,omitempty"`
+	IndependentlyControlled bool   `json:"independently_controlled,omitempty"`
+	State                   string `json:"state"`
+	Instructions            string `json:"instructions"`
+	AcknowledgedBy          string `json:"acknowledged_by,omitempty"`
+}
+type Publication struct {
+	ID                 string                `json:"id"`
+	RequestID          string                `json:"request_id"`
+	CandidateID        string                `json:"candidate_id"`
+	Approvals          []PublicationApproval `json:"approvals"`
+	QuarantinedObjects []string              `json:"quarantined_objects"`
+	RevokedCredentials []string              `json:"revoked_credentials,omitempty"`
+	PausedSystems      []string              `json:"paused_systems"`
+	MigrationTargets   []MigrationTarget     `json:"migration_targets"`
+	State              string                `json:"state"`
+	PublishedBy        string                `json:"published_by"`
+	PublishedAt        time.Time             `json:"published_at"`
+}
+type Remediation struct {
+	ID                   string                `json:"id"`
+	RepositoryID         string                `json:"repository_id"`
+	RequestID            string                `json:"request_id"`
+	RequestDigest        string                `json:"request_digest,omitempty"`
+	Title                string                `json:"title"`
+	Source               Source                `json:"source"`
+	ContentDescription   string                `json:"content_description"`
+	Reason               string                `json:"reason"`
+	Scopes               []Scope               `json:"scopes"`
+	Evidence             []Evidence            `json:"discovery_evidence"`
+	Constraints          []Constraint          `json:"constraints"`
+	AudienceIDs          []string              `json:"audience_ids"`
+	OwnerIDs             []string              `json:"owner_ids"`
+	RequiredApprovals    []Approval            `json:"required_approvals"`
+	CreatedBy            string                `json:"created_by"`
+	CreatedAt            time.Time             `json:"created_at"`
+	Authority            string                `json:"authority"`
+	Version              int                   `json:"version"`
+	ExposureMap          []ExposureFinding     `json:"exposure_map"`
+	RewriteCandidates    []RewriteCandidate    `json:"rewrite_candidates"`
+	PublicationApprovals []PublicationApproval `json:"publication_approvals"`
+	Publication          *Publication          `json:"publication,omitempty"`
+}
+
+func (s *Store) ApprovePublication(repo, id string, expected int, role, actor string) (Remediation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	b, err := os.ReadFile(s.path(repo, id))
+	if os.IsNotExist(err) {
+		return Remediation{}, ErrNotFound
+	}
+	if err != nil {
+		return Remediation{}, err
+	}
+	var v Remediation
+	if err = json.Unmarshal(b, &v); err != nil {
+		return Remediation{}, err
+	}
+	eligible := false
+	for _, required := range v.RequiredApprovals {
+		if required.Role == role {
+			for _, id := range required.ApproverIDs {
+				if id == actor {
+					eligible = true
+				}
+			}
+		}
+	}
+	if !eligible {
+		return Remediation{}, ErrInvalid
+	}
+	for _, approval := range v.PublicationApprovals {
+		if approval.Role == role && approval.ApproverID == actor {
+			return v, nil
+		}
+	}
+	if expected != v.Version || v.Publication != nil {
+		return Remediation{}, ErrVersionConflict
+	}
+	v.PublicationApprovals = append(v.PublicationApprovals, PublicationApproval{Role: role, ApproverID: actor, ApprovedAt: s.now()})
+	v.Version++
+	out, _ := json.MarshalIndent(v, "", "  ")
+	if err = atomicWrite(s.path(repo, id), out, s.beforeReplace); err != nil {
+		return Remediation{}, err
+	}
+	return v, nil
+}
+
 type Store struct {
 	root          string
 	mu            sync.Mutex
@@ -439,6 +515,107 @@ func (s *Store) AddRehearsal(repo, id, candidateID string, expected int, in Rehe
 		return v, nil
 	}
 	return Remediation{}, ErrNotFound
+}
+
+// Publish records the already-committed authoritative ref transaction. The
+// route performs the Git compare-and-swap while holding its repository lock;
+// exact retries reconcile here without attempting a second rewrite.
+func (s *Store) Publish(repo, id string, expected int, in Publication, actor string) (Remediation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	b, err := os.ReadFile(s.path(repo, id))
+	if os.IsNotExist(err) {
+		return Remediation{}, ErrNotFound
+	}
+	if err != nil {
+		return Remediation{}, err
+	}
+	var v Remediation
+	if err = json.Unmarshal(b, &v); err != nil {
+		return Remediation{}, err
+	}
+	if v.Publication != nil {
+		a, z := *v.Publication, in
+		a.ID, a.State, a.PublishedBy, a.PublishedAt = "", "", "", time.Time{}
+		z.ID, z.State, z.PublishedBy, z.PublishedAt = "", "", "", time.Time{}
+		a.QuarantinedObjects, z.QuarantinedObjects = nil, nil
+		a.Approvals, z.Approvals = nil, nil
+		ab, _ := json.Marshal(a)
+		zb, _ := json.Marshal(z)
+		if v.Publication.RequestID == in.RequestID && string(ab) == string(zb) {
+			return v, nil
+		}
+		return Remediation{}, ErrConflict
+	}
+	if expected != v.Version {
+		return Remediation{}, ErrVersionConflict
+	}
+	var candidate *RewriteCandidate
+	for i := range v.RewriteCandidates {
+		if v.RewriteCandidates[i].ID == in.CandidateID {
+			candidate = &v.RewriteCandidates[i]
+		}
+	}
+	if candidate == nil || in.RequestID == "" || len(in.PausedSystems) == 0 || len(in.MigrationTargets) == 0 {
+		return Remediation{}, ErrInvalid
+	}
+	passed := false
+	for _, rehearsal := range candidate.Rehearsals {
+		if rehearsal.State == "passed" {
+			passed = true
+		}
+	}
+	if !passed {
+		return Remediation{}, ErrInvalid
+	}
+	in.Approvals = append([]PublicationApproval{}, v.PublicationApprovals...)
+	roles := map[string]map[string]bool{}
+	for _, a := range in.Approvals {
+		if a.Role == "" || a.ApproverID == "" {
+			return Remediation{}, ErrInvalid
+		}
+		if roles[a.Role] == nil {
+			roles[a.Role] = map[string]bool{}
+		}
+		roles[a.Role][a.ApproverID] = true
+	}
+	for _, required := range v.RequiredApprovals {
+		count := 0
+		for _, id := range required.ApproverIDs {
+			if roles[required.Role][id] {
+				count++
+			}
+		}
+		if count < required.Required {
+			return Remediation{}, ErrInvalid
+		}
+	}
+	for i := range in.MigrationTargets {
+		t := &in.MigrationTargets[i]
+		if t.ID == "" || t.ResourceID == "" || t.OwnerID == "" || t.Instructions == "" || !map[string]bool{"local_branch": true, "fork": true, "federated_copy": true, "pull_request": true, "integration": true}[t.Kind] {
+			return Remediation{}, ErrInvalid
+		}
+		if t.IndependentlyControlled {
+			t.State = "awaiting_owner"
+		} else {
+			t.State = "paused"
+		}
+	}
+	in.ID = randomID()
+	in.PublishedBy = actor
+	in.PublishedAt = s.now()
+	in.State = "migration_in_progress"
+	in.QuarantinedObjects = []string{}
+	for _, scope := range v.Scopes {
+		in.QuarantinedObjects = append(in.QuarantinedObjects, scope.ObjectID)
+	}
+	v.Publication = &in
+	v.Version++
+	out, _ := json.MarshalIndent(v, "", "  ")
+	if err = atomicWrite(s.path(repo, id), out, s.beforeReplace); err != nil {
+		return Remediation{}, err
+	}
+	return v, nil
 }
 
 func validFinding(v ExposureFinding, remediation Remediation) bool {
