@@ -246,6 +246,7 @@ func historyPublicationReady(v historyremediations.Remediation, expected int, in
 	roles := map[string]map[string]bool{}
 	for _, approval := range v.PublicationApprovals {
 		if roles[approval.Role] == nil {
+			roles[approval.Role] = map[string]bool{}
 		}
 		roles[approval.Role][approval.ApproverID] = true
 	}

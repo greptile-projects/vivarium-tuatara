@@ -94,6 +94,14 @@ supersession with discussion and attribution preserved only for that exact resou
 target's otherwise valid replacement cannot be cross-mapped. `POST .../restorations` reopens only named push, automation, release, and contribution flows, and only
 against the latest complete passing pass; a remaining push pause is enforced independently of display state.
 
+The connected `history-remediation-journey.spec.ts` exercises this boundary through the browser, public API,
+and stock Git. It retains a false match and unavailable/protected copies, maps branch, fork, pull, package,
+release-artifact, and deployment exposure without copying the payload, records a failed rehearsal before the
+passing candidate, publishes after attributed approval, rejects a stale clone with migration guidance, leaves
+an independent fork owner to rewrite their own repository, and restores collaboration only after a fresh
+ten-part passing containment check. The final state remains `contained_with_residuals` and never becomes an
+erasure claim.
+
 ## Propagation campaigns
 
 An authorized repository collaborator opens a durable shared delivery boundary through `POST
