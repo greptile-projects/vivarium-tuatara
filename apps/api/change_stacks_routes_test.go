@@ -9,8 +9,23 @@ import (
 	"testing"
 	"time"
 
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/changestacks"
 )
+
+func TestChangeStackAgentMemberScopeRejectsAnotherBranch(t *testing.T) {
+	repositoryID := strings.Repeat("a", 32)
+	agent := auth.Credential{AgentID: strings.Repeat("b", 32), RepositoryID: repositoryID, GitWriteBranch: "refs/heads/authorized"}
+	if changeStackAgentMemberScope(agent, repositoryID, "different") {
+		t.Fatal("branch-bound agent could publish timeline work for another member branch")
+	}
+	if !changeStackAgentMemberScope(agent, repositoryID, "authorized") {
+		t.Fatal("canonical authorized member branch was rejected")
+	}
+	if changeStackAgentMemberScope(agent, strings.Repeat("c", 32), "authorized") {
+		t.Fatal("repository-bound agent crossed source repositories")
+	}
+}
 
 func TestRestackRewritePreservesAuthorAndAppliesPatchOntoNewParent(t *testing.T) {
 	dir := t.TempDir()

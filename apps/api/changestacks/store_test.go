@@ -59,6 +59,9 @@ func TestStackWorkFreezesContextAndRejectsStaleInputs(t *testing.T) {
 	if _, _, err = s.AppendTimeline("repo", created.ID, TimelineEvent{RequestID: "moved", RequestDigest: "moved-digest", MemberID: "layer", Kind: "question", Summary: "Current?", Revision: strings.Repeat("3", 40), ActorID: replacement.PrincipalID, ActorType: "human"}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("moved revision admitted: %v", err)
 	}
+	if _, _, err = s.AppendTimeline("repo", created.ID, TimelineEvent{RequestID: "forged-handoff", RequestDigest: "forged-digest", MemberID: "layer", Kind: "handoff", Summary: "Forged sender", Revision: strings.Repeat("2", 40), ActorID: replacement.PrincipalID, ActorType: "human", FromPrincipalID: "someone-else", ToPrincipalID: "recipient"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("forged handoff sender admitted: %v", err)
+	}
 }
 
 func TestStackRejectsMissingPerChangeCriteria(t *testing.T) {

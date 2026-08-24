@@ -564,7 +564,7 @@ func (s *Store) AppendTimeline(repo, stackID string, event TimelineEvent) (Stack
 	if member == nil || member.Revision == "" || event.Revision != member.Revision {
 		return Stack{}, TimelineEvent{}, ErrInvalid
 	}
-	if event.Kind == "handoff" && (event.FromPrincipalID == "" || event.ToPrincipalID == "") {
+	if event.Kind == "handoff" && (event.FromPrincipalID == "" || event.ToPrincipalID == "" || event.FromPrincipalID != event.ActorID || event.FromPrincipalID == event.ToPrincipalID) {
 		return Stack{}, TimelineEvent{}, ErrInvalid
 	}
 	if event.WorkLaunchID != "" {

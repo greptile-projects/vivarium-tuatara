@@ -122,7 +122,7 @@ func registerChangeStackCollaborationRoutes(mux *http.ServeMux, catalog *reposit
 		if source == "" {
 			source = r.PathValue("id")
 		}
-		if actor.AgentID != "" && (actor.RepositoryID != source || (actor.GitWriteBranch != "" && canonicalStackBranch(actor.GitWriteBranch) != canonicalStackBranch(member.SourceBranch))) {
+		if !changeStackAgentMemberScope(actor, source, member.SourceBranch) {
 			writeAPIError(w, 403, "change_stack_agent_scope_mismatch", "agent authority must remain bound to this exact source repository and branch")
 			return
 		}
@@ -221,8 +221,20 @@ func registerChangeStackCollaborationRoutes(mux *http.ServeMux, catalog *reposit
 				assigned = true
 			}
 		}
+		source := member.SourceRepositoryID
+		if source == "" {
+			source = r.PathValue("id")
+		}
+		if !changeStackAgentMemberScope(actor, source, member.SourceBranch) {
+			writeAPIError(w, 403, "change_stack_agent_scope_mismatch", "agent authority must remain bound to this exact source repository and branch")
+			return
+		}
 		if !assigned || (actor.AgentID != "" && in.Kind == "restack_proposal") {
 			writeAPIError(w, 403, "change_stack_timeline_forbidden", "only the assigned principal may publish layer events; agents cannot propose restacks")
+			return
+		}
+		if in.Kind == "handoff" && in.FromPrincipalID != in.ActorID {
+			writeAPIError(w, 422, "change_stack_handoff_sender_mismatch", "handoff sender must be the authenticated assigned principal")
 			return
 		}
 		clean := in
@@ -247,10 +259,6 @@ func registerChangeStackCollaborationRoutes(mux *http.ServeMux, catalog *reposit
 			out, event, x = stacks.AppendTimeline(r.PathValue("id"), r.PathValue("stack_id"), in)
 			return x
 		}
-		source := member.SourceRepositoryID
-		if source == "" {
-			source = r.PathValue("id")
-		}
 		if actor.AgentID != "" {
 			e = orgs.WithCurrentAgentGrant(actor.OrganizationID, actor.AccessGrantID, actor.AgentID, source, persist)
 		} else {
@@ -264,4 +272,8 @@ func registerChangeStackCollaborationRoutes(mux *http.ServeMux, catalog *reposit
 		event.CurrentUpstream = true
 		writeJSON(w, 201, map[string]any{"event": event})
 	})
+}
+
+func changeStackAgentMemberScope(actor auth.Credential, sourceRepositoryID, sourceBranch string) bool {
+	return actor.AgentID == "" || (actor.RepositoryID == sourceRepositoryID && (actor.GitWriteBranch == "" || canonicalStackBranch(actor.GitWriteBranch) == canonicalStackBranch(sourceBranch)))
 }
