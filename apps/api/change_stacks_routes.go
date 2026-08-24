@@ -42,10 +42,12 @@ func registerChangeStackRoutes(mux *http.ServeMux, git *storage.Store, catalog *
 		revisions := map[string]string{}
 		patches := map[string]string{}
 		targetRepo, e := git.Open(v.RepositoryID)
+		authorizedRangeRepositories := []string{}
 		if e != nil {
 			v.Diagnostics = append(v.Diagnostics, diag("target_unavailable", "target Git history is unavailable", true))
 		}
 		if e == nil {
+			authorizedRangeRepositories = append(authorizedRangeRepositories, targetRepo.Path())
 			if tip, x := gitOutput(targetRepo.Path(), "rev-parse", "--verify", "refs/heads/"+strings.TrimPrefix(v.TargetBranch, "refs/heads/")+"^{commit}"); x == nil {
 				v.TargetRevision = tip
 			} else {
@@ -76,6 +78,7 @@ func registerChangeStackRoutes(mux *http.ServeMux, git *storage.Store, catalog *
 				m.Revision = ""
 				continue
 			}
+			authorizedRangeRepositories = appendUniquePath(authorizedRangeRepositories, source.Path())
 			if m.PullRequestID != "" {
 				p, x := pulls.Get(v.RepositoryID, m.PullRequestID)
 				if x != nil || p.SourceRepositoryID != sourceID || p.SourceBranch != m.SourceBranch {
@@ -122,7 +125,7 @@ func registerChangeStackRoutes(mux *http.ServeMux, git *storage.Store, catalog *
 				m.Diagnostics = append(m.Diagnostics, diag("base_missing", "declared parent revision is unavailable", true))
 				continue
 			}
-			rangePath, cleanup, rangeErr := stackRangeView(source.Path(), baseRepositoryPath, base, m.Revision)
+			rangePath, cleanup, rangeErr := stackRangeView(source.Path(), baseRepositoryPath, base, m.Revision, authorizedRangeRepositories...)
 			if rangeErr != nil {
 				m.Diagnostics = append(m.Diagnostics, diag("base_missing", "declared parent objects could not be assembled", true))
 				continue
@@ -135,7 +138,7 @@ func registerChangeStackRoutes(mux *http.ServeMux, git *storage.Store, catalog *
 			diff, _ := gitOutput(rangePath, "diff", "--binary", base, m.Revision)
 			cleanup()
 			if targetRepo != nil {
-				if cumulativePath, cumulativeCleanup, cumulativeErr := stackRangeView(source.Path(), targetRepo.Path(), v.TargetRevision, m.Revision); cumulativeErr == nil {
+				if cumulativePath, cumulativeCleanup, cumulativeErr := stackRangeView(source.Path(), targetRepo.Path(), v.TargetRevision, m.Revision, authorizedRangeRepositories...); cumulativeErr == nil {
 					m.CumulativeScope = stackScope(cumulativePath, v.TargetRevision, m.Revision)
 					cumulativeCleanup()
 				}
@@ -327,7 +330,16 @@ func registerChangeStackRoutes(mux *http.ServeMux, git *storage.Store, catalog *
 	})
 }
 
-func stackRangeView(headRepositoryPath, baseRepositoryPath, base, head string) (string, func(), error) {
+func appendUniquePath(paths []string, candidate string) []string {
+	for _, existing := range paths {
+		if existing == candidate {
+			return paths
+		}
+	}
+	return append(paths, candidate)
+}
+
+func stackRangeView(headRepositoryPath, baseRepositoryPath, base, head string, authorizedRepositoryPaths ...string) (string, func(), error) {
 	dir, err := os.MkdirTemp("", "vivarium-change-stack-range-")
 	if err != nil {
 		return "", func() {}, err
@@ -339,18 +351,24 @@ func stackRangeView(headRepositoryPath, baseRepositoryPath, base, head string) (
 	}
 	seen := map[string]bool{}
 	remaining := int64(256 << 20)
-	if err = importStackObject(baseRepositoryPath, dir, base, seen, &remaining); err != nil {
+	baseSources := appendUniquePath([]string{baseRepositoryPath}, headRepositoryPath)
+	headSources := appendUniquePath([]string{headRepositoryPath}, baseRepositoryPath)
+	for _, repositoryPath := range authorizedRepositoryPaths {
+		baseSources = appendUniquePath(baseSources, repositoryPath)
+		headSources = appendUniquePath(headSources, repositoryPath)
+	}
+	if err = importStackObject(baseSources, dir, base, seen, &remaining); err != nil {
 		cleanup()
 		return "", func() {}, err
 	}
-	if err = importStackObject(headRepositoryPath, dir, head, seen, &remaining); err != nil {
+	if err = importStackObject(headSources, dir, head, seen, &remaining); err != nil {
 		cleanup()
 		return "", func() {}, err
 	}
 	return filepath.Clean(dir), cleanup, nil
 }
 
-func importStackObject(sourcePath, destinationPath, id string, seen map[string]bool, remaining *int64) error {
+func importStackObject(sourcePaths []string, destinationPath, id string, seen map[string]bool, remaining *int64) error {
 	if seen[id] {
 		return nil
 	}
@@ -361,8 +379,15 @@ func importStackObject(sourcePath, destinationPath, id string, seen map[string]b
 		seen[id] = true
 		return nil
 	}
-	typeName, err := gitOutput(sourcePath, "cat-file", "-t", id)
-	if err != nil {
+	var sourcePath, typeName string
+	var err error
+	for _, candidate := range sourcePaths {
+		if typeName, err = gitOutput(candidate, "cat-file", "-t", id); err == nil {
+			sourcePath = candidate
+			break
+		}
+	}
+	if sourcePath == "" {
 		return err
 	}
 	sizeText, err := gitOutput(sourcePath, "cat-file", "-s", id)
@@ -402,7 +427,7 @@ func importStackObject(sourcePath, destinationPath, id string, seen map[string]b
 		}
 	}
 	for _, dependency := range dependencies {
-		if objectErr := importStackObject(sourcePath, destinationPath, dependency, seen, remaining); objectErr != nil {
+		if objectErr := importStackObject(sourcePaths, destinationPath, dependency, seen, remaining); objectErr != nil {
 			if _, destinationErr := gitOutput(destinationPath, "cat-file", "-e", dependency); destinationErr != nil {
 				return objectErr
 			}

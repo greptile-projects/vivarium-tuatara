@@ -69,4 +69,33 @@ func TestChangeStackRangeViewJoinsDistinctObjectStores(t *testing.T) {
 	if scope := stackScope(view, base, head); len(scope.Files) != 1 || scope.Files[0] != "layer.txt" {
 		t.Fatalf("joined scope = %#v", scope)
 	}
+	secondRepo, originalSecond := makeRepo("second", "second\n")
+	secondRaw, err := exec.Command("git", "--git-dir="+secondRepo, "cat-file", "commit", originalSecond).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondRaw = bytes.Replace(secondRaw, []byte("\n\n"), []byte("\nparent "+head+"\n\n"), 1)
+	writeSecond := exec.Command("git", "--git-dir="+secondRepo, "hash-object", "-w", "-t", "commit", "--stdin")
+	writeSecond.Stdin = bytes.NewReader(secondRaw)
+	secondOutput, err := writeSecond.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := strings.TrimSpace(string(secondOutput))
+	threeStoreView, threeStoreCleanup, err := stackRangeView(secondRepo, headRepo, head, second, baseRepo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer threeStoreCleanup()
+	for _, revision := range []string{base, head, second} {
+		if !commitExists(threeStoreView, revision) {
+			t.Fatalf("three-store view omitted %s", revision)
+		}
+	}
+	if scope := stackScope(threeStoreView, head, second); len(scope.Files) != 1 || scope.Files[0] != "layer.txt" {
+		t.Fatalf("three-store scope = %#v", scope)
+	}
+	if authors := stackAuthors(threeStoreView, head, second); len(authors) != 1 {
+		t.Fatalf("three-store authors = %#v", authors)
+	}
 }
