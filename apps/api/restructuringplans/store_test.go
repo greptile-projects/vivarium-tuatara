@@ -139,6 +139,33 @@ func TestCutoverPublicationFailurePausesSourceAndReconcilesRetry(t *testing.T) {
 	}
 }
 
+func TestCandidateGapDecisionsPreserveGapAndUnblockCutover(t *testing.T) {
+	s, _ := New(t.TempDir())
+	p, _ := resolvedCreate(s, completePlan(), "owner", "digest")
+	p, _ = s.AddCandidateSet("source", p.ID, "owner", p.Version, CandidateSet{RequestID: "candidate", Repositories: []CandidateRepository{{ID: "bare", DestinationID: "core", Tip: strings.Repeat("a", 40)}}, Gaps: []CandidateGap{{Kind: "federated_relationship", ResourceID: "offline-peer", State: "inaccessible", Summary: "peer unavailable", RequiredDecision: "retain or recreate"}}})
+	p, _ = s.AddRehearsal("source", p.ID, p.CandidateSets[0].ID, "owner", p.Version, Rehearsal{RequestID: "rehearsal", State: "passed"})
+	if _, err := s.StartCutover("source", p.ID, "owner", p.Version, Cutover{RequestID: "blocked", CandidateID: p.CandidateSets[0].ID, PauseKinds: []string{"git"}, CleanupPolicy: "archive"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("undecided gap did not block cutover: %v", err)
+	}
+	p, err := s.DecideCandidateGap("source", p.ID, p.CandidateSets[0].ID, "owner", p.Version, CandidateGapDecision{RequestID: "decision", GapKind: "federated_relationship", ResourceID: "offline-peer", Decision: "retain_external", Rationale: "The peer owner will reconnect through its ordinary federation authority."})
+	if err != nil || len(p.CandidateSets[0].Gaps) != 1 || len(p.CandidateSets[0].GapDecisions) != 1 {
+		t.Fatalf("retained decision = %#v, %v", p.CandidateSets[0], err)
+	}
+	if _, err = s.StartCutover("source", p.ID, "owner", p.Version, Cutover{RequestID: "ready", CandidateID: p.CandidateSets[0].ID, PauseKinds: []string{"git"}, CleanupPolicy: "archive"}); err != nil {
+		t.Fatalf("decided gap still blocked cutover: %v", err)
+	}
+}
+
+func TestPathCollisionCannotBeWaived(t *testing.T) {
+	s, _ := New(t.TempDir())
+	p, _ := resolvedCreate(s, completePlan(), "owner", "digest")
+	p, _ = s.AddCandidateSet("source", p.ID, "owner", p.Version, CandidateSet{RequestID: "candidate", Repositories: []CandidateRepository{{ID: "bare", DestinationID: "core"}}, Gaps: []CandidateGap{{Kind: "path_collision", ResourceID: "src/index.ts", State: "blocked"}}})
+	_, err := s.DecideCandidateGap("source", p.ID, p.CandidateSets[0].ID, "owner", p.Version, CandidateGapDecision{RequestID: "unsafe", GapKind: "path_collision", ResourceID: "src/index.ts", Decision: "exclude", Rationale: "Attempt to waive invalid materialization"})
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("collision decision = %v", err)
+	}
+}
+
 func TestBlockedPublicationCanRestoreSourceWithoutChangingDestination(t *testing.T) {
 	s, _ := New(t.TempDir())
 	p, _ := resolvedCreate(s, completePlan(), "owner", "digest")

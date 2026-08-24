@@ -230,6 +230,14 @@ remain inspectable; assembly and rehearsal never register destinations or move a
 Candidate assembly and ledger registration share a cross-process serialization boundary; bare repositories
 publish from unique staging paths by atomic rename, and exact concurrent requests reconcile safely.
 
+Candidate gaps are never erased or relabeled. A current affected human owner or the human plan creator may append an
+attributable, plan-version-bound disposition through
+`POST /repositories/{id}/restructuring-plans/{plan_id}/candidate-sets/{candidate_id}/gap-decisions`. Supported
+dispositions retain an independently controlled resource, recreate it through ordinary destination work, exclude it
+under an explicit owner decision, or accept deliberately shared history. Cutover remains blocked until every retained
+gap has a decision. A path collision cannot be waived because the assembled tree itself is invalid; collaborators must
+correct the mappings and assemble a successor candidate. Read-only agents cannot disposition gaps.
+
 Active work is proposed separately through a plan's `collaboration-mappings` route. A mapping binds an
 inventoried source resource and exact revision to a branch, pull, issue, proposal, task, decision, check,
 session, workspace, or queue snapshot. The snapshot retains named authors, discussion and review identities,
@@ -266,7 +274,7 @@ target-repository task, pull, and release work; it records coordination without 
 team authority in that repository. These records grant no Git, package, API, extension, workflow,
 documentation, deployment, federation, pull, release, or consumer authority.
 
-After a gap-free candidate's latest rehearsal passes and active-work mappings are approved or archived, a human
+After every candidate gap is absent or explicitly dispositioned, its latest rehearsal passes, and active-work mappings are approved or archived, a human
 collaborator can stage cutover. Each destination owner approves independently. Activation binds exact pre-created
 destination repositories, imports the immutable candidate commits, publishes default refs, and activates a source
 write boundary; stock Git rejects pushes to the old authority with migration guidance. Activation authorization is
@@ -282,6 +290,12 @@ The workspace and API retain live source/destination state, active controls, app
 permission, link, supported-consumer, ordinary-contribution, and Git-traffic evidence for every destination. Failed or residual current
 evidence, late writes, and unadopted dependents prevent cleanup. A complete passing matrix applies the declared
 read-only, archive, or removal policy; rollback restores source authority without erasing retained history.
+
+The connected `restructuring-journey.spec.ts` uses the browser, public API, stock Git, the public dependency map, and
+federated-follower continuity to prove the complete loop. It preserves extracted history, divides an open cross-cutting
+pull into connected contributions, records human and agent migration work, rehearses both future repositories, contains
+a concurrent source push, publishes independently owned refs, delivers a new component change, verifies builds,
+release/permission/link/consumer/contribution/Git traffic, and archives the compatibility source only after adoption.
 
 ## Shared regression search boundaries
 
