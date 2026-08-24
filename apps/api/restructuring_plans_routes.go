@@ -587,6 +587,10 @@ func registerRestructuringPlanRoutes(mux *http.ServeMux, git *storage.Store, cat
 			return nil
 		})
 		if e != nil {
+			if out.Cutover != nil && out.Cutover.State == "publication_blocked" {
+				writeJSON(w, 409, map[string]any{"error": map[string]string{"code": "restructuring_publication_blocked", "message": "destination publication is blocked; source writes remain paused and the retained plan must be refreshed before retry or rollback"}, "restructuring_plan": out})
+				return
+			}
 			writeAPIError(w, 409, "restructuring_activation_blocked", "all current destination-owner approvals are required")
 			return
 		}

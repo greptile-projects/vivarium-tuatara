@@ -508,14 +508,19 @@ func (s *Store) FinishCutover(repo, id, actor string, expected int, rollback boo
 	if v.Cutover == nil {
 		return Plan{}, ErrNotFound
 	}
-	if expected != v.Version || v.Cutover.State != "active" || v.CreatedBy != actor {
+	if expected != v.Version || (v.Cutover.State != "active" && !(rollback && v.Cutover.State == "publication_blocked")) || v.CreatedBy != actor {
 		return Plan{}, ErrInvalid
 	}
 	if rollback {
 		v.Cutover.State = "rolled_back"
 		v.Cutover.SourceState = "active"
 		for i := range v.Cutover.Destinations {
-			v.Cutover.Destinations[i].State = "inactive"
+			if v.Cutover.Destinations[i].State == "publication_uncertain" {
+				v.Cutover.Destinations[i].State = "independently_changed"
+				v.Cutover.Destinations[i].Health = "requires_destination_owner"
+			} else {
+				v.Cutover.Destinations[i].State = "inactive"
+			}
 		}
 		v.Version++
 		return v, s.write(v)

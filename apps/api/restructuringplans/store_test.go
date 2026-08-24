@@ -139,6 +139,20 @@ func TestCutoverPublicationFailurePausesSourceAndReconcilesRetry(t *testing.T) {
 	}
 }
 
+func TestBlockedPublicationCanRestoreSourceWithoutChangingDestination(t *testing.T) {
+	s, _ := New(t.TempDir())
+	p, _ := resolvedCreate(s, completePlan(), "owner", "digest")
+	p, _ = s.AddCandidateSet("source", p.ID, "owner", p.Version, CandidateSet{RequestID: "c", Repositories: []CandidateRepository{{ID: "bare", DestinationID: "core", Tip: strings.Repeat("a", 40)}}})
+	p, _ = s.AddRehearsal("source", p.ID, p.CandidateSets[0].ID, "owner", p.Version, Rehearsal{RequestID: "r", State: "passed"})
+	p, _ = s.StartCutover("source", p.ID, "owner", p.Version, Cutover{RequestID: "x", CandidateID: p.CandidateSets[0].ID, PauseKinds: []string{"git"}, CleanupPolicy: "archive"})
+	p, _ = s.ApproveCutover("source", p.ID, "owner", p.Version, CutoverApproval{RequestID: "a", DestinationID: "core", Decision: "approve"})
+	p, _ = s.ActivateCutoverWith("source", p.ID, "owner", p.Version, map[string]string{"core": "destination"}, func() error { return errors.New("destination ref changed during compensation") })
+	p, err := s.FinishCutover("source", p.ID, "owner", p.Version, true)
+	if err != nil || p.Cutover.State != "rolled_back" || p.Cutover.SourceState != "active" || p.Cutover.Destinations[0].State != "independently_changed" {
+		t.Fatalf("blocked rollback = %#v, %v", p.Cutover, err)
+	}
+}
+
 func TestCutoverCompletionRequiresEveryDestinationEvidenceMatrix(t *testing.T) {
 	s, _ := New(t.TempDir())
 	p, _ := resolvedCreate(s, validPlanForTest(strings.Repeat("0", 40)), "owner", "digest")

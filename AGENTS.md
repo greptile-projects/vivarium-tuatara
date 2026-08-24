@@ -3160,6 +3160,10 @@ compensates only refs created by that attempt with target-checked deletion if a 
 uses a durable pre-publication `publishing` intent that pauses source writes. Publication or compensation failure
 retains `publication_blocked`, uncertain destination health, and a blocker; an exact retry reconciles surviving
 candidate-tip refs while source writes remain paused, so cleanup failure cannot expose two writable authorities.
+The activation conflict response includes the newly persisted plan and a distinct publication-blocked code; the web
+workspace refreshes before enabling retry. If a destination ref moved independently and cannot reconcile, the human
+plan creator can restore source authority from `publication_blocked` without overwriting or deleting that ref; the
+destination remains `independently_changed` and requires its owner, preserving the blocker and uncertainty.
 Cleanup requires current passing build, release, permission, link, supported-consumer, ordinary-contribution, and Git-traffic
 evidence keyed to every destination plus adoption of every dependent. Residual traffic and late writes block read-only/archive/removal policy
 completion. Rollback restores source authority without deleting evidence or candidates, and the ledger grants no

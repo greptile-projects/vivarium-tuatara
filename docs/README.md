@@ -274,8 +274,11 @@ serialized before Git mutation, all destination refs are preflighted, exact prio
 failure target-checks compensation for only refs created by that attempt. Before mutation, a durable `publishing`
 intent pauses source writes. If publication or compensation fails, the
 cutover retains `publication_blocked`, uncertain destination health, and an explicit blocker; exact retry reconciles
-surviving candidate-tip refs while the source stays paused. The workspace and API retain live source/destination
-state, active controls, approvals, dependency adoption, and bounded build, release,
+surviving candidate-tip refs while the source stays paused. The conflict response carries the current persisted plan,
+and the workspace refreshes it before retry. When a
+destination ref moved independently and cannot reconcile, the human controller may restore source authority without
+mutating that destination ref; its state remains independently changed and requires its owner.
+The workspace and API retain live source/destination state, active controls, approvals, dependency adoption, and bounded build, release,
 permission, link, supported-consumer, ordinary-contribution, and Git-traffic evidence for every destination. Failed or residual current
 evidence, late writes, and unadopted dependents prevent cleanup. A complete passing matrix applies the declared
 read-only, archive, or removal policy; rollback restores source authority without erasing retained history.
