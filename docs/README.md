@@ -81,6 +81,16 @@ Ordinary receive-pack discovery and pushes fail with actionable fetch/backup/reb
 migration. Independently controlled targets project as `awaiting_owner`: the coordinator can explain and track
 the necessary rewrite but gains no authority to perform it.
 
+After publication, owners append immutable current-evidence passes through `POST .../containment-passes`.
+The completion policy covers repository reachability, ordinary object access, fork and federation
+acknowledgements, package and artifact replacement, credential rotation, deployment use, caches, and protected
+recovery copies. The server discards caller claims for Git reachability and quarantine and derives those facts
+from the authoritative repository and publication. Other dimensions require bounded SHA-256 evidence. Failed,
+unreachable, independently controlled, legally retained, reintroduced, and exceptional copies remain explicit;
+exceptions expire within 30 days, and no pass claims erasure. Owners can retain exact-revision pull/workspace
+migration or supersession with discussion and attribution preserved. `POST .../restorations` reopens only named
+push, automation, release, and contribution flows, and only against the latest complete passing pass.
+
 ## Propagation campaigns
 
 An authorized repository collaborator opens a durable shared delivery boundary through `POST

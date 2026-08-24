@@ -1,6 +1,7 @@
 package historyremediations
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -205,5 +206,69 @@ func TestRewriteCandidateAndRehearsalAreCASVersionedAndRetryStable(t *testing.T)
 	retry, err = s.ReservePublication("repo", created.ID, 4, publication, "maintainer")
 	if err != nil || retry.Version != 6 {
 		t.Fatalf("publication retry = %#v, %v", retry.Publication, err)
+	}
+}
+
+func TestContainmentPassKeepsResidualsVisibleAndGatesScopedRestoration(t *testing.T) {
+	s, _ := New(t.TempDir())
+	created, _ := s.Create(fixture(), "maintainer", "digest")
+	// Seed the already-governed publication boundary; publication behavior is
+	// covered above and this test focuses on its successor milestone.
+	created.Publication = &Publication{ID: "publication", CandidateID: "candidate", State: "migration_in_progress", PausedSystems: []string{"pushes"}, QuarantinedObjects: []string{"blob-1"}}
+	b, _ := json.MarshalIndent(created, "", "  ")
+	if err := atomicWrite(s.path("repo", created.ID), b, nil); err != nil {
+		t.Fatal(err)
+	}
+	kinds := created.CompletionPolicy.RequiredKinds
+	pass := ContainmentPass{RequestID: "pass-1"}
+	for _, kind := range kinds {
+		state := "passed"
+		if kind == "recovery_copy" {
+			state = "retained_legal"
+		}
+		pass.Observations = append(pass.Observations, ContainmentObservation{Kind: kind, ResourceID: kind + "-1", State: state, EvidenceSHA256: strings.Repeat("d", 64), Summary: "current authoritative evidence"})
+	}
+	blocked, err := s.RecordContainmentPass("repo", created.ID, 1, pass, "security")
+	if err != nil || blocked.ContainmentPasses[0].State != "blocked" || blocked.ContainmentPasses[0].ErasureClaim || len(blocked.ContainmentPasses[0].Blockers) != 1 {
+		t.Fatalf("blocked pass = %#v, %v", blocked.ContainmentPasses, err)
+	}
+	if _, err = s.Restore("repo", created.ID, 2, Restoration{RequestID: "restore-early", ContainmentPassID: blocked.ContainmentPasses[0].ID, Systems: []string{"pushes"}}, "security"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("unsafe restoration = %v", err)
+	}
+	pass.RequestID = "pass-2"
+	for i := range pass.Observations {
+		pass.Observations[i].State = "passed"
+	}
+	passing, err := s.RecordContainmentPass("repo", created.ID, 2, pass, "security")
+	if err != nil || passing.ContainmentPasses[1].State != "passing" {
+		t.Fatalf("passing = %#v, %v", passing.ContainmentPasses, err)
+	}
+	restored, err := s.Restore("repo", created.ID, 3, Restoration{RequestID: "restore", ContainmentPassID: passing.ContainmentPasses[1].ID, Systems: []string{"pushes", "contributions"}}, "security")
+	if err != nil || restored.Publication.State != "contained_with_residuals" || len(restored.Publication.PausedSystems) != 0 {
+		t.Fatalf("restore = %#v, %v", restored.Publication, err)
+	}
+	pass.RequestID = "pass-reintroduced"
+	pass.Observations[0].State = "reintroduced"
+	recontained, err := s.RecordContainmentPass("repo", created.ID, 4, pass, "security")
+	if err != nil || recontained.Publication.State != "migration_in_progress" || len(recontained.Publication.PausedSystems) != 1 {
+		t.Fatalf("reintroduced history was not re-contained = %#v, %v", recontained.Publication, err)
+	}
+}
+
+func TestMigrationRequiresExactReplacementAndPreservedContext(t *testing.T) {
+	s, _ := New(t.TempDir())
+	v, _ := s.Create(fixture(), "maintainer", "digest")
+	v.Publication = &Publication{ID: "publication", State: "migration_in_progress"}
+	b, _ := json.Marshal(v)
+	_ = atomicWrite(s.path("repo", v.ID), b, nil)
+	a := MigrationAction{RequestID: "migration", Kind: "pull_request", ResourceID: "pull-1", Action: "migrated", ReplacementRevision: strings.Repeat("e", 40), DiscussionPreserved: true, AttributionPreserved: true}
+	got, err := s.RecordMigration("repo", v.ID, 1, a, "security")
+	if err != nil || len(got.MigrationActions) != 1 {
+		t.Fatalf("migration = %#v, %v", got.MigrationActions, err)
+	}
+	a.RequestID = "unsafe"
+	a.AttributionPreserved = false
+	if _, err = s.RecordMigration("repo", v.ID, 2, a, "security"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("lost attribution = %v", err)
 	}
 }
