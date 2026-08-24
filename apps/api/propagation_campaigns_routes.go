@@ -12,12 +12,13 @@ import (
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/propagationcampaigns"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 )
 
-func registerPropagationCampaignRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, campaigns *propagationcampaigns.Store, pulls *pullrequests.Store) {
+func registerPropagationCampaignRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, campaigns *propagationcampaigns.Store, pulls *pullrequests.Store, proposalStore *proposals.Store) {
 	actorID := func(c auth.Credential) string {
 		if c.AgentID != "" {
 			return c.AgentID
@@ -118,6 +119,15 @@ func registerPropagationCampaignRoutes(mux *http.ServeMux, git *storage.Store, c
 			}
 		}
 		v.Assessments = visibleAssessments
+		visibleContributions := make([]propagationcampaigns.Contribution, 0, len(v.Contributions))
+		for _, contribution := range v.Contributions {
+			for _, target := range v.Targets {
+				if target.ID == contribution.TargetID && target.State != "inaccessible" && target.State != "unsupported" {
+					visibleContributions = append(visibleContributions, contribution)
+				}
+			}
+		}
+		v.Contributions = visibleContributions
 		return v
 	}
 	mux.HandleFunc("GET /repositories/{id}/propagation-campaigns", func(w http.ResponseWriter, r *http.Request) {
@@ -321,6 +331,124 @@ func registerPropagationCampaignRoutes(mux *http.ServeMux, git *storage.Store, c
 			return
 		}
 		writeJSON(w, 201, map[string]any{"campaign": project(updated, c), "assessment": out})
+	})
+	mux.HandleFunc("POST /repositories/{id}/propagation-campaigns/{campaign_id}/targets/{target_id}/contributions", func(w http.ResponseWriter, r *http.Request) {
+		c, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id"))
+		if !ok {
+			return
+		}
+		if c.AgentID != "" {
+			writeAPIError(w, 403, "propagation_contribution_forbidden", "a human target maintainer must publish contribution work")
+			return
+		}
+		var in struct {
+			AssessmentID    string   `json:"assessment_id"`
+			ExpectedVersion int      `json:"expected_version"`
+			Application     string   `json:"application"`
+			Deviation       string   `json:"deviation"`
+			Topology        string   `json:"topology"`
+			Constraints     []string `json:"constraints"`
+			Tasks           []struct {
+				Title        string `json:"title"`
+				Outcome      string `json:"outcome"`
+				AssigneeType string `json:"assignee_type"`
+				AssigneeID   string `json:"assignee_id"`
+			} `json:"tasks"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "a target contribution plan is required")
+			return
+		}
+		campaign, e := campaigns.Get(r.PathValue("id"), r.PathValue("campaign_id"))
+		if e != nil {
+			writeAPIError(w, 404, "propagation_campaign_not_found", "propagation campaign not found")
+			return
+		}
+		var target *propagationcampaigns.Target
+		var assessment *propagationcampaigns.Assessment
+		for i := range campaign.Targets {
+			if campaign.Targets[i].ID == r.PathValue("target_id") {
+				target = &campaign.Targets[i]
+			}
+		}
+		for i := range campaign.Assessments {
+			if campaign.Assessments[i].ID == in.AssessmentID && target != nil && campaign.Assessments[i].TargetID == target.ID {
+				assessment = &campaign.Assessments[i]
+			}
+		}
+		if target == nil || target.Kind != "repository" || assessment == nil {
+			writeAPIError(w, 404, "propagation_assessment_not_found", "a target assessment is required")
+			return
+		}
+		targetRepo, e := catalog.GetByID(target.RepositoryID)
+		collab, _ := catalog.HasCollaborator(c.UserID, target.RepositoryID)
+		if e != nil || (targetRepo.OwnerID != c.UserID && !collab) {
+			writeAPIError(w, 403, "propagation_target_forbidden", "current target repository write authority is required")
+			return
+		}
+		currentTip, e := git.Open(target.RepositoryID)
+		if e != nil {
+			writeAPIError(w, 422, "propagation_target_unavailable", "target repository is unavailable")
+			return
+		}
+		tip, e := gitOutput(currentTip.Path(), "rev-parse", "--verify", "refs/heads/"+strings.TrimPrefix(target.ReleaseLine, "refs/heads/")+"^{commit}")
+		if e != nil || tip != assessment.TargetRevision || assessment.Version != in.ExpectedVersion {
+			writeAPIError(w, 409, "propagation_assessment_changed", "reassess the current target before publishing work")
+			return
+		}
+		if assessment.Classification == "already_satisfied" || assessment.Classification == "not_applicable" {
+			writeAPIError(w, 422, "propagation_contribution_unnecessary", "this assessment does not support implementation work")
+			return
+		}
+		if in.Application == "direct" && assessment.Classification != "directly_applicable" {
+			writeAPIError(w, 422, "propagation_adaptation_required", "non-direct assessments require an explained adaptation")
+			return
+		}
+		if !map[string]bool{"direct": true, "adapted": true}[in.Application] || (in.Application == "adapted" && strings.TrimSpace(in.Deviation) == "") || !map[string]bool{"local_branch": true, "fork": true, "federated": true}[in.Topology] {
+			writeAPIError(w, 422, "propagation_contribution_invalid", "application, explained deviations, and an ordinary contribution topology are required")
+			return
+		}
+		if len(in.Tasks) == 0 {
+			writeAPIError(w, 422, "propagation_contribution_invalid", "at least one owned task is required")
+			return
+		}
+		criteria := append([]string{}, campaign.AcceptanceCriteria...)
+		criteria = append(criteria, target.AcceptanceCriteria...)
+		items := []proposals.ReasoningItem{{ID: "intent", Kind: "source_intent", Summary: campaign.Intent, Status: "accepted"}, {ID: "assessment", Kind: "target_assessment", Summary: assessment.Classification, Status: "current"}}
+		for _, entry := range assessment.Entries {
+			items = append(items, proposals.ReasoningItem{ID: entry.ID, Kind: entry.Kind, Summary: entry.Body, Status: "retained"})
+		}
+		origin := proposals.ReasoningOrigin{PropagationCampaignID: campaign.ID, PropagationTargetID: target.ID, PropagationAssessmentID: assessment.ID, AssessmentVersion: assessment.Version, Revision: assessment.TargetRevision, SelectedItemIDs: []string{"intent", "assessment"}, Items: items, AnalysisStatus: assessment.Classification}
+		proposalTasks := make([]proposals.ImplementationTaskInput, len(in.Tasks))
+		for i, task := range in.Tasks {
+			proposalTasks[i] = proposals.ImplementationTaskInput{Title: task.Title, Outcome: task.Outcome, Risk: strings.Join(in.Constraints, "\n"), VerificationPlan: "Preserve source intent and satisfy:\n- " + strings.Join(criteria, "\n- "), AssigneeType: task.AssigneeType, AssigneeID: task.AssigneeID, DependsOnPrevious: i > 0}
+		}
+		body := "Target-maintainer contribution for propagation campaign " + campaign.ID + ".\n\nSource rationale:\n" + campaign.Intent + "\n\nRelevant source commits (retain original authorship for direct application):\n- " + strings.Join(campaign.Source.Commits, "\n- ") + "\n\nLocal assessment: " + assessment.Classification + " at " + assessment.TargetRevision + "."
+		if strings.TrimSpace(in.Deviation) != "" {
+			body += "\n\nAdaptation and deviations:\n" + strings.TrimSpace(in.Deviation)
+		}
+		if len(in.Constraints) > 0 {
+			body += "\n\nLocal constraints (restricted or embargoed context remains outside this record):\n- " + strings.Join(in.Constraints, "\n- ")
+		}
+		proposal, tasks, e := proposalStore.CreateImplementation(proposals.ImplementationInput{RepositoryID: target.RepositoryID, ActorID: c.UserID, Title: "Propagate: " + campaign.Title, Body: body, Origin: origin, Tasks: proposalTasks})
+		if errors.Is(e, proposals.ErrImplementationConflict) {
+			writeAPIError(w, 409, "propagation_contribution_conflict", "this target contribution was already published with different work")
+			return
+		}
+		if e != nil && !errors.Is(e, proposals.ErrDurabilityUncertain) {
+			writeAPIError(w, 422, "propagation_contribution_invalid", "ordered owned tasks and local adaptation details are required")
+			return
+		}
+		taskIDs := make([]string, len(tasks))
+		for i := range tasks {
+			taskIDs[i] = tasks[i].ID
+		}
+		updated, contribution, linkErr := campaigns.LinkContribution(campaign.RepositoryID, campaign.ID, c.UserID, propagationcampaigns.Contribution{TargetID: target.ID, AssessmentID: assessment.ID, AssessmentVersion: assessment.Version, TargetRevision: assessment.TargetRevision, Application: in.Application, Deviation: strings.TrimSpace(in.Deviation), Topology: in.Topology, Constraints: in.Constraints, ProposalID: proposal.ID, TaskIDs: taskIDs})
+		if linkErr != nil {
+			writeAPIError(w, 409, "propagation_contribution_conflict", "target contribution publication could not be reconciled")
+			return
+		}
+		writeJSON(w, 201, map[string]any{"campaign": project(updated, c), "contribution": contribution, "proposal": proposal, "tasks": tasks})
 	})
 }
 

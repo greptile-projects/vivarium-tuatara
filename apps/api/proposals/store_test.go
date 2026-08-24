@@ -598,4 +598,24 @@ func TestDeleteMigrationWorkCompensatesExactPublicationStages(t *testing.T) {
 	}
 }
 
+func TestPropagationImplementationRetainsOrderedLocalReasoning(t *testing.T) {
+	store, _ := New(t.TempDir())
+	origin := ReasoningOrigin{PropagationCampaignID: strings.Repeat("a", 24), PropagationTargetID: "release-1", PropagationAssessmentID: strings.Repeat("b", 24), AssessmentVersion: 2, Revision: strings.Repeat("c", 40), Items: []ReasoningItem{{ID: "intent", Kind: "source_intent", Summary: "Preserve behavior", Status: "accepted"}}, SelectedItemIDs: []string{"intent"}, AnalysisStatus: "adaptation_required"}
+	in := ImplementationInput{RepositoryID: repositoryID, ActorID: authorID, Title: "Propagate repair", Body: "Source authorship and local deviations remain reviewable.", Origin: origin, Tasks: []ImplementationTaskInput{{Title: "Adapt repair", Outcome: "Meet the local contract", Risk: "old dependency", VerificationPlan: "Run local reproduction", AssigneeType: "human", AssigneeID: authorID}, {Title: "Document deviation", Outcome: "Explain the callback change", AssigneeType: "agent", AssigneeID: commenterID, DependsOnPrevious: true}}}
+	proposal, tasks, err := store.CreateImplementation(in)
+	if err != nil || proposal.Reasoning == nil || proposal.Reasoning.PropagationCampaignID != origin.PropagationCampaignID || len(tasks) != 2 || len(tasks[1].DependencyIDs) != 1 || tasks[1].DependencyIDs[0] != tasks[0].ID || tasks[0].Assignment.Access.BaseRevision != origin.Revision {
+		t.Fatalf("propagation plan not retained: %#v %#v %v", proposal, tasks, err)
+	}
+	again, repeated, err := store.CreateImplementation(in)
+	if err != nil || again.ID != proposal.ID || repeated[0].ID != tasks[0].ID {
+		t.Fatalf("retry did not reconcile: %#v %#v %v", again, repeated, err)
+	}
+	changed := in
+	changed.Tasks = append([]ImplementationTaskInput(nil), in.Tasks...)
+	changed.Tasks[0].Outcome = "Different"
+	if _, _, err = store.CreateImplementation(changed); !errors.Is(err, ErrImplementationConflict) {
+		t.Fatalf("want conflict, got %v", err)
+	}
+}
+
 func pointer(value string) *string { return &value }

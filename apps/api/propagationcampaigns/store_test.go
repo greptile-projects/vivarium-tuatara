@@ -96,3 +96,35 @@ func TestAssessmentLedgerIsRevisionBoundAndCASVersioned(t *testing.T) {
 		t.Fatalf("want CAS conflict, got %v", e)
 	}
 }
+
+func TestContributionBindsCurrentAssessmentAndReconcilesTarget(t *testing.T) {
+	s, _ := New(t.TempDir())
+	v, _ := s.Create(validCampaign(), "owner-1", "campaign")
+	comparisons := make([]Comparison, 7)
+	for i, kind := range []string{"histories", "symbols", "dependencies", "interfaces", "schemas", "prior_fixes", "release_commitments"} {
+		comparisons[i] = Comparison{Kind: kind, Status: "review_required", Summary: "bounded comparison"}
+	}
+	v, assessment, err := s.CreateAssessment(v.RepositoryID, v.ID, "owner-1", Assessment{TargetID: "target-1", Classification: "adaptation_required", TargetRevision: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", SourceRevision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Comparisons: comparisons})
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := Contribution{TargetID: "target-1", AssessmentID: assessment.ID, AssessmentVersion: assessment.Version, TargetRevision: assessment.TargetRevision, Application: "adapted", Deviation: "Use the release-line callback.", Topology: "fork", Constraints: []string{"dependency unavailable"}, ProposalID: "cccccccccccccccccccccccccccccccc", TaskIDs: []string{"dddddddddddddddddddddddddddddddd"}}
+	updated, created, err := s.LinkContribution(v.RepositoryID, v.ID, "owner-1", in)
+	if err != nil || len(updated.Contributions) != 1 || created.PublishedBy != "owner-1" || created.Authority == "" {
+		t.Fatalf("contribution not retained: %#v %v", created, err)
+	}
+	_, again, err := s.LinkContribution(v.RepositoryID, v.ID, "owner-1", in)
+	if err != nil || again.ID != created.ID {
+		t.Fatalf("retry did not reconcile: %#v %v", again, err)
+	}
+	changed := in
+	changed.ProposalID = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+	if _, _, err = s.LinkContribution(v.RepositoryID, v.ID, "owner-1", changed); !errors.Is(err, ErrConflict) {
+		t.Fatalf("want conflict, got %v", err)
+	}
+	stale := in
+	stale.TargetID = "target-2"
+	if _, _, err = s.LinkContribution(v.RepositoryID, v.ID, "owner-1", stale); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("want invalid stale link, got %v", err)
+	}
+}
