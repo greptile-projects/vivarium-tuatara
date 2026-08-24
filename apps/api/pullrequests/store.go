@@ -437,6 +437,7 @@ type Comment struct {
 	PullRequestID string    `json:"pull_request_id"`
 	AuthorID      string    `json:"author_id"`
 	Body          string    `json:"body"`
+	Revision      string    `json:"revision"`
 	CreatedAt     time.Time `json:"created_at"`
 }
 
@@ -1296,14 +1297,6 @@ func (s *Store) AddComment(repositoryID, pullRequestID, authorID, body string) (
 	if body == "" || len([]rune(body)) > 10000 {
 		return Comment{}, ErrInvalid
 	}
-	if _, err := s.Get(repositoryID, pullRequestID); err != nil {
-		return Comment{}, err
-	}
-	commentID, err := newID()
-	if err != nil {
-		return Comment{}, err
-	}
-	comment := Comment{ID: commentID, PullRequestID: pullRequestID, AuthorID: authorID, Body: body, CreatedAt: s.now().Truncate(time.Microsecond)}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	unlock, err := s.lock()
@@ -1311,6 +1304,15 @@ func (s *Store) AddComment(repositoryID, pullRequestID, authorID, body string) (
 		return Comment{}, err
 	}
 	defer unlock()
+	pull, err := s.Get(repositoryID, pullRequestID)
+	if err != nil {
+		return Comment{}, err
+	}
+	commentID, err := newID()
+	if err != nil {
+		return Comment{}, err
+	}
+	comment := Comment{ID: commentID, PullRequestID: pullRequestID, AuthorID: authorID, Body: body, Revision: pull.SourceCommitID, CreatedAt: s.now().Truncate(time.Microsecond)}
 	record, err := s.readComments(repositoryID, pullRequestID)
 	if err != nil {
 		return Comment{}, err

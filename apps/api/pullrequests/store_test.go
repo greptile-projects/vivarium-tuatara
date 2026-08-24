@@ -427,6 +427,9 @@ func TestCreateReturnsIdentityAfterUncertainDurability(t *testing.T) {
 	if !errors.Is(commentErr, ErrDurabilityUncertain) || comment.ID == "" {
 		t.Fatalf("AddComment = %#v, %v", comment, commentErr)
 	}
+	if comment.Revision != string(head) {
+		t.Fatalf("comment revision = %q, want %q", comment.Revision, head)
+	}
 	comments, listErr := store.ListComments(repository.ID(), pullRequest.ID)
 	if listErr != nil || len(comments) != 1 || comments[0].ID != comment.ID {
 		t.Fatalf("ListComments = %#v, %v", comments, listErr)

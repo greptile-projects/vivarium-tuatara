@@ -18,12 +18,49 @@ import (
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/changestacks"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/previews"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 )
 
-func registerChangeStackRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, stacks *changestacks.Store, pulls *pullrequests.Store) {
+type stackRevisionRef struct {
+	MemberID      string `json:"member_id"`
+	PullRequestID string `json:"pull_request_id,omitempty"`
+	Revision      string `json:"revision"`
+	Current       bool   `json:"current"`
+}
+type stackEvidence struct {
+	ID        string    `json:"id"`
+	Kind      string    `json:"kind"`
+	ActorID   string    `json:"actor_id,omitempty"`
+	Revision  string    `json:"revision"`
+	State     string    `json:"state"`
+	Summary   string    `json:"summary"`
+	CreatedAt time.Time `json:"created_at"`
+}
+type stackPullContext struct {
+	StackID               string             `json:"stack_id"`
+	StackTitle            string             `json:"stack_title"`
+	Outcome               string             `json:"outcome"`
+	MemberID              string             `json:"member_id"`
+	Position              int                `json:"position"`
+	Revision              string             `json:"revision"`
+	ParentRevision        string             `json:"parent_revision"`
+	TargetRevision        string             `json:"target_revision"`
+	ReviewState           string             `json:"review_state"`
+	IndividualScope       changestacks.Scope `json:"individual_diff"`
+	CumulativeScope       changestacks.Scope `json:"cumulative_diff"`
+	CommitIDs             []string           `json:"commit_ids"`
+	Upstream              []stackRevisionRef `json:"upstream_revisions"`
+	Evidence              []stackEvidence    `json:"evidence"`
+	DownstreamInvalidated []stackRevisionRef `json:"downstream_evidence_invalidated_by_upstream_change"`
+	AcceptanceCriteria    []string           `json:"acceptance_criteria"`
+	Authority             string             `json:"authority"`
+}
+
+func registerChangeStackRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, stacks *changestacks.Store, pulls *pullrequests.Store, checks *checkruns.Store, previewStore *previews.Store) {
 	project := func(v changestacks.Stack, actor auth.Credential, authenticated bool) changestacks.Stack {
 		participant := func(repositoryID string) bool {
 			if !authenticated {
@@ -134,6 +171,7 @@ func registerChangeStackRoutes(mux *http.ServeMux, git *storage.Store, catalog *
 				m.Diagnostics = append(m.Diagnostics, diag("unrelated_history", "revision does not descend from its declared parent", true))
 			}
 			m.IndividualScope = stackScope(rangePath, base, m.Revision)
+			m.CommitIDs = stackCommits(rangePath, base, m.Revision)
 			m.Authors = stackAuthors(rangePath, base, m.Revision)
 			diff, _ := gitOutput(rangePath, "diff", "--binary", base, m.Revision)
 			cleanup()
@@ -197,6 +235,85 @@ func registerChangeStackRoutes(mux *http.ServeMux, git *storage.Store, catalog *
 		}
 		writeJSON(w, 200, project(v, actor, authenticated))
 	})
+	mux.HandleFunc("GET /repositories/{id}/pulls/{pull_id}/stack-context", func(w http.ResponseWriter, r *http.Request) {
+		actor, authenticated, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id"))
+		if !ok {
+			return
+		}
+		items, err := stacks.List(r.PathValue("id"))
+		if err != nil {
+			writeAPIError(w, 500, "change_stacks_unavailable", "stack review context could not be read")
+			return
+		}
+		contexts := []stackPullContext{}
+		for _, retained := range items {
+			v := project(retained, actor, authenticated)
+			for i := range v.Members {
+				if v.Members[i].PullRequestID == r.PathValue("pull_id") {
+					contexts = append(contexts, buildStackPullContext(v, i, pulls, checks, previewStore))
+					break
+				}
+			}
+		}
+		writeJSON(w, 200, map[string]any{"stack_contexts": contexts})
+	})
+	mux.HandleFunc("POST /repositories/{id}/pulls/{pull_id}/stack-context/owner-acknowledgements", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:read")
+		if !ok {
+			return
+		}
+		repo, err := catalog.GetByID(r.PathValue("id"))
+		if err != nil || actor.AgentID != "" || repo.OwnerID != actor.UserID {
+			writeAPIError(w, 403, "stack_acknowledgement_forbidden", "only the current human repository owner may acknowledge a stack layer")
+			return
+		}
+		var in struct {
+			StackID  string `json:"stack_id"`
+			MemberID string `json:"member_id"`
+			Decision string `json:"decision"`
+			Note     string `json:"note"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "a stack layer acknowledgement is required")
+			return
+		}
+		v, err := stacks.Get(r.PathValue("id"), in.StackID)
+		if err != nil {
+			writeAPIError(w, 404, "change_stack_not_found", "change stack not found")
+			return
+		}
+		matched := false
+		memberRevision := ""
+		for _, m := range v.Members {
+			if m.ID == in.MemberID && m.PullRequestID == r.PathValue("pull_id") {
+				matched = true
+				memberRevision = m.Revision
+			}
+		}
+		if !matched || memberRevision == "" {
+			writeAPIError(w, 422, "stack_layer_mismatch", "the pull request does not identify that stack layer")
+			return
+		}
+		var out changestacks.Stack
+		err = pulls.WithSourceRevision(r.PathValue("id"), r.PathValue("pull_id"), memberRevision, func(pullrequests.PullRequest) error {
+			var acknowledgeErr error
+			out, acknowledgeErr = stacks.Acknowledge(r.PathValue("id"), in.StackID, in.MemberID, actor.UserID, in.Decision, in.Note)
+			return acknowledgeErr
+		})
+		if errors.Is(err, pullrequests.ErrSourceChanged) || errors.Is(err, pullrequests.ErrNotReady) {
+			writeAPIError(w, 409, "stack_layer_stale", "the pull request moved or closed; refresh the stack before acknowledging its layer")
+			return
+		}
+		if errors.Is(err, changestacks.ErrInvalid) {
+			writeAPIError(w, 422, "stack_acknowledgement_invalid", "decision must acknowledge or request changes on the exact current layer")
+			return
+		}
+		if err != nil {
+			writeAPIError(w, 500, "change_stacks_unavailable", "acknowledgement could not be retained")
+			return
+		}
+		writeJSON(w, 201, project(out, actor, true))
+	})
 	mux.HandleFunc("POST /repositories/{id}/change-stacks", func(w http.ResponseWriter, r *http.Request) {
 		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
 		if !ok {
@@ -219,8 +336,12 @@ func registerChangeStackRoutes(mux *http.ServeMux, git *storage.Store, catalog *
 			clean.Members[i].Position = 0
 			clean.Members[i].Revision, clean.Members[i].BaseRevision, clean.Members[i].ExpectedBaseRevision = "", "", ""
 			clean.Members[i].Authors, clean.Members[i].Diagnostics = nil, nil
+			clean.Members[i].CommitIDs = nil
+			in.Members[i].CommitIDs = nil
 			clean.Members[i].IndividualScope, clean.Members[i].CumulativeScope = changestacks.Scope{}, changestacks.Scope{}
 			clean.Members[i].Permissions, clean.Members[i].ReviewState, clean.Members[i].PublishedAt = changestacks.Permission{}, "", nil
+			clean.Members[i].Acknowledgements = nil
+			in.Members[i].Acknowledgements = nil
 		}
 		body, _ := json.Marshal(clean)
 		digest := sha256.Sum256(body)
@@ -337,6 +458,126 @@ func appendUniquePath(paths []string, candidate string) []string {
 		}
 	}
 	return append(paths, candidate)
+}
+
+func buildStackPullContext(v changestacks.Stack, index int, pulls *pullrequests.Store, checks *checkruns.Store, previewStore *previews.Store) stackPullContext {
+	m := v.Members[index]
+	ctx := stackPullContext{StackID: v.ID, StackTitle: v.Title, Outcome: v.Outcome, MemberID: m.ID, Position: m.Position, Revision: m.Revision, ParentRevision: m.ExpectedBaseRevision, TargetRevision: v.TargetRevision, IndividualScope: m.IndividualScope, CumulativeScope: m.CumulativeScope, CommitIDs: []string{}, Upstream: []stackRevisionRef{}, Evidence: []stackEvidence{}, DownstreamInvalidated: []stackRevisionRef{}, AcceptanceCriteria: m.AcceptanceCriteria, Authority: v.Authority}
+	blocked := false
+	for _, d := range m.Diagnostics {
+		blocked = blocked || d.Blocking
+	}
+	provisional := false
+	for i := 0; i < index; i++ {
+		u := v.Members[i]
+		current := u.Revision != "" && u.ReviewState != "stale" && !hasBlockingStackDiagnostic(u.Diagnostics)
+		ctx.Upstream = append(ctx.Upstream, stackRevisionRef{MemberID: u.ID, PullRequestID: u.PullRequestID, Revision: u.Revision, Current: current})
+		approved := false
+		if u.PullRequestID != "" {
+			if reviews, err := pulls.ListReviews(v.RepositoryID, u.PullRequestID); err == nil {
+				for _, review := range reviews {
+					if review.Decision == pullrequests.Approved && review.ReviewedCommitID == u.Revision && !review.Stale {
+						approved = true
+					}
+				}
+			}
+		}
+		if !current || !approved {
+			provisional = true
+		}
+	}
+	if blocked {
+		ctx.ReviewState = "blocked"
+	} else if provisional {
+		ctx.ReviewState = "provisional"
+	} else {
+		ctx.ReviewState = "reviewable_now"
+	}
+	for i := index + 1; i < len(v.Members); i++ {
+		d := v.Members[i]
+		ctx.DownstreamInvalidated = append(ctx.DownstreamInvalidated, stackRevisionRef{MemberID: d.ID, PullRequestID: d.PullRequestID, Revision: d.Revision, Current: d.ReviewState != "stale" && !hasBlockingStackDiagnostic(d.Diagnostics)})
+	}
+	ctx.CommitIDs = append(ctx.CommitIDs, m.CommitIDs...)
+	if comments, err := pulls.ListComments(v.RepositoryID, m.PullRequestID); err == nil {
+		for _, x := range comments {
+			state := "current"
+			if x.Revision == "" {
+				state = "unbound"
+			} else if x.Revision != m.Revision {
+				state = "stale"
+			}
+			ctx.Evidence = append(ctx.Evidence, stackEvidence{ID: x.ID, Kind: "discussion", ActorID: x.AuthorID, Revision: x.Revision, State: state, Summary: x.Body, CreatedAt: x.CreatedAt})
+		}
+	}
+	if reviews, err := pulls.ListReviews(v.RepositoryID, m.PullRequestID); err == nil {
+		for _, x := range reviews {
+			state := "current"
+			if x.Stale || x.ReviewedCommitID != m.Revision {
+				state = "stale"
+			}
+			ctx.Evidence = append(ctx.Evidence, stackEvidence{ID: x.ID, Kind: "review_decision", ActorID: x.ReviewerID, Revision: x.ReviewedCommitID, State: state, Summary: x.Decision, CreatedAt: x.UpdatedAt})
+		}
+	}
+	for _, x := range m.Acknowledgements {
+		state := "current"
+		if x.Revision != m.Revision || !sameUpstreamSnapshot(x.UpstreamRevisions, ctx.Upstream) {
+			state = "stale"
+		}
+		ctx.Evidence = append(ctx.Evidence, stackEvidence{ID: x.ID, Kind: "owner_acknowledgement", ActorID: x.OwnerID, Revision: x.Revision, State: state, Summary: x.Decision + stackNote(x.Note), CreatedAt: x.CreatedAt})
+	}
+	if checks != nil {
+		if runs, err := checks.List(v.RepositoryID, m.PullRequestID); err == nil {
+			for _, x := range runs {
+				state := "current"
+				if x.CommitID != m.Revision {
+					state = "stale"
+				}
+				ctx.Evidence = append(ctx.Evidence, stackEvidence{ID: x.ID, Kind: "check", ActorID: x.RequestedBy, Revision: x.CommitID, State: state, Summary: x.Definition.Name + ": " + x.State, CreatedAt: x.CreatedAt})
+			}
+		}
+	}
+	if previewStore != nil {
+		if ps, err := previewStore.List(v.RepositoryID, m.PullRequestID, m.Revision); err == nil {
+			for _, p := range ps {
+				state := "current"
+				if p.Stale || p.Revision != m.Revision {
+					state = "stale"
+				}
+				ctx.Evidence = append(ctx.Evidence, stackEvidence{ID: p.ID, Kind: "preview", ActorID: p.CreatorID, Revision: p.Revision, State: state, Summary: p.State, CreatedAt: p.CreatedAt})
+				for _, f := range p.Findings {
+					kind := "finding"
+					ctx.Evidence = append(ctx.Evidence, stackEvidence{ID: f.ID, Kind: kind, ActorID: f.AuthorID, Revision: f.Revision, State: state, Summary: f.Title + ": " + f.Status, CreatedAt: f.CreatedAt})
+				}
+			}
+		}
+	}
+	sort.Slice(ctx.Evidence, func(i, j int) bool { return ctx.Evidence[i].CreatedAt.Before(ctx.Evidence[j].CreatedAt) })
+	return ctx
+}
+func hasBlockingStackDiagnostic(xs []changestacks.Diagnostic) bool {
+	for _, x := range xs {
+		if x.Blocking {
+			return true
+		}
+	}
+	return false
+}
+func sameUpstreamSnapshot(snapshot map[string]string, refs []stackRevisionRef) bool {
+	if len(snapshot) != len(refs) {
+		return false
+	}
+	for _, r := range refs {
+		if snapshot[r.MemberID] != r.Revision || !r.Current {
+			return false
+		}
+	}
+	return true
+}
+func stackNote(note string) string {
+	if note == "" {
+		return ""
+	}
+	return ": " + note
 }
 
 func stackRangeView(headRepositoryPath, baseRepositoryPath, base, head string, authorizedRepositoryPaths ...string) (string, func(), error) {
@@ -487,6 +728,13 @@ func stackAuthors(path, base, head string) []string {
 	}
 	sort.Strings(xs)
 	return xs
+}
+func stackCommits(path, base, head string) []string {
+	out, err := gitOutput(path, "rev-list", "--reverse", base+".."+head)
+	if err != nil || out == "" {
+		return []string{}
+	}
+	return strings.Split(out, "\n")
 }
 func stackCycle(id string, g map[string][]string, visiting, done map[string]bool) bool {
 	if visiting[id] {
