@@ -52,6 +52,20 @@ adaptation, and restricted or embargoed details stay outside the handoff. Contri
 who retain target access. Neither campaign ownership nor publication grants Git, fork, session, workspace, pull,
 review, merge, package, release, federation, or cross-repository authority.
 
+After implementations exist, collaborators demonstrate behavior through `POST
+/repositories/{id}/propagation-campaigns/{campaign_id}/targets/{target_id}/equivalence-proofs`. The server derives the
+reusable scenario set from the source outcome's exact `.vivarium/checks.json` and the evidence requirements from campaign
+acceptance criteria. Every source scenario must map either to an exact adapted command using a target-defined bounded check
+environment or to explicit revision-bound substitute evidence when the target cannot support that test. It also executes
+every ordinary target check at the same exact target revision.
+
+The resulting matrix retains source and target commands, criteria coverage, terminal state, bounded logs,
+digest-addressed artifacts, compute cost, residual differences, and CAS-versioned decisions from named human target
+owners. Failed ordinary checks cannot demonstrate equivalence, and accepting substitute evidence does not erase a
+declared residual difference. Read projection rechecks the target release line, dependency manifests, and exact source
+scenario/acceptance digest so movement invalidates only the affected proof while its historical execution stays intact.
+The proof records provenance only and grant no check execution, Git, review, merge, release, deployment, or target authority.
+
 ## Shared regression search boundaries
 
 Repository collaborators open regression investigations through `POST

@@ -23,6 +23,12 @@ Plans retain direct-versus-adapted application, required deviation explanations,
 authorship/commits, acceptance criteria, cited assessment context, and ordered human/agent tasks. Existing scoped task
 sessions, workspaces, forks, federation, pulls, review, and merge paths govern execution; embargoed details remain outside
 the handoff, target access controls its projection, and campaign ownership grants none of those authorities.
+Behavioral equivalence proofs derive reusable scenarios and evidence requirements from the exact source check definition
+and campaign criteria, then execute each adaptation beside every ordinary target check in the same bounded, networkless,
+revision-exact executor. The campaign matrix retains commands, coverage, logs, digest-addressed artifacts, compute cost,
+residual differences, and named-owner decisions. Unsupported source scenarios require revision-bound substitute evidence;
+target-line, dependency-manifest, and source-assumption movement project only the affected proof stale without rewriting
+historical execution or granting check, Git, review, merge, release, deployment, or target authority.
 
 Regression investigations at `/repositories/{id}/regression-investigations` and the repository
 `/regressions` workspace turn a suspected regression from an issue, support thread, failed check,
