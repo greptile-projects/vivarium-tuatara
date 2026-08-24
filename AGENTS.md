@@ -29,6 +29,7 @@ deployments, backups, and active clones. Findings may name only the remediation'
 bounded derived-data categories, classify confirmed, suspected, unreachable, independently controlled, or
 unverifiable copies, and retain human or repository-bound read-only-agent attribution. Restricted copy and
 citation identities are redacted on API/web projection while their state and uncertainty remain visible.
+Named human remediation creators and response owners can assemble immutable rewrite candidates from scoped blob remove/replace rules and exact selected-ref tips. Assembly discards caller-supplied derived projections, recursively rewrites trees and commits into unreferenced Git objects, preserves unchanged objects and commit headers, strips invalidated signatures, retains restricted old-to-new maps and storage/link/rollback/collaborator impact, and refuses rules that do not affect every selected history. Bounded rehearsals retain a complete per-ref matrix of integrity, build, check, release, dependency, clone, and fetch outcomes; caller commands run only in preinstalled, networkless, read-only, capability-free containers. Rehearsals never move an authoritative ref, and publishing remains a separate governed milestone.
 
 Propagation campaigns at `/repositories/{id}/propagation-campaigns` and the repository
 `/propagation` workspace freeze an exact source outcome from a merged pull, security repair,

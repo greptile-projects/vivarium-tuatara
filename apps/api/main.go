@@ -1590,6 +1590,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	}
 	if authStore != nil && repositoryCatalog != nil && historyRemediationStore != nil && store != nil && securityFindingStore != nil && incidentStore != nil && supportThreadStore != nil && releaseStore != nil && packageStore != nil && deploymentStore != nil && checkRunStore != nil {
 		registerHistoryRemediationRoutes(mux, store, repositoryCatalog, authStore, historyRemediationStore, securityFindingStore, incidentStore, supportThreadStore, releaseStore, packageStore, deploymentStore, checkRunStore)
+		registerHistoryRewriteRoutes(mux, store, repositoryCatalog, authStore, historyRemediationStore)
 	}
 	if authStore != nil && userStore != nil && repositoryCatalog != nil && apiContractStore != nil && pullRequestStore != nil && releaseStore != nil {
 		registerAPIContractRoutes(mux, store, repositoryCatalog, authStore, apiContractStore, pullRequestStore, releaseStore)

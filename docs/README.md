@@ -51,6 +51,23 @@ independently controlled clone or backup without turning the remediation ledger 
 copy of restricted contents. Exposure-map records grant no inspection, clone, cache, package, deployment,
 backup, federation, Git, or remediation authority.
 
+Response owners plan replacement history through `POST
+/repositories/{id}/history-remediations/{remediation_id}/rewrite-candidates`. Each immutable rule removes a
+scoped blob or substitutes another existing blob, and each selected ref is bound to its exact current commit.
+The server discards caller-supplied mapping and impact fields, walks the full selected commit graph, writes replacement trees and commits as unreachable objects,
+and never updates a ref. Unaffected objects and commit authorship remain byte-identical; a changed signed commit
+is rebuilt without its now-invalid signature and is called out explicitly. The restricted candidate projection
+retains the complete old/new commit and object maps, candidate tips, broken signatures and commit links, object
+storage delta, independently controlled or unreachable copies, rollback limits, and required collaborator work.
+
+Owners exercise a candidate through its `/rehearsals` route. A rehearsal must cover repository integrity, build,
+ordinary checks, release production, dependency consumers, and representative clone and fetch behavior. Commands
+run for every selected replacement tip from an exact detached candidate checkout with bounded time and output;
+caller commands execute only in a named preinstalled, networkless, read-only, capability-free container, while
+integrity and local transport scenarios are server-defined. Missing revision-appropriate commands stay explicit as unsupported evidence, any non-pass keeps
+the rehearsal failed, and all evidence remains inside the remediation audience. Candidate assembly and rehearsal
+grant no ref update, object deletion, release, package, collaborator-machine, or publication authority.
+
 ## Propagation campaigns
 
 An authorized repository collaborator opens a durable shared delivery boundary through `POST
