@@ -60,6 +60,8 @@ type Member struct {
 
 type Stack struct {
 	ID             string       `json:"id"`
+	RequestID      string       `json:"request_id"`
+	RequestDigest  string       `json:"request_digest,omitempty"`
 	RepositoryID   string       `json:"repository_id"`
 	Title          string       `json:"title"`
 	Outcome        string       `json:"outcome"`
@@ -91,8 +93,11 @@ func New(root string) (*Store, error) {
 func (s *Store) Create(v Stack, actor string) (Stack, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if strings.TrimSpace(v.Title) == "" || len(v.Title) > 200 || strings.TrimSpace(v.Outcome) == "" || len(v.Outcome) > 4000 || strings.TrimSpace(v.TargetBranch) == "" || len(v.Members) == 0 || len(v.Members) > 50 || actor == "" {
+	if strings.TrimSpace(v.RequestID) == "" || len(v.RequestID) > 128 || strings.TrimSpace(v.RequestDigest) == "" || strings.TrimSpace(v.Title) == "" || len(v.Title) > 200 || strings.TrimSpace(v.Outcome) == "" || len(v.Outcome) > 4000 || strings.TrimSpace(v.TargetBranch) == "" || len(v.Members) == 0 || len(v.Members) > 50 || actor == "" {
 		return Stack{}, ErrInvalid
+	}
+	if existing, found, err := s.reconcile(v.RepositoryID, v.RequestID, v.RequestDigest); found || err != nil {
+		return existing, err
 	}
 	seen := map[string]bool{}
 	for i := range v.Members {
@@ -121,6 +126,23 @@ func (s *Store) Create(v Stack, actor string) (Stack, error) {
 	return v, s.write(v)
 }
 
+func (s *Store) reconcile(repo, requestID, digest string) (Stack, bool, error) {
+	items, err := s.list(repo)
+	if err != nil {
+		return Stack{}, false, err
+	}
+	for _, item := range items {
+		if item.RequestID != requestID {
+			continue
+		}
+		if item.RequestDigest != digest {
+			return Stack{}, true, ErrInvalid
+		}
+		return item, true, nil
+	}
+	return Stack{}, false, nil
+}
+
 func (s *Store) Get(repo, id string) (Stack, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -129,6 +151,9 @@ func (s *Store) Get(repo, id string) (Stack, error) {
 func (s *Store) List(repo string) ([]Stack, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.list(repo)
+}
+func (s *Store) list(repo string) ([]Stack, error) {
 	entries, err := os.ReadDir(filepath.Join(s.root, repo))
 	if errors.Is(err, os.ErrNotExist) {
 		return []Stack{}, nil

@@ -1,6 +1,12 @@
 package main
 
-import "testing"
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
 func TestChangeStackCycleRemainsExplicit(t *testing.T) {
 	graph := map[string][]string{"one": {"two"}, "two": {"one"}}
@@ -9,5 +15,45 @@ func TestChangeStackCycleRemainsExplicit(t *testing.T) {
 	}
 	if stackCycle("one", map[string][]string{"one": nil}, map[string]bool{}, map[string]bool{}) {
 		t.Fatal("acyclic member was blocked")
+	}
+}
+
+func TestChangeStackRangeViewJoinsDistinctObjectStores(t *testing.T) {
+	makeRepo := func(name, contents string) (string, string) {
+		dir := filepath.Join(t.TempDir(), name)
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		run := func(args ...string) string {
+			command := exec.Command("git", args...)
+			command.Env = append(os.Environ(), "GIT_AUTHOR_NAME=Stack Author", "GIT_AUTHOR_EMAIL=stack@example.test", "GIT_COMMITTER_NAME=Stack Author", "GIT_COMMITTER_EMAIL=stack@example.test")
+			output, err := command.CombinedOutput()
+			if err != nil {
+				t.Fatalf("git %v: %v: %s", args, err, output)
+			}
+			return strings.TrimSpace(string(output))
+		}
+		run("init", "-q", dir)
+		if err := os.WriteFile(filepath.Join(dir, "layer.txt"), []byte(contents), 0600); err != nil {
+			t.Fatal(err)
+		}
+		run("-C", dir, "add", "layer.txt")
+		run("-C", dir, "commit", "-qm", name)
+		bare := filepath.Join(t.TempDir(), name+".git")
+		run("clone", "-q", "--bare", dir, bare)
+		return bare, run("-C", dir, "rev-parse", "HEAD")
+	}
+	baseRepo, base := makeRepo("base", "base\n")
+	headRepo, head := makeRepo("head", "head\n")
+	view, cleanup, err := stackRangeView(headRepo, baseRepo, base, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	if !commitExists(view, base) || !commitExists(view, head) {
+		t.Fatal("range view did not import both exact commits")
+	}
+	if scope := stackScope(view, base, head); len(scope.Files) != 1 || scope.Files[0] != "layer.txt" {
+		t.Fatalf("joined scope = %#v", scope)
 	}
 }

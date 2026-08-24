@@ -3,8 +3,12 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -90,24 +94,50 @@ func registerChangeStackRoutes(mux *http.ServeMux, git *storage.Store, catalog *
 				revisions[m.Revision] = m.ID
 			}
 			base := v.TargetRevision
+			baseRepositoryPath := ""
+			if targetRepo != nil {
+				baseRepositoryPath = targetRepo.Path()
+			}
 			if i > 0 {
 				base = v.Members[i-1].Revision
+				previousSourceID := v.Members[i-1].SourceRepositoryID
+				if previousSourceID == "" {
+					previousSourceID = v.RepositoryID
+				}
+				if previousSourceID == v.RepositoryID || participant(previousSourceID) {
+					if previous, openErr := git.Open(previousSourceID); openErr == nil {
+						baseRepositoryPath = previous.Path()
+					}
+				} else {
+					baseRepositoryPath = ""
+				}
 			}
 			m.ExpectedBaseRevision = base
 			if m.BaseRevision != "" && m.BaseRevision != base {
 				m.Diagnostics = append(m.Diagnostics, diag("base_mismatch", "pull request base does not match the preceding stack revision", true))
 			}
-			if base == "" || !commitExists(source.Path(), base) {
+			if base == "" || baseRepositoryPath == "" || !commitExists(baseRepositoryPath, base) {
 				m.Diagnostics = append(m.Diagnostics, diag("base_missing", "declared parent revision is unavailable", true))
 				continue
 			}
-			if _, x := gitOutput(source.Path(), "merge-base", "--is-ancestor", base, m.Revision); x != nil {
+			rangePath, cleanup, rangeErr := stackRangeView(source.Path(), baseRepositoryPath, base, m.Revision)
+			if rangeErr != nil {
+				m.Diagnostics = append(m.Diagnostics, diag("base_missing", "declared parent objects could not be assembled", true))
+				continue
+			}
+			if _, x := gitOutput(rangePath, "merge-base", "--is-ancestor", base, m.Revision); x != nil {
 				m.Diagnostics = append(m.Diagnostics, diag("unrelated_history", "revision does not descend from its declared parent", true))
 			}
-			m.IndividualScope = stackScope(source.Path(), base, m.Revision)
-			m.CumulativeScope = stackScope(source.Path(), v.TargetRevision, m.Revision)
-			m.Authors = stackAuthors(source.Path(), base, m.Revision)
-			diff, _ := gitOutput(source.Path(), "diff", "--binary", base, m.Revision)
+			m.IndividualScope = stackScope(rangePath, base, m.Revision)
+			m.Authors = stackAuthors(rangePath, base, m.Revision)
+			diff, _ := gitOutput(rangePath, "diff", "--binary", base, m.Revision)
+			cleanup()
+			if targetRepo != nil {
+				if cumulativePath, cumulativeCleanup, cumulativeErr := stackRangeView(source.Path(), targetRepo.Path(), v.TargetRevision, m.Revision); cumulativeErr == nil {
+					m.CumulativeScope = stackScope(cumulativePath, v.TargetRevision, m.Revision)
+					cumulativeCleanup()
+				}
+			}
 			sum := sha256.Sum256([]byte(diff))
 			key := hex.EncodeToString(sum[:])
 			if prior := patches[key]; key != "" && prior != "" {
@@ -177,6 +207,19 @@ func registerChangeStackRoutes(mux *http.ServeMux, git *storage.Store, catalog *
 			return
 		}
 		in.RepositoryID = r.PathValue("id")
+		clean := in
+		clean.ID, clean.RequestDigest, clean.CreatedBy, clean.Authority = "", "", "", ""
+		clean.CreatedAt, clean.TargetRevision, clean.Diagnostics = time.Time{}, "", nil
+		for i := range clean.Members {
+			clean.Members[i].Position = 0
+			clean.Members[i].Revision, clean.Members[i].BaseRevision, clean.Members[i].ExpectedBaseRevision = "", "", ""
+			clean.Members[i].Authors, clean.Members[i].Diagnostics = nil, nil
+			clean.Members[i].IndividualScope, clean.Members[i].CumulativeScope = changestacks.Scope{}, changestacks.Scope{}
+			clean.Members[i].Permissions, clean.Members[i].ReviewState, clean.Members[i].PublishedAt = changestacks.Permission{}, "", nil
+		}
+		body, _ := json.Marshal(clean)
+		digest := sha256.Sum256(body)
+		in.RequestDigest = hex.EncodeToString(digest[:])
 		target, e := git.Open(in.RepositoryID)
 		if e != nil {
 			writeAPIError(w, 422, "change_stack_target_missing", "target repository is unavailable")
@@ -195,6 +238,14 @@ func registerChangeStackRoutes(mux *http.ServeMux, git *storage.Store, catalog *
 				sourceID = in.RepositoryID
 				m.SourceRepositoryID = sourceID
 			}
+			sourceCatalog, catalogErr := catalog.GetByID(sourceID)
+			allowed := catalogErr == nil && sourceCatalog.OwnerID == actor.UserID
+			if !allowed {
+				allowed, _ = catalog.HasCollaborator(actor.UserID, sourceID)
+			}
+			if !allowed {
+				continue
+			}
 			source, openErr := git.Open(sourceID)
 			if openErr != nil {
 				continue
@@ -207,26 +258,13 @@ func registerChangeStackRoutes(mux *http.ServeMux, git *storage.Store, catalog *
 			if i > 0 && in.Members[i-1].Revision != "" {
 				m.BaseRevision = in.Members[i-1].Revision
 			}
-			now := time.Now().UTC()
-			m.PublishedAt, m.ReviewState = &now, "published"
-			if m.PullRequestID == "" {
-				sourceRepo, catalogErr := catalog.GetByID(sourceID)
-				allowed := catalogErr == nil && sourceRepo.OwnerID == actor.UserID
-				if !allowed {
-					allowed, _ = catalog.HasCollaborator(actor.UserID, sourceID)
+			m.ReviewState = "pending"
+			if m.PullRequestID != "" {
+				if p, pullErr := pulls.Get(in.RepositoryID, m.PullRequestID); pullErr == nil {
+					m.Revision, m.BaseRevision, m.SourceBranch, m.SourceRepositoryID = p.SourceCommitID, p.TargetCommitID, p.SourceBranch, p.SourceRepositoryID
+					now := time.Now().UTC()
+					m.PublishedAt, m.ReviewState = &now, "published"
 				}
-				if allowed {
-					targetBranch := in.TargetBranch
-					if i > 0 {
-						targetBranch = in.Members[i-1].SourceBranch
-					}
-					p, createErr := pulls.CreateFrom(in.RepositoryID, sourceID, actor.UserID, m.Title, in.Outcome+"\n\nAcceptance criteria:\n- "+strings.Join(m.AcceptanceCriteria, "\n- "), m.SourceBranch, targetBranch, nil)
-					if createErr == nil || errors.Is(createErr, pullrequests.ErrDurabilityUncertain) {
-						m.PullRequestID, m.Revision, m.BaseRevision = p.ID, p.SourceCommitID, p.TargetCommitID
-					}
-				}
-			} else if p, pullErr := pulls.Get(in.RepositoryID, m.PullRequestID); pullErr == nil {
-				m.Revision, m.BaseRevision, m.SourceBranch, m.SourceRepositoryID = p.SourceCommitID, p.TargetCommitID, p.SourceBranch, p.SourceRepositoryID
 			}
 		}
 		out, e := stacks.Create(in, actor.UserID)
@@ -238,8 +276,83 @@ func registerChangeStackRoutes(mux *http.ServeMux, git *storage.Store, catalog *
 			writeAPIError(w, 500, "change_stacks_unavailable", "change stack could not be published")
 			return
 		}
+		for i := range out.Members {
+			m := &out.Members[i]
+			if m.PullRequestID != "" || m.Revision == "" {
+				continue
+			}
+			sourceRepo, catalogErr := catalog.GetByID(m.SourceRepositoryID)
+			allowed := catalogErr == nil && sourceRepo.OwnerID == actor.UserID
+			if !allowed {
+				allowed, _ = catalog.HasCollaborator(actor.UserID, m.SourceRepositoryID)
+			}
+			if !allowed {
+				continue
+			}
+			targetBranch := out.TargetBranch
+			if i > 0 {
+				targetBranch = out.Members[i-1].SourceBranch
+			}
+			marker := "Change stack: " + out.ID + "/" + m.ID
+			var p pullrequests.PullRequest
+			for _, existing := range mustListPulls(pulls, out.RepositoryID) {
+				if existing.AuthorID == actor.UserID && existing.SourceRepositoryID == m.SourceRepositoryID && existing.SourceBranch == m.SourceBranch && existing.TargetBranch == targetBranch && strings.Contains(existing.Body, marker) {
+					p = existing
+					break
+				}
+			}
+			if p.ID == "" {
+				var createErr error
+				p, createErr = pulls.CreateFrom(out.RepositoryID, m.SourceRepositoryID, actor.UserID, m.Title, out.Outcome+"\n\nAcceptance criteria:\n- "+strings.Join(m.AcceptanceCriteria, "\n- ")+"\n\n"+marker, m.SourceBranch, targetBranch, nil)
+				if createErr != nil && !errors.Is(createErr, pullrequests.ErrDurabilityUncertain) {
+					continue
+				}
+			}
+			now := time.Now().UTC()
+			m.PullRequestID, m.Revision, m.BaseRevision, m.PublishedAt, m.ReviewState = p.ID, p.SourceCommitID, p.TargetCommitID, &now, "published"
+			if updateErr := stacks.Update(out); updateErr != nil {
+				writeAPIError(w, 500, "change_stack_publication_pending", "the reserved stack could not retain its pull publication; retry with the same request_id")
+				return
+			}
+		}
 		writeJSON(w, 201, project(out, actor, true))
 	})
+}
+
+func mustListPulls(store *pullrequests.Store, repo string) []pullrequests.PullRequest {
+	items, err := store.List(repo)
+	if err != nil {
+		return nil
+	}
+	return items
+}
+
+func stackRangeView(headRepositoryPath, baseRepositoryPath, base, head string) (string, func(), error) {
+	dir, err := os.MkdirTemp("", "vivarium-change-stack-range-")
+	if err != nil {
+		return "", func() {}, err
+	}
+	cleanup := func() { _ = os.RemoveAll(dir) }
+	if output, initErr := exec.Command("git", "init", "--bare", "--quiet", dir).CombinedOutput(); initErr != nil {
+		cleanup()
+		return "", func() {}, errors.New(strings.TrimSpace(string(output)))
+	}
+	fetch := func(repositoryPath, revision, ref string) error {
+		command := exec.Command("git", "--git-dir="+dir, "fetch", "--quiet", "--no-tags", repositoryPath, revision+":"+ref)
+		if output, fetchErr := command.CombinedOutput(); fetchErr != nil {
+			return errors.New(strings.TrimSpace(string(output)))
+		}
+		return nil
+	}
+	if err = fetch(baseRepositoryPath, base, "refs/vivarium/base"); err != nil {
+		cleanup()
+		return "", func() {}, err
+	}
+	if err = fetch(headRepositoryPath, head, "refs/vivarium/head"); err != nil {
+		cleanup()
+		return "", func() {}, err
+	}
+	return filepath.Clean(dir), cleanup, nil
 }
 
 func diag(code, message string, blocking bool) changestacks.Diagnostic {
