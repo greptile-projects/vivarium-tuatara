@@ -103,6 +103,13 @@ Failed scenario runs and partial acceptance never become corrections, including 
 IDs and check names retain the reviewable bridge for promoting a maintainable scenario into the quality plan and
 required-check policy; the investigation itself does not mutate either system or grant delivery authority.
 
+The connected `regression-investigation-journey.spec.ts` browser/API/stock-Git journey starts from a
+released user report and retains a merge-shaped history, exact passing and failing comparisons, an
+unbuildable revision, flaky midpoint ambiguity, a challenged false culprit, an evidence-supported
+merge cause, a failed-revert tradeoff, containment, agent-owned forward repair and backport work, and
+revoked agent evidence access. It proves that the web workspace and public ledgers preserve one
+reviewable path from user impact through bounded experiments and ordinary governed recovery.
+
 ## Meaning-preserving conflict checkpoints
 
 Conflict-reconciliation workspaces can turn a resolved working tree into an unreferenced, immutable

@@ -60,6 +60,11 @@ proof explicitly; status alone never closes it. Retained requirement and check n
 be carried into quality planning and required-check policy without granting plan, check, Git, review, release,
 deployment, or environment authority.
 
+The connected `regression-investigation-journey.spec.ts` browser/API/stock-Git journey covers a released
+user report, merge-shaped history, exact bounded comparisons, flaky and unbuildable midpoint gaps, a
+challenged false culprit, the supported merge-introduced cause, failed-revert tradeoffs, containment,
+agent-owned repair/backport handoff, revoked evidence access, and the durable web-visible recovery trail.
+
 Conflict reconciliation resolution checkpoints in the workspace ledger assemble an immutable unreferenced
 two-parent candidate and retain all affected required checks, reproductions, contract/schema scenarios,
 preview acceptance, and repository conflict tests with exact commands, criteria, coverage, logs, artifacts,
