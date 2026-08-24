@@ -67,6 +67,70 @@ type Finding struct {
 	ActorKind        string    `json:"actor_kind"`
 	CreatedAt        time.Time `json:"created_at"`
 }
+type CandidateRepository struct {
+	ID               string   `json:"id"`
+	DestinationID    string   `json:"destination_id"`
+	DefaultBranch    string   `json:"default_branch"`
+	Tip              string   `json:"tip"`
+	Tree             string   `json:"tree"`
+	ObjectCount      int      `json:"object_count"`
+	SizeBytes        int64    `json:"size_bytes"`
+	Mappings         []string `json:"mapping_ids"`
+	SourceCommits    []string `json:"source_commits"`
+	PreservedTags    []string `json:"preserved_tags,omitempty"`
+	LicensePaths     []string `json:"license_paths,omitempty"`
+	ProvenanceSHA256 string   `json:"provenance_sha256"`
+	SignatureState   string   `json:"signature_state"`
+}
+type CandidateGap struct {
+	Kind             string `json:"kind"`
+	ResourceID       string `json:"resource_id"`
+	State            string `json:"state"`
+	Summary          string `json:"summary"`
+	RequiredDecision string `json:"required_decision"`
+}
+type CandidateSet struct {
+	ID                   string                `json:"id"`
+	RequestID            string                `json:"request_id"`
+	RequestDigest        string                `json:"request_digest,omitempty"`
+	PlanVersion          int                   `json:"plan_version"`
+	Repositories         []CandidateRepository `json:"repositories"`
+	CrossRepositoryLinks []string              `json:"cross_repository_links,omitempty"`
+	Gaps                 []CandidateGap        `json:"gaps,omitempty"`
+	CreatedBy            string                `json:"created_by"`
+	CreatedAt            time.Time             `json:"created_at"`
+	Authority            string                `json:"authority"`
+	Rehearsals           []Rehearsal           `json:"rehearsals,omitempty"`
+}
+type Scenario struct {
+	ID             string `json:"id"`
+	Kind           string `json:"kind"`
+	DestinationID  string `json:"destination_id"`
+	Image          string `json:"image,omitempty"`
+	Command        string `json:"command,omitempty"`
+	Expectation    string `json:"expectation"`
+	TimeoutSeconds int    `json:"timeout_seconds"`
+}
+type Outcome struct {
+	ScenarioID    string `json:"scenario_id"`
+	Kind          string `json:"kind"`
+	DestinationID string `json:"destination_id"`
+	State         string `json:"state"`
+	ExitCode      int    `json:"exit_code"`
+	Output        string `json:"output,omitempty"`
+	DurationMS    int64  `json:"duration_ms"`
+}
+type Rehearsal struct {
+	ID                string     `json:"id"`
+	RequestID         string     `json:"request_id"`
+	Scenarios         []Scenario `json:"scenarios"`
+	Outcomes          []Outcome  `json:"outcomes"`
+	State             string     `json:"state"`
+	CostUnits         float64    `json:"cost_units"`
+	RequiredDecisions []string   `json:"required_decisions,omitempty"`
+	CreatedBy         string     `json:"created_by"`
+	CreatedAt         time.Time  `json:"created_at"`
+}
 type Plan struct {
 	ID              string             `json:"id"`
 	RequestID       string             `json:"request_id"`
@@ -82,6 +146,7 @@ type Plan struct {
 	SuccessCriteria []string           `json:"success_criteria"`
 	RollbackLimits  []string           `json:"rollback_limits"`
 	Findings        []Finding          `json:"findings,omitempty"`
+	CandidateSets   []CandidateSet     `json:"candidate_sets,omitempty"`
 	Version         int                `json:"version"`
 	CreatedBy       string             `json:"created_by"`
 	CreatedAt       time.Time          `json:"created_at"`
@@ -225,6 +290,142 @@ func (s *Store) AddFinding(repo, id, actor, kind string, in Finding) (Plan, erro
 	v.Version++
 	return v, s.write(v)
 }
+func (s *Store) AddCandidateSet(repo, id, actor string, expected int, in CandidateSet) (Plan, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lockRoot()
+	if err != nil {
+		return Plan{}, err
+	}
+	defer unlock()
+	v, err := s.read(repo, id)
+	if err != nil {
+		return Plan{}, err
+	}
+	for _, x := range v.CandidateSets {
+		if x.RequestID == in.RequestID {
+			if x.RequestDigest == in.RequestDigest {
+				return v, nil
+			}
+			return Plan{}, ErrConflict
+		}
+	}
+	if expected != v.Version || !bounded(in.RequestID, 1, 200) || len(in.Repositories) == 0 {
+		if expected != v.Version {
+			return Plan{}, ErrVersion
+		}
+		return Plan{}, ErrInvalid
+	}
+	if in.ID == "" {
+		in.ID = randomID()
+	} else if !safeID(in.ID) {
+		return Plan{}, ErrInvalid
+	}
+	in.PlanVersion = v.Version
+	in.CreatedBy = actor
+	in.CreatedAt = s.now()
+	in.Authority = "immutable rehearsal material only; candidates grant no destination repository, Git, collaboration, resource migration, or publication authority"
+	v.CandidateSets = append(v.CandidateSets, in)
+	v.Version++
+	return v, s.write(v)
+}
+
+// CreateCandidateSet serializes reconciliation, assembly publication, and
+// ledger registration under the cross-process root lock. This prevents a
+// losing plan-version update from leaving an unregistered bare repository and
+// makes overlapping exact requests reconcile before filesystem publication.
+func (s *Store) CreateCandidateSet(repo, id, actor string, expected int, requestID, digest string, assemble func(Plan) (CandidateSet, error)) (Plan, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lockRoot()
+	if err != nil {
+		return Plan{}, err
+	}
+	defer unlock()
+	v, err := s.read(repo, id)
+	if err != nil {
+		return Plan{}, err
+	}
+	for _, x := range v.CandidateSets {
+		if x.RequestID != requestID {
+			continue
+		}
+		if x.RequestDigest != digest {
+			return Plan{}, ErrConflict
+		}
+		return v, nil
+	}
+	if expected != v.Version {
+		return Plan{}, ErrVersion
+	}
+	in, err := assemble(v)
+	cleanup := func() {
+		if safeID(in.ID) {
+			_ = os.RemoveAll(filepath.Dir(s.CandidatePath(repo, id, in.ID, "unused")))
+		}
+	}
+	if err != nil {
+		cleanup()
+		return Plan{}, err
+	}
+	if !safeID(in.ID) || in.RequestID != requestID || in.RequestDigest != digest || len(in.Repositories) == 0 {
+		cleanup()
+		return Plan{}, ErrInvalid
+	}
+	in.PlanVersion = v.Version
+	in.CreatedBy = actor
+	in.CreatedAt = s.now()
+	in.Authority = "immutable rehearsal material only; candidates grant no destination repository, Git, collaboration, resource migration, or publication authority"
+	v.CandidateSets = append(v.CandidateSets, in)
+	v.Version++
+	if err = s.write(v); err != nil {
+		cleanup()
+		return Plan{}, err
+	}
+	return v, nil
+}
+func (s *Store) AddRehearsal(repo, id, candidateID, actor string, expected int, in Rehearsal) (Plan, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lockRoot()
+	if err != nil {
+		return Plan{}, err
+	}
+	defer unlock()
+	v, err := s.read(repo, id)
+	if err != nil {
+		return Plan{}, err
+	}
+	if expected != v.Version {
+		return Plan{}, ErrVersion
+	}
+	for i := range v.CandidateSets {
+		c := &v.CandidateSets[i]
+		if c.ID != candidateID {
+			continue
+		}
+		for _, x := range c.Rehearsals {
+			if x.RequestID == in.RequestID {
+				a, _ := json.Marshal(x.Scenarios)
+				b, _ := json.Marshal(in.Scenarios)
+				if string(a) == string(b) {
+					return v, nil
+				}
+				return Plan{}, ErrConflict
+			}
+		}
+		in.ID = randomID()
+		in.CreatedBy = actor
+		in.CreatedAt = s.now()
+		c.Rehearsals = append(c.Rehearsals, in)
+		v.Version++
+		return v, s.write(v)
+	}
+	return Plan{}, ErrNotFound
+}
+func (s *Store) CandidatePath(repo, plan, candidate, destination string) string {
+	return filepath.Join(s.root, "candidates", repo, plan, candidate, destination+".git")
+}
 func sameFinding(a, b Finding) bool {
 	return a.Version == b.Version && strings.Join(a.InventoryItemIDs, "\x00") == strings.Join(b.InventoryItemIDs, "\x00") && a.Body == b.Body && strings.Join(a.Citations, "\x00") == strings.Join(b.Citations, "\x00")
 }
@@ -232,7 +433,7 @@ func sameFinding(a, b Finding) bool {
 var kinds = map[string]bool{"ref": true, "pull_request": true, "issue": true, "task": true, "release": true, "package": true, "documentation": true, "policy": true, "workspace": true, "automation": true, "consumer": true, "federated_relationship": true}
 
 func validate(v Plan) error {
-	if !bounded(v.RequestID, 1, 200) || !bounded(v.RepositoryID, 1, 200) || !bounded(v.Title, 1, 300) || !bounded(v.Intent, 1, 4000) || len(v.Sources) == 0 || len(v.Destinations) == 0 || len(v.Mappings) == 0 || len(v.Inventory) == 0 || v.Deadline.IsZero() || len(v.SuccessCriteria) == 0 || len(v.RollbackLimits) == 0 {
+	if !bounded(v.RequestID, 1, 200) || !bounded(v.RepositoryID, 1, 200) || !bounded(v.Title, 1, 300) || !bounded(v.Intent, 1, 4000) || len(v.Sources) == 0 || len(v.Destinations) == 0 || len(v.Destinations) > 20 || len(v.Mappings) == 0 || len(v.Inventory) == 0 || v.Deadline.IsZero() || len(v.SuccessCriteria) == 0 || len(v.RollbackLimits) == 0 {
 		return ErrInvalid
 	}
 	src, dst, inv := map[string]bool{}, map[string]bool{}, map[string]bool{}
@@ -243,13 +444,13 @@ func validate(v Plan) error {
 		src[x.RepositoryID] = true
 	}
 	for _, x := range v.Destinations {
-		if !bounded(x.ID, 1, 100) || !bounded(x.Name, 1, 200) || len(x.OwnerIDs) == 0 || (x.Visibility != "public" && x.Visibility != "private" && x.Visibility != "internal") || !bounded(x.DefaultBranch, 1, 200) || dst[x.ID] {
+		if !safeID(x.ID) || !bounded(x.Name, 1, 200) || len(x.OwnerIDs) == 0 || (x.Visibility != "public" && x.Visibility != "private" && x.Visibility != "internal") || !safeRef(x.DefaultBranch) || dst[x.ID] {
 			return ErrInvalid
 		}
 		dst[x.ID] = true
 	}
 	for _, x := range v.Mappings {
-		if !bounded(x.ID, 1, 100) || !src[x.SourceRepositoryID] || !bounded(x.SourcePath, 1, 1000) || (x.Disposition != "move" && x.Disposition != "copy" && x.Disposition != "remain") || (x.HistoryMode != "full" && x.HistoryMode != "selected" && x.HistoryMode != "none") || (x.Disposition != "remain" && !dst[x.DestinationID]) {
+		if !safeID(x.ID) || !src[x.SourceRepositoryID] || !safePath(x.SourcePath) || (x.DestinationPath != "" && !safePath(x.DestinationPath)) || (x.Disposition != "move" && x.Disposition != "copy" && x.Disposition != "remain") || (x.HistoryMode != "full" && x.HistoryMode != "selected" && x.HistoryMode != "none") || (x.Disposition != "remain" && !dst[x.DestinationID]) {
 			return ErrInvalid
 		}
 	}
@@ -281,6 +482,27 @@ func validate(v Plan) error {
 func bounded(s string, min, max int) bool {
 	n := len(strings.TrimSpace(s))
 	return n >= min && n <= max
+}
+func safeID(v string) bool {
+	if !bounded(v, 1, 100) {
+		return false
+	}
+	for _, r := range v {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_') {
+			return false
+		}
+	}
+	return true
+}
+func safePath(v string) bool {
+	if !bounded(v, 1, 1000) || filepath.IsAbs(v) {
+		return false
+	}
+	clean := filepath.Clean(v)
+	return clean != ".." && !strings.HasPrefix(clean, ".."+string(filepath.Separator))
+}
+func safeRef(v string) bool {
+	return bounded(v, 1, 200) && !strings.ContainsAny(v, " ~^:?*[\\") && !strings.Contains(v, "..") && !strings.HasPrefix(v, "/") && !strings.HasSuffix(v, "/") && !strings.HasSuffix(v, ".")
 }
 func randomID() string                       { b := make([]byte, 16); _, _ = rand.Read(b); return hex.EncodeToString(b) }
 func (s *Store) dir(repo string) string      { return filepath.Join(s.root, repo) }

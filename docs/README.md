@@ -214,6 +214,22 @@ This is a review and coordination boundary: it creates no repository,
 moves no Git or collaboration record, changes no owner/visibility/policy, and grants no source or
 destination write authority.
 
+Current human collaborators assemble reviewed mappings through a plan's `candidate-sets` route.
+Immutable bare candidates remain outside the repository catalog and retain mapped trees over the
+requested source ancestry, source authorship, selected tag objects, license paths, required links,
+exact tips/trees, object and byte costs, signature status, and SHA-256 provenance. Collisions,
+unavailable history, policy gaps, inaccessible inventory, missing tags, and independently controlled
+resources are explicit decisions. Exact retries return the same candidate.
+
+Candidate rehearsals freeze exactly eleven required scenario kinds per destination, reject duplicates,
+and enforce per-scenario and 900-second aggregate budgets. Stock Git performs integrity, clone,
+fetch, and push into a disposable copy. Builds, checks, package and API resolution, documentation,
+workspaces, and consumer journeys run from candidate clones in preinstalled networkless, read-only,
+capability-free containers. Outcomes, bounded logs, cost, unsupported commands, and candidate gaps
+remain inspectable; assembly and rehearsal never register destinations or move authoritative state.
+Candidate assembly and ledger registration share a cross-process serialization boundary; bare repositories
+publish from unique staging paths by atomic rename, and exact concurrent requests reconcile safely.
+
 ## Shared regression search boundaries
 
 Repository collaborators open regression investigations through `POST

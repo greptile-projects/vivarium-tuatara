@@ -28,6 +28,7 @@ import (
 )
 
 func registerRestructuringPlanRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, organizationsStore *organizations.Store, plans *restructuringplans.Store, pulls *pullrequests.Store, issueStore *issues.Store, proposalStore *proposals.Store, releaseStore *releases.Store, packageStore *packageversions.Store, docs *docscollections.Store, policies *governance.Store, workspaceStore *workspaces.Store, workflows *collaborationworkflows.Store, consumers *relationships.Store, peers *federation.Store) {
+	registerRestructuringCandidateRoutes(mux, git, catalog, credentials, plans)
 	actorID := func(c auth.Credential) string {
 		if c.AgentID != "" {
 			return c.AgentID
@@ -81,6 +82,7 @@ func registerRestructuringPlanRoutes(mux *http.ServeMux, git *storage.Store, cat
 		clean.Version = 0
 		clean.Authority = ""
 		clean.Findings = nil
+		clean.CandidateSets = nil
 		b, _ := json.Marshal(clean)
 		sum := sha256.Sum256(b)
 		digest := hex.EncodeToString(sum[:])
