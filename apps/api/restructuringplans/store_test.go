@@ -102,3 +102,18 @@ func TestRequiresCompleteExplicitInventory(t *testing.T) {
 		t.Fatalf("hidden state = %v", e)
 	}
 }
+
+func TestPlanRejectsCandidatePathTraversal(t *testing.T) {
+	s, _ := New(t.TempDir())
+	for _, mutate := range []func(*Plan){
+		func(p *Plan) { p.Destinations[0].ID = "../../outside"; p.Mappings[0].DestinationID = "../../outside" },
+		func(p *Plan) { p.Mappings[0].DestinationPath = "../outside" },
+		func(p *Plan) { p.Destinations[0].DefaultBranch = "main..escape" },
+	} {
+		p := completePlan()
+		mutate(&p)
+		if _, err := s.Create(p, "owner", randomID()); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("unsafe plan accepted: %#v, %v", p, err)
+		}
+	}
+}

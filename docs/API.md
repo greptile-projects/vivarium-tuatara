@@ -1,5 +1,20 @@
 # HTTP API contract
 
+## Repository restructuring candidates
+
+`POST /repositories/{id}/restructuring-plans/{plan_id}/candidate-sets` accepts a stable `request_id`,
+current `expected_version`, and bounded cross-repository links. A current human collaborator with
+read access to every frozen source assembles immutable bare candidates from declared mappings. The
+response retains tip/tree IDs, source commits, mappings, tags, license evidence, object/byte cost,
+signature status, SHA-256 provenance, and explicit gaps. It creates no catalog repository and moves
+no source ref or collaboration record.
+
+`POST .../candidate-sets/{candidate_id}/rehearsals` requires `repository_integrity`, `clone`, `fetch`,
+`push`, `build`, `check`, `package_resolution`, `api_resolution`, `documentation`, `workspace`, and
+`consumer_journey` scenarios. Git writes target disposable copies; commands run in preinstalled
+networkless, read-only, capability-free containers. Retained evidence includes bounded output,
+duration-derived cost, unsupported cases, and owner decisions, so passing checks cannot hide gaps.
+
 ## Consequential workflow governance
 
 `GET` and owner-only `PUT /repositories/{id}/collaboration-workflow-governance` expose a

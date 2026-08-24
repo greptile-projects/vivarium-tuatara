@@ -3116,5 +3116,14 @@ human repository collaborator.
 CAS-versioned human or repository-bound read-only-agent findings must cite retained inventory
 items and evidence. Plans are coordination records only and grant no repository creation, Git,
 resource migration, ownership, visibility, policy, or destination authority.
+Authorized human collaborators can assemble retry-stable immutable candidate sets from exact plan
+mappings without cataloging a destination or moving a source ref. Bare candidates retain mapped
+trees, requested full/selected ancestry, source authorship, selected tag objects, license paths,
+cross-repository links, object/storage cost, signature status, and SHA-256 provenance. Inventory
+gaps, unmovable resources, path collisions, and missing tags remain required decisions. Rehearsals
+retain an eleven-part matrix for stock Git integrity/clone/fetch/disposable push and networkless,
+read-only, capability-free build, check, package/API, documentation, workspace, and consumer runs.
+They retain bounded output and duration-derived cost and never mutate sources, candidates, catalog
+repositories, or active collaboration.
 
 Sensitive history remediations at `/repositories/{id}/history-remediations` and the repository
