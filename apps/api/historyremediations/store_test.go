@@ -185,7 +185,7 @@ func TestRewriteCandidateAndRehearsalAreCASVersionedAndRetryStable(t *testing.T)
 	if err != nil || approved.Version != 4 {
 		t.Fatalf("approval = %#v, %v", approved.PublicationApprovals, err)
 	}
-	publication := Publication{RequestID: "publish-1", CandidateID: finished.RewriteCandidates[0].ID, PausedSystems: []string{"pushes"}, MigrationTargets: []MigrationTarget{{ID: "fork-1", Kind: "fork", ResourceID: "fork-repo", RepositoryID: "consumer", OwnerID: "consumer-owner", IndependentlyControlled: true, Instructions: "fetch replacement refs and rewrite the fork under consumer authority"}}}
+	publication := Publication{RequestID: "publish-1", CandidateID: finished.RewriteCandidates[0].ID, PausedSystems: []string{"pushes"}, MigrationTargets: []MigrationTarget{{ID: "fork-1", Kind: "fork", ResourceID: "fork-repo", RepositoryID: "consumer", OwnerID: "consumer-owner", IndependentlyControlled: true, ReplacementRef: "refs/heads/main", Instructions: "fetch replacement refs and rewrite the fork under consumer authority"}}}
 	unsupported := publication
 	unsupported.RequestID = "unsupported-pause"
 	unsupported.PausedSystems = []string{"pushes", "queues"}
@@ -195,6 +195,9 @@ func TestRewriteCandidateAndRehearsalAreCASVersionedAndRetryStable(t *testing.T)
 	reserved, err := s.ReservePublication("repo", created.ID, 4, publication, "maintainer")
 	if err != nil || reserved.Version != 5 || reserved.Publication.State != "publishing" || reserved.Publication.MigrationTargets[0].State != "awaiting_owner" {
 		t.Fatalf("reservation = %#v, %v", reserved.Publication, err)
+	}
+	if reserved.Publication.MigrationTargets[0].ReplacementRevision != strings.Repeat("b", 40) {
+		t.Fatalf("server-derived target replacement = %#v", reserved.Publication.MigrationTargets[0])
 	}
 	published, err := s.CompletePublication("repo", created.ID, "publish-1", finished.RewriteCandidates[0].ID)
 	if err != nil || published.Version != 6 || published.Publication.State != "migration_in_progress" || published.Publication.MigrationTargets[0].State != "awaiting_owner" {
@@ -263,7 +266,7 @@ func TestMigrationRequiresExactReplacementAndPreservedContext(t *testing.T) {
 	s, _ := New(t.TempDir())
 	v, _ := s.Create(fixture(), "maintainer", "digest")
 	v.RewriteCandidates = []RewriteCandidate{{ID: "candidate", CandidateRefs: []CandidateRef{{NewTip: strings.Repeat("e", 40)}}, CommitMap: []CommitMapping{{NewCommitID: strings.Repeat("f", 40)}}}}
-	v.Publication = &Publication{ID: "publication", CandidateID: "candidate", State: "migration_in_progress"}
+	v.Publication = &Publication{ID: "publication", CandidateID: "candidate", State: "migration_in_progress", MigrationTargets: []MigrationTarget{{ID: "pull-target", Kind: "pull_request", ResourceID: "pull-1", ReplacementRef: "refs/heads/main", ReplacementRevision: strings.Repeat("e", 40)}}}
 	b, _ := json.Marshal(v)
 	_ = atomicWrite(s.path("repo", v.ID), b, nil)
 	a := MigrationAction{RequestID: "migration", Kind: "pull_request", ResourceID: "pull-1", Action: "migrated", ReplacementRevision: strings.Repeat("e", 40), DiscussionPreserved: true, AttributionPreserved: true}
@@ -276,6 +279,16 @@ func TestMigrationRequiresExactReplacementAndPreservedContext(t *testing.T) {
 	unrelated.ReplacementRevision = strings.Repeat("a", 40)
 	if _, err = s.RecordMigration("repo", v.ID, 2, unrelated, "security"); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("unrelated replacement = %v", err)
+	}
+	crossMapped := a
+	crossMapped.RequestID = "cross-mapped"
+	crossMapped.ResourceID = "pull-release"
+	v2, _ := s.Get("repo", v.ID)
+	v2.Publication.MigrationTargets = append(v2.Publication.MigrationTargets, MigrationTarget{ID: "release-target", Kind: "pull_request", ResourceID: "pull-release", ReplacementRef: "refs/heads/release", ReplacementRevision: strings.Repeat("f", 40)})
+	b, _ = json.Marshal(v2)
+	_ = atomicWrite(s.path("repo", v.ID), b, nil)
+	if _, err = s.RecordMigration("repo", v.ID, 2, crossMapped, "security"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("cross-mapped replacement = %v", err)
 	}
 	a.RequestID = "unsafe"
 	a.AttributionPreserved = false

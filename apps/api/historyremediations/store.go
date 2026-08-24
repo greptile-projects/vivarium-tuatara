@@ -172,6 +172,8 @@ type MigrationTarget struct {
 	State                   string `json:"state"`
 	Instructions            string `json:"instructions"`
 	AcknowledgedBy          string `json:"acknowledged_by,omitempty"`
+	ReplacementRef          string `json:"replacement_ref"`
+	ReplacementRevision     string `json:"replacement_revision"`
 }
 type Publication struct {
 	ID                 string                `json:"id"`
@@ -509,7 +511,7 @@ func (s *Store) RecordMigration(repo, id string, expected int, in MigrationActio
 			return v, nil
 		}
 	}
-	if expected != v.Version || v.Publication == nil || in.RequestID == "" || !map[string]bool{"pull_request": true, "workspace": true}[in.Kind] || !map[string]bool{"migrated": true, "closed": true}[in.Action] || in.ResourceID == "" || !publishedCandidateContainsRevision(v, in.ReplacementRevision) || !in.DiscussionPreserved || !in.AttributionPreserved {
+	if expected != v.Version || v.Publication == nil || in.RequestID == "" || !map[string]bool{"pull_request": true, "workspace": true}[in.Kind] || !map[string]bool{"migrated": true, "closed": true}[in.Action] || !migrationTargetMatches(v, in) || !in.DiscussionPreserved || !in.AttributionPreserved {
 		return Remediation{}, ErrInvalid
 	}
 	in.ID = randomID()
@@ -524,23 +526,13 @@ func (s *Store) RecordMigration(repo, id string, expected int, in MigrationActio
 	return v, nil
 }
 
-func publishedCandidateContainsRevision(v Remediation, revision string) bool {
-	if v.Publication == nil || len(revision) != 40 {
+func migrationTargetMatches(v Remediation, action MigrationAction) bool {
+	if v.Publication == nil || len(action.ReplacementRevision) != 40 {
 		return false
 	}
-	for _, candidate := range v.RewriteCandidates {
-		if candidate.ID != v.Publication.CandidateID {
-			continue
-		}
-		for _, ref := range candidate.CandidateRefs {
-			if ref.NewTip == revision {
-				return true
-			}
-		}
-		for _, mapping := range candidate.CommitMap {
-			if mapping.NewCommitID == revision {
-				return true
-			}
+	for _, target := range v.Publication.MigrationTargets {
+		if target.Kind == action.Kind && target.ResourceID == action.ResourceID && target.ReplacementRevision == action.ReplacementRevision {
+			return true
 		}
 	}
 	return false
@@ -806,9 +798,11 @@ func (s *Store) ReservePublication(repo, id string, expected int, in Publication
 		a.Approvals, z.Approvals = nil, nil
 		for i := range a.MigrationTargets {
 			a.MigrationTargets[i].State, a.MigrationTargets[i].AcknowledgedBy = "", ""
+			a.MigrationTargets[i].ReplacementRevision = ""
 		}
 		for i := range z.MigrationTargets {
 			z.MigrationTargets[i].State, z.MigrationTargets[i].AcknowledgedBy = "", ""
+			z.MigrationTargets[i].ReplacementRevision = ""
 		}
 		ab, _ := json.Marshal(a)
 		zb, _ := json.Marshal(z)
@@ -860,9 +854,26 @@ func (s *Store) ReservePublication(repo, id string, expected int, in Publication
 			return Remediation{}, ErrInvalid
 		}
 	}
+	migrationResources := map[string]bool{}
 	for i := range in.MigrationTargets {
 		t := &in.MigrationTargets[i]
-		if t.ID == "" || t.ResourceID == "" || t.OwnerID == "" || t.Instructions == "" || !map[string]bool{"local_branch": true, "fork": true, "federated_copy": true, "pull_request": true, "integration": true}[t.Kind] {
+		resourceKey := t.Kind + "\x00" + t.ResourceID
+		if t.ID == "" || t.ResourceID == "" || migrationResources[resourceKey] || t.OwnerID == "" || t.Instructions == "" || !map[string]bool{"local_branch": true, "fork": true, "federated_copy": true, "pull_request": true, "workspace": true, "integration": true}[t.Kind] {
+			return Remediation{}, ErrInvalid
+		}
+		migrationResources[resourceKey] = true
+		t.ReplacementRevision = ""
+		for _, candidate := range v.RewriteCandidates {
+			if candidate.ID != in.CandidateID {
+				continue
+			}
+			for _, ref := range candidate.CandidateRefs {
+				if ref.Name == t.ReplacementRef {
+					t.ReplacementRevision = ref.NewTip
+				}
+			}
+		}
+		if t.ReplacementRevision == "" {
 			return Remediation{}, ErrInvalid
 		}
 		if t.IndependentlyControlled {
