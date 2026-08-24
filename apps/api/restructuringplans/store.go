@@ -131,27 +131,229 @@ type Rehearsal struct {
 	CreatedBy         string     `json:"created_by"`
 	CreatedAt         time.Time  `json:"created_at"`
 }
-type Plan struct {
-	ID              string             `json:"id"`
-	RequestID       string             `json:"request_id"`
-	RequestDigest   string             `json:"request_digest,omitempty"`
-	RepositoryID    string             `json:"repository_id"`
-	Title           string             `json:"title"`
-	Intent          string             `json:"intent"`
-	Sources         []SourceRepository `json:"sources"`
-	Destinations    []Destination      `json:"destinations"`
-	Mappings        []ContentMapping   `json:"mappings"`
-	Inventory       []InventoryItem    `json:"inventory"`
-	Deadline        time.Time          `json:"deadline"`
-	SuccessCriteria []string           `json:"success_criteria"`
-	RollbackLimits  []string           `json:"rollback_limits"`
-	Findings        []Finding          `json:"findings,omitempty"`
-	CandidateSets   []CandidateSet     `json:"candidate_sets,omitempty"`
-	Version         int                `json:"version"`
-	CreatedBy       string             `json:"created_by"`
-	CreatedAt       time.Time          `json:"created_at"`
-	Authority       string             `json:"authority"`
+type CollaborationDestination struct {
+	DestinationID      string   `json:"destination_id"`
+	ResourceID         string   `json:"resource_id"`
+	Revision           string   `json:"revision"`
+	OwnerIDs           []string `json:"owner_ids"`
+	DependencyIDs      []string `json:"dependency_ids,omitempty"`
+	AcceptanceCriteria []string `json:"acceptance_criteria"`
 }
+type CollaborationSnapshot struct {
+	AuthorshipIDs      []string `json:"authorship_ids"`
+	DiscussionIDs      []string `json:"discussion_ids,omitempty"`
+	ReviewIDs          []string `json:"review_ids,omitempty"`
+	DependencyIDs      []string `json:"dependency_ids,omitempty"`
+	AcceptanceCriteria []string `json:"acceptance_criteria"`
+}
+type MappingDecision struct {
+	RequestID      string    `json:"request_id"`
+	ActorID        string    `json:"actor_id"`
+	Decision       string    `json:"decision"`
+	SourceRevision string    `json:"source_revision"`
+	Note           string    `json:"note,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+type CollaborationMapping struct {
+	ID                 string                     `json:"id"`
+	RequestID          string                     `json:"request_id"`
+	InventoryItemID    string                     `json:"inventory_item_id"`
+	Kind               string                     `json:"kind"`
+	SourceRepositoryID string                     `json:"source_repository_id"`
+	SourceResourceID   string                     `json:"source_resource_id"`
+	SourceRevision     string                     `json:"source_revision"`
+	Snapshot           CollaborationSnapshot      `json:"snapshot"`
+	Destinations       []CollaborationDestination `json:"destinations,omitempty"`
+	Disposition        string                     `json:"disposition"`
+	State              string                     `json:"state"`
+	BlockedReason      string                     `json:"blocked_reason,omitempty"`
+	Embargoed          bool                       `json:"embargoed,omitempty"`
+	Decisions          []MappingDecision          `json:"decisions,omitempty"`
+	CreatedBy          string                     `json:"created_by"`
+	CreatedAt          time.Time                  `json:"created_at"`
+	Authority          string                     `json:"authority"`
+}
+type Plan struct {
+	ID                    string                 `json:"id"`
+	RequestID             string                 `json:"request_id"`
+	RequestDigest         string                 `json:"request_digest,omitempty"`
+	RepositoryID          string                 `json:"repository_id"`
+	Title                 string                 `json:"title"`
+	Intent                string                 `json:"intent"`
+	Sources               []SourceRepository     `json:"sources"`
+	Destinations          []Destination          `json:"destinations"`
+	Mappings              []ContentMapping       `json:"mappings"`
+	Inventory             []InventoryItem        `json:"inventory"`
+	Deadline              time.Time              `json:"deadline"`
+	SuccessCriteria       []string               `json:"success_criteria"`
+	RollbackLimits        []string               `json:"rollback_limits"`
+	Findings              []Finding              `json:"findings,omitempty"`
+	CandidateSets         []CandidateSet         `json:"candidate_sets,omitempty"`
+	CollaborationMappings []CollaborationMapping `json:"collaboration_mappings,omitempty"`
+	Version               int                    `json:"version"`
+	CreatedBy             string                 `json:"created_by"`
+	CreatedAt             time.Time              `json:"created_at"`
+	Authority             string                 `json:"authority"`
+}
+
+func (s *Store) AddCollaborationMapping(repo, id, actor string, expected int, in CollaborationMapping) (Plan, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lockRoot()
+	if err != nil {
+		return Plan{}, err
+	}
+	defer unlock()
+	v, err := s.read(repo, id)
+	if err != nil {
+		return Plan{}, err
+	}
+	for _, x := range v.CollaborationMappings {
+		if x.RequestID == in.RequestID {
+			a, _ := json.Marshal(x)
+			in.ID = x.ID
+			in.State = x.State
+			in.BlockedReason = x.BlockedReason
+			in.Decisions = x.Decisions
+			in.CreatedBy = x.CreatedBy
+			in.CreatedAt = x.CreatedAt
+			in.Authority = x.Authority
+			b, _ := json.Marshal(in)
+			if string(a) == string(b) {
+				return v, nil
+			}
+			return Plan{}, ErrConflict
+		}
+	}
+	if expected != v.Version {
+		return Plan{}, ErrVersion
+	}
+	var item *InventoryItem
+	for i := range v.Inventory {
+		if v.Inventory[i].ID == in.InventoryItemID {
+			item = &v.Inventory[i]
+			break
+		}
+	}
+	if item == nil || item.RepositoryID != in.SourceRepositoryID || item.ResourceID != in.SourceResourceID || item.Revision != in.SourceRevision || !validCollaborationMapping(v, in) {
+		return Plan{}, ErrInvalid
+	}
+	in.ID = randomID()
+	in.CreatedBy = actor
+	in.CreatedAt = s.now()
+	in.Decisions = nil
+	in.Authority = "retained collaboration intent only; mapping grants no source or destination Git, review, queue, session, workspace, task, issue, or independently owned resource authority"
+	if in.Embargoed || item.State == "inaccessible" {
+		in.State = "blocked"
+	} else if in.Disposition == "archive" {
+		in.State = "archived"
+	} else {
+		in.State = "proposed"
+	}
+	v.CollaborationMappings = append(v.CollaborationMappings, in)
+	v.Version++
+	return v, s.write(v)
+}
+
+func (s *Store) DecideCollaborationMapping(repo, id, mappingID, actor string, expected int, in MappingDecision) (Plan, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lockRoot()
+	if err != nil {
+		return Plan{}, err
+	}
+	defer unlock()
+	v, err := s.read(repo, id)
+	if err != nil {
+		return Plan{}, err
+	}
+	if expected != v.Version {
+		return Plan{}, ErrVersion
+	}
+	for i := range v.CollaborationMappings {
+		m := &v.CollaborationMappings[i]
+		if m.ID != mappingID {
+			continue
+		}
+		for _, d := range m.Decisions {
+			if d.RequestID == in.RequestID {
+				if d.ActorID == actor && d.Decision == in.Decision && d.SourceRevision == in.SourceRevision && d.Note == in.Note {
+					return v, nil
+				}
+				return Plan{}, ErrConflict
+			}
+		}
+		if (in.Decision != "approve" && in.Decision != "reject") || in.SourceRevision != m.SourceRevision || !bounded(in.RequestID, 1, 200) || !bounded(in.Note, 0, 1000) || !contains(m.Snapshot.AuthorshipIDs, actor) {
+			return Plan{}, ErrInvalid
+		}
+		in.ActorID = actor
+		in.CreatedAt = s.now()
+		m.Decisions = append(m.Decisions, in)
+		if in.Decision == "reject" {
+			m.State = "blocked"
+			m.BlockedReason = "a source participant rejected the proposed mapping"
+		} else if allApproved(*m) {
+			m.State = "approved"
+		}
+		v.Version++
+		return v, s.write(v)
+	}
+	return Plan{}, ErrNotFound
+}
+
+func validCollaborationMapping(p Plan, m CollaborationMapping) bool {
+	allowed := map[string]bool{"branch": true, "pull_request": true, "issue": true, "proposal": true, "task": true, "decision": true, "check": true, "session": true, "workspace": true, "queue": true}
+	if !bounded(m.RequestID, 1, 200) || !allowed[m.Kind] || len(m.SourceRevision) != 40 || len(m.Snapshot.AuthorshipIDs) == 0 || len(m.Snapshot.AcceptanceCriteria) == 0 || (m.Disposition != "move" && m.Disposition != "divide" && m.Disposition != "archive") {
+		return false
+	}
+	if m.Disposition != "archive" && len(m.Destinations) == 0 {
+		return false
+	}
+	seen := map[string]bool{}
+	for _, d := range m.Destinations {
+		if seen[d.DestinationID] || !containsDestination(p.Destinations, d.DestinationID) || !bounded(d.ResourceID, 1, 500) || len(d.Revision) != 40 || len(d.OwnerIDs) == 0 || len(d.AcceptanceCriteria) == 0 {
+			return false
+		}
+		seen[d.DestinationID] = true
+	}
+	return true
+}
+func contains(xs []string, v string) bool {
+	for _, x := range xs {
+		if x == v {
+			return true
+		}
+	}
+	return false
+}
+func containsDestination(xs []Destination, v string) bool {
+	for _, x := range xs {
+		if x.ID == v {
+			return true
+		}
+	}
+	return false
+}
+func allApproved(m CollaborationMapping) bool {
+	for _, decision := range m.Decisions {
+		if decision.Decision == "reject" {
+			return false
+		}
+	}
+	for _, owner := range m.Snapshot.AuthorshipIDs {
+		ok := false
+		for _, d := range m.Decisions {
+			if d.ActorID == owner && d.Decision == "approve" {
+				ok = true
+			}
+		}
+		if !ok {
+			return false
+		}
+	}
+	return true
+}
+
 type Store struct {
 	root string
 	mu   sync.Mutex

@@ -3,10 +3,73 @@ package restructuringplans
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 )
+
+func TestCollaborationMappingRetainsIntentAndRequiresEveryAuthorApproval(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	rev := "0123456789012345678901234567890123456789"
+	plan := validPlanForTest(rev)
+	created, err := store.Create(plan, "author-a", "digest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mapping := CollaborationMapping{RequestID: "map-1", InventoryItemID: "i-0", Kind: "branch", SourceRepositoryID: "source", SourceResourceID: "resource-0", SourceRevision: rev, Disposition: "divide", Snapshot: CollaborationSnapshot{AuthorshipIDs: []string{"author-a", "author-b"}, DiscussionIDs: []string{"comment-1"}, ReviewIDs: []string{"review-1"}, DependencyIDs: []string{"issue-1"}, AcceptanceCriteria: []string{"behavior retained"}}, Destinations: []CollaborationDestination{{DestinationID: "core", ResourceID: "branch-a", Revision: rev, OwnerIDs: []string{"author-a"}, AcceptanceCriteria: []string{"checks pass"}}, {DestinationID: "destination-2", ResourceID: "branch-b", Revision: rev, OwnerIDs: []string{"author-b"}, DependencyIDs: []string{"branch-a"}, AcceptanceCriteria: []string{"connected check passes"}}}}
+	created, err = store.AddCollaborationMapping("source", created.ID, "author-a", created.Version, mapping)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := created.CollaborationMappings[0]; got.State != "proposed" || len(got.Snapshot.DiscussionIDs) != 1 || len(got.Destinations) != 2 {
+		t.Fatalf("mapping = %#v", got)
+	}
+	if retry, retryErr := store.AddCollaborationMapping("source", created.ID, "author-a", 1, mapping); retryErr != nil || retry.Version != created.Version {
+		t.Fatalf("exact retry = %#v, %v", retry, retryErr)
+	}
+	created, err = store.DecideCollaborationMapping("source", created.ID, created.CollaborationMappings[0].ID, "author-a", created.Version, MappingDecision{RequestID: "decision-a", Decision: "approve", SourceRevision: rev})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.CollaborationMappings[0].State != "proposed" {
+		t.Fatal("one author silently approved for all authors")
+	}
+	created, err = store.DecideCollaborationMapping("source", created.ID, created.CollaborationMappings[0].ID, "author-b", created.Version, MappingDecision{RequestID: "decision-b", Decision: "approve", SourceRevision: rev})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.CollaborationMappings[0].State != "approved" {
+		t.Fatal("complete approval did not approve mapping")
+	}
+}
+
+func TestCollaborationMappingRejectsStaleAndUnownedApproval(t *testing.T) {
+	store, _ := New(t.TempDir())
+	rev := "0123456789012345678901234567890123456789"
+	created, _ := store.Create(validPlanForTest(rev), "author-a", "digest")
+	m := CollaborationMapping{RequestID: "map", InventoryItemID: "i-0", Kind: "branch", SourceRepositoryID: "source", SourceResourceID: "resource-0", SourceRevision: rev, Disposition: "move", Snapshot: CollaborationSnapshot{AuthorshipIDs: []string{"author-a"}, AcceptanceCriteria: []string{"preserve intent"}}, Destinations: []CollaborationDestination{{DestinationID: "core", ResourceID: "new-main", Revision: rev, OwnerIDs: []string{"owner"}, AcceptanceCriteria: []string{"pass"}}}}
+	created, err := store.AddCollaborationMapping("source", created.ID, "author-a", created.Version, m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := created.CollaborationMappings[0].ID
+	if _, err = store.DecideCollaborationMapping("source", created.ID, id, "outsider", created.Version, MappingDecision{RequestID: "x", Decision: "approve", SourceRevision: rev}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("outsider err=%v", err)
+	}
+	if _, err = store.DecideCollaborationMapping("source", created.ID, id, "author-a", created.Version, MappingDecision{RequestID: "y", Decision: "approve", SourceRevision: strings.Repeat("b", 40)}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("stale err=%v", err)
+	}
+}
+
+func validPlanForTest(rev string) Plan {
+	p := completePlan()
+	p.Destinations = append(p.Destinations, Destination{ID: "destination-2", Name: "two", OwnerIDs: []string{"owner"}, Visibility: "private", DefaultBranch: "main"})
+	return p
+}
 
 func completePlan() Plan {
 	rev := "0123456789012345678901234567890123456789"

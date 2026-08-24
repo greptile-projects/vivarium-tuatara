@@ -83,6 +83,7 @@ func registerRestructuringPlanRoutes(mux *http.ServeMux, git *storage.Store, cat
 		clean.Authority = ""
 		clean.Findings = nil
 		clean.CandidateSets = nil
+		clean.CollaborationMappings = nil
 		b, _ := json.Marshal(clean)
 		sum := sha256.Sum256(b)
 		digest := hex.EncodeToString(sum[:])
@@ -211,6 +212,90 @@ func registerRestructuringPlanRoutes(mux *http.ServeMux, git *storage.Store, cat
 		}
 		if e != nil {
 			writeAPIError(w, 500, "restructuring_plan_unavailable", "the finding could not be retained")
+			return
+		}
+		writeJSON(w, 201, out)
+	})
+	mux.HandleFunc("POST /repositories/{id}/restructuring-plans/{plan_id}/collaboration-mappings", func(w http.ResponseWriter, r *http.Request) {
+		c, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		if c.AgentID != "" {
+			writeAPIError(w, 403, "restructuring_mapping_agent_forbidden", "a human participant must propose active collaboration mappings")
+			return
+		}
+		var in restructuringplans.CollaborationMapping
+		var body struct {
+			ExpectedVersion int                                     `json:"expected_version"`
+			Mapping         restructuringplans.CollaborationMapping `json:"mapping"`
+		}
+		if decodeJSON(r, &body) != nil {
+			writeAPIError(w, 400, "invalid_request", "an exact collaboration mapping is required")
+			return
+		}
+		in = body.Mapping
+		var out restructuringplans.Plan
+		err := catalog.WithCurrentParticipant(c.UserID, r.PathValue("id"), func() error {
+			var e error
+			out, e = plans.AddCollaborationMapping(r.PathValue("id"), r.PathValue("plan_id"), c.UserID, body.ExpectedVersion, in)
+			return e
+		})
+		if errors.Is(err, restructuringplans.ErrVersion) || errors.Is(err, restructuringplans.ErrConflict) {
+			writeAPIError(w, 409, "restructuring_mapping_changed", "the plan or mapping changed; refresh before retrying")
+			return
+		}
+		if errors.Is(err, restructuringplans.ErrInvalid) {
+			writeAPIError(w, 422, "restructuring_mapping_invalid", "mapping must bind an inventoried resource and exact revision, retained intent, authors, destinations, dependencies, and acceptance criteria")
+			return
+		}
+		if errors.Is(err, restructuringplans.ErrNotFound) {
+			writeAPIError(w, 404, "restructuring_plan_not_found", "restructuring plan not found")
+			return
+		}
+		if err != nil {
+			writeAPIError(w, 500, "restructuring_mapping_unavailable", "collaboration mapping could not be retained")
+			return
+		}
+		writeJSON(w, 201, out)
+	})
+	mux.HandleFunc("POST /repositories/{id}/restructuring-plans/{plan_id}/collaboration-mappings/{mapping_id}/decisions", func(w http.ResponseWriter, r *http.Request) {
+		c, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:read")
+		if !ok {
+			return
+		}
+		if c.AgentID != "" {
+			writeAPIError(w, 403, "restructuring_decision_agent_forbidden", "only a named human source participant can decide a mapping")
+			return
+		}
+		var body struct {
+			ExpectedVersion int                                `json:"expected_version"`
+			Decision        restructuringplans.MappingDecision `json:"decision"`
+		}
+		if decodeJSON(r, &body) != nil {
+			writeAPIError(w, 400, "invalid_request", "a revision-bound decision is required")
+			return
+		}
+		var out restructuringplans.Plan
+		err := catalog.WithCurrentParticipant(c.UserID, r.PathValue("id"), func() error {
+			var e error
+			out, e = plans.DecideCollaborationMapping(r.PathValue("id"), r.PathValue("plan_id"), r.PathValue("mapping_id"), c.UserID, body.ExpectedVersion, body.Decision)
+			return e
+		})
+		if errors.Is(err, restructuringplans.ErrVersion) || errors.Is(err, restructuringplans.ErrConflict) {
+			writeAPIError(w, 409, "restructuring_mapping_changed", "the plan, request, or source revision changed")
+			return
+		}
+		if errors.Is(err, restructuringplans.ErrInvalid) {
+			writeAPIError(w, 422, "restructuring_decision_invalid", "the decision must come from a retained author and cite the exact source revision")
+			return
+		}
+		if errors.Is(err, restructuringplans.ErrNotFound) {
+			writeAPIError(w, 404, "restructuring_mapping_not_found", "collaboration mapping not found")
+			return
+		}
+		if err != nil {
+			writeAPIError(w, 500, "restructuring_mapping_unavailable", "mapping decision could not be retained")
 			return
 		}
 		writeJSON(w, 201, out)

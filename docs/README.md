@@ -230,6 +230,19 @@ remain inspectable; assembly and rehearsal never register destinations or move a
 Candidate assembly and ledger registration share a cross-process serialization boundary; bare repositories
 publish from unique staging paths by atomic rename, and exact concurrent requests reconcile safely.
 
+Active work is proposed separately through a plan's `collaboration-mappings` route. A mapping binds an
+inventoried source resource and exact revision to a branch, pull, issue, proposal, task, decision, check,
+session, workspace, or queue snapshot. The snapshot retains named authors, discussion and review identities,
+dependencies, and original acceptance criteria; a divided change names every destination contribution,
+revision, owner, dependency edge, and local criterion. Embargoed, inaccessible, rejected, and deliberately
+unmigrated work stays blocked or archived instead of leaking context into another repository.
+
+Named source authors inspect and decide mappings through revision-bound, append-only decisions. Every author
+must approve the same exact source revision before a mapping becomes approved, so an old review is preserved
+as history but never silently promoted to current approval. Decisions recheck repository participation at
+persistence. These mappings create no destination resource and grant the restructuring coordinator no Git,
+review, queue, session, workspace, issue, task, or independently owned destination authority.
+
 ## Shared regression search boundaries
 
 Repository collaborators open regression investigations through `POST
