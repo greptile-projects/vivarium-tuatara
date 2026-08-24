@@ -259,7 +259,9 @@ Replacement remotes must use credential-free HTTP(S) URLs and name a declared de
 duplicate destination redirects, and self-mappings are rejected rather than creating a loop. States keep
 discovered, planned, in-progress, blocked, unavailable, rejected, stale-credential, and unmigrated clients
 separate from adopted clients. Only the retained dependent owner can append state evidence, and adoption
-requires nonempty evidence. An optional human- or agent-owned propagation reference can point to ordinary
+requires nonempty evidence. A new migration owner must be a current source-repository participant, and both
+creator and owner participation are held through persistence; event writes revalidate and hold that owner
+access so revocation leaves adoption visibly blocked instead of producing an unreachable authority. An optional human- or agent-owned propagation reference can point to ordinary
 target-repository task, pull, and release work; it records coordination without granting the restructuring
 team authority in that repository. These records grant no Git, package, API, extension, workflow,
 documentation, deployment, federation, pull, release, or consumer authority.

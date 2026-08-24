@@ -325,11 +325,15 @@ func registerRestructuringPlanRoutes(mux *http.ServeMux, git *storage.Store, cat
 		}
 		actor := actorID(c)
 		var out restructuringplans.Plan
-		err := catalog.WithCurrentParticipant(c.UserID, r.PathValue("id"), func() error {
+		err := catalog.WithCurrentParticipants([]string{c.UserID, body.Migration.OwnerID}, r.PathValue("id"), func() error {
 			var e error
 			out, e = plans.AddDependentMigration(r.PathValue("id"), r.PathValue("plan_id"), actor, body.ExpectedVersion, body.Migration)
 			return e
 		})
+		if errors.Is(err, repositories.ErrInvalidCollaborator) || errors.Is(err, repositories.ErrNotFound) {
+			writeAPIError(w, 422, "restructuring_dependent_owner_inaccessible", "the dependent owner must be a current repository participant who can submit migration events")
+			return
+		}
 		if errors.Is(err, restructuringplans.ErrVersion) || errors.Is(err, restructuringplans.ErrConflict) {
 			writeAPIError(w, 409, "restructuring_dependent_changed", "refresh before retaining dependent migration work")
 			return
@@ -361,7 +365,32 @@ func registerRestructuringPlanRoutes(mux *http.ServeMux, git *storage.Store, cat
 			writeAPIError(w, 400, "invalid_request", "a migration event is required")
 			return
 		}
-		out, err := plans.AddDependentEvent(r.PathValue("id"), r.PathValue("plan_id"), r.PathValue("migration_id"), actorID(c), body.ExpectedVersion, body.Event)
+		plan, err := plans.Get(r.PathValue("id"), r.PathValue("plan_id"))
+		if err != nil {
+			writeAPIError(w, 404, "restructuring_plan_not_found", "restructuring plan not found")
+			return
+		}
+		ownerID := ""
+		for _, migration := range plan.DependentMigrations {
+			if migration.ID == r.PathValue("migration_id") {
+				ownerID = migration.OwnerID
+				break
+			}
+		}
+		if ownerID == "" {
+			writeAPIError(w, 404, "restructuring_dependent_not_found", "dependent migration not found")
+			return
+		}
+		var out restructuringplans.Plan
+		err = catalog.WithCurrentParticipant(ownerID, r.PathValue("id"), func() error {
+			var e error
+			out, e = plans.AddDependentEvent(r.PathValue("id"), r.PathValue("plan_id"), r.PathValue("migration_id"), actorID(c), body.ExpectedVersion, body.Event)
+			return e
+		})
+		if errors.Is(err, repositories.ErrInvalidCollaborator) || errors.Is(err, repositories.ErrNotFound) {
+			writeAPIError(w, 403, "restructuring_dependent_owner_inaccessible", "the retained owner no longer has repository access; adoption remains blocked")
+			return
+		}
 		if errors.Is(err, restructuringplans.ErrVersion) || errors.Is(err, restructuringplans.ErrConflict) {
 			writeAPIError(w, 409, "restructuring_dependent_changed", "refresh before updating migration state")
 			return
