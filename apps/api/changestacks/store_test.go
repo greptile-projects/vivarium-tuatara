@@ -123,3 +123,25 @@ func TestApplyRestackRejectsDanglingAndCyclicDependencies(t *testing.T) {
 		t.Fatalf("cyclic dependency = %v", err)
 	}
 }
+
+func TestSequentialDistinctRestackRequestIDsDoNotReconcile(t *testing.T) {
+	s, _ := New(t.TempDir())
+	member := Member{ID: "one", Title: "One", SourceBranch: "one", Revision: strings.Repeat("1", 40), AcceptanceCriteria: []string{"passes"}}
+	created, err := s.Create(Stack{RequestID: "stack-sequential", RequestDigest: "stack-digest", RepositoryID: "repo", Title: "Outcome", Outcome: "shared", TargetBranch: "main", Members: []Member{member}}, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := Restack{RequestID: "removed-reference", RequestDigest: "first-digest", CreatedBy: "alice", Members: []RestackMember{{Member: member}}}
+	second := Restack{RequestID: "cycle-reference", RequestDigest: "second-digest", CreatedBy: "alice", Members: []RestackMember{{Member: member}}}
+	_, one, err := s.ProposeRestack("repo", created.ID, first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, two, err := s.ProposeRestack("repo", created.ID, second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if one.ID == two.ID || one.RequestID == two.RequestID {
+		t.Fatalf("distinct requests reconciled: %#v %#v", one, two)
+	}
+}

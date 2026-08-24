@@ -264,7 +264,7 @@ func previewChangeStackRestack(stack changestacks.Stack, requested []changestack
 		seenBranches[branchKey] = true
 		if !exists && m.PullRequestID != "" {
 			p, pullGetErr := pulls.Get(stack.RepositoryID, m.PullRequestID)
-			if pullGetErr != nil || p.Status != pullrequests.Open || p.SourceRepositoryID != sourceID || p.SourceBranch != m.SourceBranch {
+			if pullGetErr != nil || p.Status != pullrequests.Open || p.SourceRepositoryID != sourceID || canonicalStackBranch(p.SourceBranch) != canonicalStackBranch(m.SourceBranch) {
 				result.Diagnostics = append(result.Diagnostics, diag("pull_mismatch", "inserted member pull does not identify its exact open source branch", true))
 				continue
 			}
@@ -296,7 +296,7 @@ func previewChangeStackRestack(stack changestacks.Stack, requested []changestack
 		m.Revision = tip
 		requested[i].Revision = tip
 		for _, p := range allPulls {
-			if p.Status == pullrequests.Open && p.SourceRepositoryID == sourceID && p.SourceBranch == m.SourceBranch && p.ID != m.PullRequestID {
+			if p.Status == pullrequests.Open && p.SourceRepositoryID == sourceID && canonicalStackBranch(p.SourceBranch) == canonicalStackBranch(m.SourceBranch) && p.ID != m.PullRequestID {
 				result.Diagnostics = append(result.Diagnostics, diag("shared_branch", "source branch is also used by pull request "+p.ID, true))
 			}
 		}
@@ -512,5 +512,9 @@ func normalizedStackBranchKey(repositoryID string, member changestacks.Member) s
 	if sourceID == "" {
 		sourceID = repositoryID
 	}
-	return sourceID + "/" + strings.TrimPrefix(member.SourceBranch, "refs/heads/")
+	return sourceID + "/" + canonicalStackBranch(member.SourceBranch)
+}
+
+func canonicalStackBranch(branch string) string {
+	return strings.TrimPrefix(branch, "refs/heads/")
 }

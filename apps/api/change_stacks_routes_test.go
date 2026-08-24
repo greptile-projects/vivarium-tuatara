@@ -66,6 +66,9 @@ func TestRestackBranchIdentityNormalizesDefaultSourceRepository(t *testing.T) {
 	if implicit != explicit {
 		t.Fatalf("implicit key %q != explicit key %q", implicit, explicit)
 	}
+	if canonicalStackBranch("refs/heads/topic") != canonicalStackBranch("topic") {
+		t.Fatal("pull and member branch spellings did not canonicalize equally")
+	}
 }
 
 func TestChangeStackCycleRemainsExplicit(t *testing.T) {
