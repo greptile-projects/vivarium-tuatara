@@ -51,7 +51,7 @@ func TestCollaborationMappingRejectsStaleAndUnownedApproval(t *testing.T) {
 	store, _ := New(t.TempDir())
 	rev := "0123456789012345678901234567890123456789"
 	created, _ := store.Create(validPlanForTest(rev), "author-a", "digest")
-	m := CollaborationMapping{RequestID: "map", InventoryItemID: "i-0", Kind: "branch", SourceRepositoryID: "source", SourceResourceID: "resource-0", SourceRevision: rev, Disposition: "move", Snapshot: CollaborationSnapshot{AuthorshipIDs: []string{"author-a"}, AcceptanceCriteria: []string{"preserve intent"}}, Destinations: []CollaborationDestination{{DestinationID: "core", ResourceID: "new-main", Revision: rev, OwnerIDs: []string{"owner"}, AcceptanceCriteria: []string{"pass"}}}}
+	m := CollaborationMapping{RequestID: "map", InventoryItemID: "i-0", Kind: "branch", SourceRepositoryID: "source", SourceResourceID: "resource-0", SourceRevision: rev, Disposition: "move", Snapshot: CollaborationSnapshot{AuthorshipIDs: []string{"author-a", "author-b"}, AcceptanceCriteria: []string{"preserve intent"}}, Destinations: []CollaborationDestination{{DestinationID: "core", ResourceID: "new-main", Revision: rev, OwnerIDs: []string{"owner"}, AcceptanceCriteria: []string{"pass"}}}}
 	created, err := store.AddCollaborationMapping("source", created.ID, "author-a", created.Version, m)
 	if err != nil {
 		t.Fatal(err)
@@ -65,9 +65,56 @@ func TestCollaborationMappingRejectsStaleAndUnownedApproval(t *testing.T) {
 	}
 }
 
+func TestCollaborationMappingRejectsOmittedInventoriedOwner(t *testing.T) {
+	store, _ := New(t.TempDir())
+	rev := "0123456789012345678901234567890123456789"
+	created, _ := store.Create(validPlanForTest(rev), "author-a", "digest")
+	m := CollaborationMapping{RequestID: "omitted", InventoryItemID: "i-0", Kind: "branch", SourceRepositoryID: "source", SourceResourceID: "resource-0", SourceRevision: rev, Disposition: "move", Snapshot: CollaborationSnapshot{AuthorshipIDs: []string{"author-a"}, AcceptanceCriteria: []string{"preserve intent"}}, Destinations: []CollaborationDestination{{DestinationID: "core", ResourceID: "new-main", Revision: rev, OwnerIDs: []string{"owner"}, AcceptanceCriteria: []string{"pass"}}}}
+	if _, err := store.AddCollaborationMapping("source", created.ID, "author-a", created.Version, m); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("omitted inventoried owner err = %v", err)
+	}
+}
+
+func TestTerminalCollaborationMappingsRejectApprovals(t *testing.T) {
+	for _, tc := range []struct {
+		name                    string
+		embargoed, inaccessible bool
+		disposition, state      string
+	}{{"embargoed", true, false, "move", "blocked"}, {"inaccessible", false, true, "move", "blocked"}, {"archived", false, false, "archive", "archived"}} {
+		t.Run(tc.name, func(t *testing.T) {
+			store, _ := New(t.TempDir())
+			rev := "0123456789012345678901234567890123456789"
+			plan := validPlanForTest(rev)
+			if tc.inaccessible {
+				plan.Inventory[0].State = "inaccessible"
+			}
+			created, _ := store.Create(plan, "author-a", "digest")
+			m := CollaborationMapping{RequestID: "terminal", InventoryItemID: "i-0", Kind: "branch", SourceRepositoryID: "source", SourceResourceID: "resource-0", SourceRevision: rev, Disposition: tc.disposition, Embargoed: tc.embargoed, Snapshot: CollaborationSnapshot{AuthorshipIDs: []string{"author-a", "author-b"}, AcceptanceCriteria: []string{"preserve intent"}}}
+			if tc.disposition != "archive" {
+				m.Destinations = []CollaborationDestination{{DestinationID: "core", ResourceID: "new-main", Revision: rev, OwnerIDs: []string{"owner"}, AcceptanceCriteria: []string{"pass"}}}
+			}
+			created, err := store.AddCollaborationMapping("source", created.ID, "author-a", created.Version, m)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if created.CollaborationMappings[0].State != tc.state {
+				t.Fatalf("state=%s", created.CollaborationMappings[0].State)
+			}
+			if _, err = store.DecideCollaborationMapping("source", created.ID, created.CollaborationMappings[0].ID, "author-a", created.Version, MappingDecision{RequestID: "approval", Decision: "approve", SourceRevision: rev}); !errors.Is(err, ErrInvalid) {
+				t.Fatalf("terminal approval err=%v", err)
+			}
+			got, _ := store.Get("source", created.ID)
+			if got.CollaborationMappings[0].State != tc.state {
+				t.Fatalf("terminal state changed to %s", got.CollaborationMappings[0].State)
+			}
+		})
+	}
+}
+
 func validPlanForTest(rev string) Plan {
 	p := completePlan()
 	p.Destinations = append(p.Destinations, Destination{ID: "destination-2", Name: "two", OwnerIDs: []string{"owner"}, Visibility: "private", DefaultBranch: "main"})
+	p.Inventory[0].OwnerIDs = []string{"author-a", "author-b"}
 	return p
 }
 

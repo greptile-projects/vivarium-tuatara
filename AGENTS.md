@@ -3132,10 +3132,12 @@ repositories, or active collaboration.
 Active collaboration mappings bind an inventoried exact source resource to a branch, pull, issue, proposal,
 task, decision, check, session, workspace, or queue snapshot. They retain authorship, discussion/review
 identities, dependency edges, acceptance criteria, and one or more exact destination contributions and owners.
-Embargoed or inaccessible context is blocked and deliberate non-migration is archived. Every retained source
-author independently approves the same exact revision before the mapping becomes approved; historical review
+Embargoed or inaccessible context is blocked and deliberate non-migration is archived. The submitted author
+set must exactly equal the exact resource's frozen inventory owners and is replaced by a server-owned copy.
+Every retained source author independently approves the same exact revision before the mapping becomes approved; historical review
 identities remain evidence and never become implicit current approval. Human decisions hold current repository
-participation through persistence. The mapping ledger grants no destination creation, Git, review, queue,
+participation through persistence. Blocked and archived mappings reject decisions and can only be superseded
+by a fresh mapping. The mapping ledger grants no destination creation, Git, review, queue,
 session, workspace, issue, task, or independently owned work authority.
 
 Sensitive history remediations at `/repositories/{id}/history-remediations` and the repository

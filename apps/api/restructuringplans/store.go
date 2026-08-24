@@ -238,6 +238,12 @@ func (s *Store) AddCollaborationMapping(repo, id, actor string, expected int, in
 	if item == nil || item.RepositoryID != in.SourceRepositoryID || item.ResourceID != in.SourceResourceID || item.Revision != in.SourceRevision || !validCollaborationMapping(v, in) {
 		return Plan{}, ErrInvalid
 	}
+	// Inventory ownership is frozen when the exact source resource is admitted.
+	// A later mapping proposer cannot narrow that required-consent set.
+	if !sameStringSet(in.Snapshot.AuthorshipIDs, item.OwnerIDs) {
+		return Plan{}, ErrInvalid
+	}
+	in.Snapshot.AuthorshipIDs = append([]string(nil), item.OwnerIDs...)
 	in.ID = randomID()
 	in.CreatedBy = actor
 	in.CreatedAt = s.now()
@@ -282,6 +288,9 @@ func (s *Store) DecideCollaborationMapping(repo, id, mappingID, actor string, ex
 				}
 				return Plan{}, ErrConflict
 			}
+		}
+		if m.State != "proposed" {
+			return Plan{}, ErrInvalid
 		}
 		if (in.Decision != "approve" && in.Decision != "reject") || in.SourceRevision != m.SourceRevision || !bounded(in.RequestID, 1, 200) || !bounded(in.Note, 0, 1000) || !contains(m.Snapshot.AuthorshipIDs, actor) {
 			return Plan{}, ErrInvalid
@@ -333,6 +342,24 @@ func containsDestination(xs []Destination, v string) bool {
 		}
 	}
 	return false
+}
+func sameStringSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := make(map[string]bool, len(a))
+	for _, x := range a {
+		if seen[x] {
+			return false
+		}
+		seen[x] = true
+	}
+	for _, x := range b {
+		if !seen[x] {
+			return false
+		}
+	}
+	return true
 }
 func allApproved(m CollaborationMapping) bool {
 	for _, decision := range m.Decisions {
