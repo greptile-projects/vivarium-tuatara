@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/changestacks"
 )
 
 func TestRestackRewritePreservesAuthorAndAppliesPatchOntoNewParent(t *testing.T) {
@@ -54,6 +56,15 @@ func TestRestackRewritePreservesAuthorAndAppliesPatchOntoNewParent(t *testing.T)
 	}
 	if got := run(nil, "--git-dir="+filepath.Join(dir, ".git"), "show", candidate+":layer.txt"); got != "layer" {
 		t.Fatalf("layer contents = %q", got)
+	}
+}
+
+func TestRestackBranchIdentityNormalizesDefaultSourceRepository(t *testing.T) {
+	repositoryID := strings.Repeat("a", 32)
+	implicit := normalizedStackBranchKey(repositoryID, changestacks.Member{SourceBranch: "topic"})
+	explicit := normalizedStackBranchKey(repositoryID, changestacks.Member{SourceRepositoryID: repositoryID, SourceBranch: "refs/heads/topic"})
+	if implicit != explicit {
+		t.Fatalf("implicit key %q != explicit key %q", implicit, explicit)
 	}
 }
 

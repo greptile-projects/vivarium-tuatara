@@ -100,3 +100,26 @@ func TestRestackIsRetryStableAndPreservesRevisionLineage(t *testing.T) {
 		t.Fatalf("lineage = %#v", lineage)
 	}
 }
+
+func TestApplyRestackRejectsDanglingAndCyclicDependencies(t *testing.T) {
+	s, _ := New(t.TempDir())
+	baseMembers := []Member{{ID: "one", Title: "One", SourceBranch: "one", Revision: strings.Repeat("1", 40), AcceptanceCriteria: []string{"one"}}, {ID: "two", Title: "Two", SourceBranch: "two", Revision: strings.Repeat("2", 40), DependsOn: []string{"one"}, AcceptanceCriteria: []string{"two"}}}
+	created, err := s.Create(Stack{RequestID: "stack-graph", RequestDigest: "stack-graph-digest", RepositoryID: "repo", Title: "Outcome", Outcome: "shared", TargetBranch: "main", Members: baseMembers}, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, proposal, err := s.ProposeRestack("repo", created.ID, Restack{RequestID: "restack-graph", RequestDigest: "restack-graph-digest", CreatedBy: "alice", Members: []RestackMember{{Member: baseMembers[0]}, {Member: baseMembers[1]}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dangling := append([]Member(nil), baseMembers...)
+	dangling[1].DependsOn = []string{"removed"}
+	if _, _, err = s.ApplyRestack("repo", created.ID, proposal.ID, "alice", dangling); err != ErrInvalid {
+		t.Fatalf("dangling dependency = %v", err)
+	}
+	cyclic := append([]Member(nil), baseMembers...)
+	cyclic[0].DependsOn = []string{"two"}
+	if _, _, err = s.ApplyRestack("repo", created.ID, proposal.ID, "alice", cyclic); err != ErrInvalid {
+		t.Fatalf("cyclic dependency = %v", err)
+	}
+}

@@ -25,6 +25,13 @@ import (
 
 var changeStackRestackMu sync.Mutex
 
+var (
+	errRestackSourceUnavailable = errors.New("restack source unavailable")
+	errRestackImportFailed      = errors.New("restack import failed")
+	errRestackConcurrentPush    = errors.New("restack concurrent push")
+	errRestackLedgerUncertain   = errors.New("restack ledger uncertain")
+)
+
 type restackInput struct {
 	RequestID string                `json:"request_id"`
 	Members   []changestacks.Member `json:"members"`
@@ -115,9 +122,19 @@ func registerChangeStackRestackRoutes(mux *http.ServeMux, git *storage.Store, ca
 		// Reconcile a lost response after Git committed the transaction but
 		// before the stack ledger was synchronized.
 		if restackBranchesAtCandidates(*retained, git, stack.RepositoryID) {
-			updated, applied, applyErr := stacks.ApplyRestack(stack.RepositoryID, stack.ID, retained.ID, actor.UserID, appliedRestackMembers(*retained))
+			var updated changestacks.Stack
+			var applied changestacks.Restack
+			applyErr := catalog.WithCurrentParticipant(actor.UserID, stack.RepositoryID, func() error {
+				var ledgerErr error
+				updated, applied, ledgerErr = stacks.ApplyRestack(stack.RepositoryID, stack.ID, retained.ID, actor.UserID, appliedRestackMembers(*retained))
+				return ledgerErr
+			})
 			if applyErr != nil {
-				writeAPIError(w, 500, "change_stack_restack_publication_uncertain", "branch updates are committed but stack reconciliation remains unavailable")
+				if errors.Is(applyErr, repositories.ErrInvalidCollaborator) || errors.Is(applyErr, repositories.ErrNotFound) {
+					writeAPIError(w, 409, "change_stack_access_revoked", "current repository participation is required to reconcile the applied restack")
+				} else {
+					writeAPIError(w, 500, "change_stack_restack_publication_uncertain", "branch updates are committed but stack reconciliation remains unavailable")
+				}
 				return
 			}
 			for _, m := range updated.Members {
@@ -134,35 +151,53 @@ func registerChangeStackRestackRoutes(mux *http.ServeMux, git *storage.Store, ca
 			writeAPIError(w, 409, "change_stack_restack_stale", "a branch, permission, target, conflict, or shared-work condition changed; create a new preview")
 			return
 		}
-		repository, err := git.Open(stack.RepositoryID)
-		if err != nil {
-			writeAPIError(w, 409, "change_stack_restack_blocked", "the source repository is unavailable")
-			return
-		}
-		seen := map[string]bool{}
-		remaining := int64(256 << 20)
-		for _, m := range fresh.Members {
-			if err = importStackObject([]string{view}, repository.Path(), m.CandidateRevision, seen, &remaining); err != nil {
-				writeAPIError(w, 409, "change_stack_rewrite_failed", "rewritten commits could not be published")
-				return
+		var updated changestacks.Stack
+		var applied changestacks.Restack
+		var transactionFailure string
+		publicationErr := catalog.WithCurrentParticipant(actor.UserID, stack.RepositoryID, func() error {
+			repository, openErr := git.Open(stack.RepositoryID)
+			if openErr != nil {
+				return errRestackSourceUnavailable
 			}
-		}
-		var transaction strings.Builder
-		transaction.WriteString("start\n")
-		for _, m := range fresh.Members {
-			fmt.Fprintf(&transaction, "update refs/heads/%s %s %s\n", strings.TrimPrefix(m.Member.SourceBranch, "refs/heads/"), m.CandidateRevision, m.ExpectedBranchTip)
-		}
-		transaction.WriteString("prepare\ncommit\n")
-		command := exec.Command("git", "--git-dir="+repository.Path(), "update-ref", "--stdin")
-		command.Stdin = strings.NewReader(transaction.String())
-		if output, updateErr := command.CombinedOutput(); updateErr != nil {
-			writeAPIError(w, 409, "change_stack_concurrent_push", "a source branch changed while applying; no branch was updated: "+strings.TrimSpace(string(output)))
-			return
-		}
-		members := appliedRestackMembers(fresh)
-		updated, applied, err := stacks.ApplyRestack(stack.RepositoryID, stack.ID, retained.ID, actor.UserID, members)
-		if err != nil {
-			writeAPIError(w, 500, "change_stack_restack_publication_uncertain", "branches were updated but the retained stack requires reconciliation")
+			seen := map[string]bool{}
+			remaining := int64(256 << 20)
+			for _, m := range fresh.Members {
+				if importErr := importStackObject([]string{view}, repository.Path(), m.CandidateRevision, seen, &remaining); importErr != nil {
+					return errRestackImportFailed
+				}
+			}
+			var transaction strings.Builder
+			transaction.WriteString("start\n")
+			for _, m := range fresh.Members {
+				fmt.Fprintf(&transaction, "update refs/heads/%s %s %s\n", strings.TrimPrefix(m.Member.SourceBranch, "refs/heads/"), m.CandidateRevision, m.ExpectedBranchTip)
+			}
+			transaction.WriteString("prepare\ncommit\n")
+			command := exec.Command("git", "--git-dir="+repository.Path(), "update-ref", "--stdin")
+			command.Stdin = strings.NewReader(transaction.String())
+			if output, updateErr := command.CombinedOutput(); updateErr != nil {
+				transactionFailure = strings.TrimSpace(string(output))
+				return errRestackConcurrentPush
+			}
+			var ledgerErr error
+			updated, applied, ledgerErr = stacks.ApplyRestack(stack.RepositoryID, stack.ID, retained.ID, actor.UserID, appliedRestackMembers(fresh))
+			if ledgerErr != nil {
+				return fmt.Errorf("%w: %v", errRestackLedgerUncertain, ledgerErr)
+			}
+			return nil
+		})
+		if publicationErr != nil {
+			switch {
+			case errors.Is(publicationErr, repositories.ErrInvalidCollaborator), errors.Is(publicationErr, repositories.ErrNotFound):
+				writeAPIError(w, 409, "change_stack_access_revoked", "repository participation was revoked before publication; no branch was updated")
+			case errors.Is(publicationErr, errRestackSourceUnavailable):
+				writeAPIError(w, 409, "change_stack_restack_blocked", "the source repository is unavailable")
+			case errors.Is(publicationErr, errRestackImportFailed):
+				writeAPIError(w, 409, "change_stack_rewrite_failed", "rewritten commits could not be published")
+			case errors.Is(publicationErr, errRestackConcurrentPush):
+				writeAPIError(w, 409, "change_stack_concurrent_push", "a source branch changed while applying; no branch was updated: "+transactionFailure)
+			default:
+				writeAPIError(w, 500, "change_stack_restack_publication_uncertain", "branches were updated but the retained stack requires reconciliation")
+			}
 			return
 		}
 		for _, m := range updated.Members {
@@ -216,17 +251,17 @@ func previewChangeStackRestack(stack changestacks.Stack, requested []changestack
 			continue
 		}
 		seenIDs[m.ID] = true
-		branchKey := m.SourceRepositoryID + "/" + m.SourceBranch
-		if seenBranches[branchKey] {
-			result.Diagnostics = append(result.Diagnostics, diag("shared_branch", "two stack members cannot rewrite the same branch", true))
-		}
-		seenBranches[branchKey] = true
 		sourceID := m.SourceRepositoryID
 		if sourceID == "" {
 			sourceID = stack.RepositoryID
 			m.SourceRepositoryID = sourceID
 			requested[i].SourceRepositoryID = sourceID
 		}
+		branchKey := normalizedStackBranchKey(stack.RepositoryID, *m)
+		if seenBranches[branchKey] {
+			result.Diagnostics = append(result.Diagnostics, diag("shared_branch", "two stack members cannot rewrite the same branch", true))
+		}
+		seenBranches[branchKey] = true
 		if !exists && m.PullRequestID != "" {
 			p, pullGetErr := pulls.Get(stack.RepositoryID, m.PullRequestID)
 			if pullGetErr != nil || p.Status != pullrequests.Open || p.SourceRepositoryID != sourceID || p.SourceBranch != m.SourceBranch {
@@ -269,6 +304,21 @@ func previewChangeStackRestack(stack changestacks.Stack, requested []changestack
 	for _, m := range stack.Members {
 		if !seenIDs[m.ID] {
 			result.Removed = append(result.Removed, m)
+		}
+	}
+	memberIDs, dependencyGraph := map[string]bool{}, map[string][]string{}
+	for _, m := range requested {
+		memberIDs[m.ID] = true
+		dependencyGraph[m.ID] = append([]string(nil), m.DependsOn...)
+	}
+	for _, m := range requested {
+		for _, dependency := range m.DependsOn {
+			if !memberIDs[dependency] {
+				result.Diagnostics = append(result.Diagnostics, diag("dependency_missing", "member "+m.ID+" depends on removed or unknown member "+dependency, true))
+			}
+		}
+		if stackCycle(m.ID, dependencyGraph, map[string]bool{}, map[string]bool{}) {
+			result.Diagnostics = append(result.Diagnostics, diag("dependency_cycle", "proposed member dependencies contain a cycle", true))
 		}
 	}
 	if hasBlockingStackDiagnostic(result.Diagnostics) {
@@ -455,4 +505,12 @@ func restackBranchesAtCandidates(restack changestacks.Restack, git *storage.Stor
 		}
 	}
 	return true
+}
+
+func normalizedStackBranchKey(repositoryID string, member changestacks.Member) string {
+	sourceID := member.SourceRepositoryID
+	if sourceID == "" {
+		sourceID = repositoryID
+	}
+	return sourceID + "/" + strings.TrimPrefix(member.SourceBranch, "refs/heads/")
 }

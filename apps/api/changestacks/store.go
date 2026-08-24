@@ -296,7 +296,7 @@ func (s *Store) ApplyRestack(repo, stackID, restackID, actor string, members []M
 	if r.Status == "applied" {
 		return v, *r, nil
 	}
-	if r.Status != "previewed" || actor == "" {
+	if r.Status != "previewed" || actor == "" || !validMemberDependencies(members) {
 		return Stack{}, Restack{}, ErrInvalid
 	}
 	now := time.Now().UTC()
@@ -319,6 +319,47 @@ func (s *Store) ApplyRestack(repo, stackID, restackID, actor string, members []M
 	v.Members = members
 	r.Status, r.AppliedBy, r.AppliedAt = "applied", actor, &now
 	return v, *r, s.write(v)
+}
+
+func validMemberDependencies(members []Member) bool {
+	ids := map[string]bool{}
+	graph := map[string][]string{}
+	for _, member := range members {
+		if member.ID == "" || ids[member.ID] {
+			return false
+		}
+		ids[member.ID] = true
+		graph[member.ID] = member.DependsOn
+	}
+	for _, member := range members {
+		for _, dependency := range member.DependsOn {
+			if !ids[dependency] {
+				return false
+			}
+		}
+		if memberDependencyCycle(member.ID, graph, map[string]bool{}, map[string]bool{}) {
+			return false
+		}
+	}
+	return true
+}
+
+func memberDependencyCycle(id string, graph map[string][]string, visiting, done map[string]bool) bool {
+	if visiting[id] {
+		return true
+	}
+	if done[id] {
+		return false
+	}
+	visiting[id] = true
+	for _, dependency := range graph[id] {
+		if memberDependencyCycle(dependency, graph, visiting, done) {
+			return true
+		}
+	}
+	delete(visiting, id)
+	done[id] = true
+	return false
 }
 func (s *Store) Acknowledge(repo, stackID, memberID, owner, decision, note string) (Stack, error) {
 	s.mu.Lock()
