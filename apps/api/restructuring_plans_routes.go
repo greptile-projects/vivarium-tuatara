@@ -283,8 +283,8 @@ func restructuringInventoryCitationResolves(git *storage.Store, item restructuri
 		}
 		return false
 	case "federated_relationship":
-		_, e := peers.Get(item.ResourceID)
-		return e == nil
+		relationship, e := peers.Contribution(item.ResourceID)
+		return e == nil && len(relationship.InstanceIDs) > 0 && relationship.SourceRevision == item.Revision && (relationship.SourceRepositoryID == item.RepositoryID || relationship.TargetRepositoryID == item.RepositoryID)
 	}
 	return false
 }

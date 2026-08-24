@@ -205,7 +205,9 @@ repository-bound read-only agents can append version-bound findings only against
 items and with citations. Resolved identities must match their authoritative resource store and
 applicable exact revision; unavailable identities remain explicit gaps. Catalog participation is
 held through persistence, and a filesystem-wide ledger lock preserves finding CAS across API
-processes. This is a review and coordination boundary: it creates no repository,
+processes. A federated relationship resolves only through contribution authority bound to the exact
+local source/target repository and revision; an otherwise trusted peer is not sufficient evidence.
+This is a review and coordination boundary: it creates no repository,
 moves no Git or collaboration record, changes no owner/visibility/policy, and grants no source or
 destination write authority.
 
