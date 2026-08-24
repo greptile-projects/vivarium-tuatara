@@ -80,6 +80,13 @@ while visible gaps remain. Rejections, unresolved discoveries, superseded paths,
 blockers, so minimum-target policy cannot turn them into hidden delivery. These records grant no review, queue, merge,
 release, deployment, environment, repository, or target authority.
 
+The connected propagation journey exercises this boundary through the browser, public API, and stock Git: a verified
+regression correction is adapted by an independent v2 maintainer, split into human implementation and agent audit work,
+fails its first bounded equivalence attempt, passes the corrected matrix and ordinary checks, receives owner acceptance,
+and becomes an ordinary task pull. The same trail keeps an unsupported repository, a rejected non-owner delivery action,
+a newly discovered consumer, and a seven-day upstream-review exception visible rather than allowing minimum coverage to
+hide them. Playwright gives the propagation ledger its own temporary storage root so repeated journeys do not share state.
+
 ## Shared regression search boundaries
 
 Repository collaborators open regression investigations through `POST
