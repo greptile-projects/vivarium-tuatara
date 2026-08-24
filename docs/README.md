@@ -20,6 +20,21 @@ dropping them. The retained authority statement is deliberately narrow: a campai
 travel and in what order, but grants no branch, Git, package, review, merge, release, deployment, or
 cross-repository authority.
 
+Before implementation, a collaborator with access to a repository target can publish a target assessment at
+`POST /repositories/{id}/propagation-campaigns/{campaign_id}/targets/{target_id}/assessments`. The server freezes
+the source parent and outcome commits plus the target release-line tip, then compares exact changed blobs and
+history, declared symbols, dependency manifests, interface and schema files, prior target commits touching the
+change, and the campaign's release commitments. The result is one of `directly_applicable`, `already_satisfied`,
+`adaptation_required`, `conflicting`, or `not_applicable`; matching names and similar commit messages are retained
+only as leads and never promoted to behavioral equivalence. Repeating the same exact comparison reconciles to its
+existing identity.
+
+Humans and repository-bound read-only agents append CAS-versioned cited findings, risks, and uncertainty at the
+assessment entry endpoint. Only a named human target owner can append an owner acknowledgement. Citations bind to
+the frozen source/base/target revisions, and movement of one target release line projects only that target's
+assessment as stale while preserving the campaign and every unaffected assessment. Assessment records grant no
+Git, package, branch, implementation, review, merge, release, deployment, or target-repository authority.
+
 ## Shared regression search boundaries
 
 Repository collaborators open regression investigations through `POST

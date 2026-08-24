@@ -18,6 +18,7 @@ import (
 var ErrNotFound = errors.New("propagation campaign not found")
 var ErrInvalid = errors.New("invalid propagation campaign")
 var ErrConflict = errors.New("propagation campaign request changed")
+var ErrVersion = errors.New("propagation campaign assessment changed")
 
 type Source struct {
 	Kind         string   `json:"kind"`
@@ -45,6 +46,42 @@ type CompletionPolicy struct {
 	MinimumTargets    int    `json:"minimum_targets,omitempty"`
 	RequireAcceptance bool   `json:"require_acceptance"`
 }
+type Comparison struct {
+	Kind     string   `json:"kind"`
+	Status   string   `json:"status"`
+	Summary  string   `json:"summary"`
+	Evidence []string `json:"evidence,omitempty"`
+}
+type Citation struct {
+	Kind      string `json:"kind"`
+	Reference string `json:"reference"`
+	Revision  string `json:"revision,omitempty"`
+}
+type AssessmentEntry struct {
+	ID        string     `json:"id"`
+	Kind      string     `json:"kind"`
+	Body      string     `json:"body"`
+	Citations []Citation `json:"citations,omitempty"`
+	ActorID   string     `json:"actor_id"`
+	ActorKind string     `json:"actor_kind"`
+	CreatedAt time.Time  `json:"created_at"`
+}
+type Assessment struct {
+	ID                 string            `json:"id"`
+	TargetID           string            `json:"target_id"`
+	Version            int               `json:"version"`
+	Classification     string            `json:"classification"`
+	TargetRevision     string            `json:"target_revision"`
+	SourceBaseRevision string            `json:"source_base_revision,omitempty"`
+	SourceRevision     string            `json:"source_revision"`
+	ChangedPaths       []string          `json:"changed_paths"`
+	Comparisons        []Comparison      `json:"comparisons"`
+	Entries            []AssessmentEntry `json:"entries"`
+	Invalidated        bool              `json:"invalidated"`
+	InvalidationReason string            `json:"invalidation_reason,omitempty"`
+	CreatedBy          string            `json:"created_by"`
+	CreatedAt          time.Time         `json:"created_at"`
+}
 type Campaign struct {
 	ID                 string           `json:"id"`
 	RequestID          string           `json:"request_id"`
@@ -56,6 +93,7 @@ type Campaign struct {
 	Source             Source           `json:"source"`
 	Targets            []Target         `json:"targets"`
 	CompletionPolicy   CompletionPolicy `json:"completion_policy"`
+	Assessments        []Assessment     `json:"assessments,omitempty"`
 	CreatedBy          string           `json:"created_by"`
 	CreatedAt          time.Time        `json:"created_at"`
 }
@@ -112,6 +150,90 @@ func (s *Store) List(repo string) ([]Campaign, error) {
 	e := s.lock(func() error { var x error; out, x = s.list(repo); return x })
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
 	return out, e
+}
+func (s *Store) CreateAssessment(repo, campaignID, actor string, in Assessment) (Campaign, Assessment, error) {
+	var campaign Campaign
+	var out Assessment
+	e := s.lock(func() error {
+		v, e := s.read(repo, campaignID)
+		if e != nil {
+			return e
+		}
+		found := false
+		for _, target := range v.Targets {
+			if target.ID == in.TargetID && target.Kind == "repository" {
+				found = true
+			}
+		}
+		comparisonKinds := map[string]bool{"histories": true, "symbols": true, "dependencies": true, "interfaces": true, "schemas": true, "prior_fixes": true, "release_commitments": true}
+		seenKinds := map[string]bool{}
+		for _, comparison := range in.Comparisons {
+			if !comparisonKinds[comparison.Kind] || seenKinds[comparison.Kind] || strings.TrimSpace(comparison.Summary) == "" {
+				return ErrInvalid
+			}
+			seenKinds[comparison.Kind] = true
+		}
+		if !found || !validClassification(in.Classification) || len(in.TargetRevision) != 40 || len(in.SourceRevision) != 40 || len(seenKinds) != len(comparisonKinds) {
+			return ErrInvalid
+		}
+		for _, existing := range v.Assessments {
+			if existing.TargetID == in.TargetID && existing.TargetRevision == in.TargetRevision && existing.SourceRevision == in.SourceRevision {
+				campaign = v
+				out = existing
+				return nil
+			}
+		}
+		in.ID, in.Version, in.CreatedBy, in.CreatedAt = randomID(), 1, actor, s.now()
+		in.Entries = []AssessmentEntry{}
+		v.Assessments = append(v.Assessments, in)
+		if e = s.write(v); e != nil {
+			return e
+		}
+		campaign, out = v, in
+		return nil
+	})
+	return campaign, out, e
+}
+func (s *Store) AddAssessmentEntry(repo, campaignID, assessmentID, actor, actorKind string, expected int, in AssessmentEntry) (Campaign, Assessment, error) {
+	var campaign Campaign
+	var out Assessment
+	e := s.lock(func() error {
+		v, e := s.read(repo, campaignID)
+		if e != nil {
+			return e
+		}
+		for i := range v.Assessments {
+			a := &v.Assessments[i]
+			if a.ID != assessmentID {
+				continue
+			}
+			if a.Version != expected {
+				return ErrVersion
+			}
+			if !map[string]bool{"finding": true, "risk": true, "uncertainty": true, "owner_acknowledgement": true}[in.Kind] || strings.TrimSpace(in.Body) == "" || len(in.Body) > 8000 || len(in.Citations) == 0 || len(in.Citations) > 20 {
+				return ErrInvalid
+			}
+			for _, c := range in.Citations {
+				if strings.TrimSpace(c.Kind) == "" || strings.TrimSpace(c.Reference) == "" || (c.Revision != "" && len(c.Revision) != 40) {
+					return ErrInvalid
+				}
+			}
+			in.ID, in.ActorID, in.ActorKind, in.CreatedAt = randomID(), actor, actorKind, s.now()
+			a.Entries = append(a.Entries, in)
+			a.Version++
+			out = *a
+			if e = s.write(v); e != nil {
+				return e
+			}
+			campaign = v
+			return nil
+		}
+		return ErrNotFound
+	})
+	return campaign, out, e
+}
+func validClassification(v string) bool {
+	return map[string]bool{"directly_applicable": true, "already_satisfied": true, "adaptation_required": true, "conflicting": true, "not_applicable": true}[v]
 }
 func validate(v Campaign) error {
 	kinds := map[string]bool{"merged_pull": true, "security_repair": true, "regression_correction": true, "policy_change": true, "package_release": true, "interface_evolution": true}
