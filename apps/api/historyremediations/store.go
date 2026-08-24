@@ -509,7 +509,7 @@ func (s *Store) RecordMigration(repo, id string, expected int, in MigrationActio
 			return v, nil
 		}
 	}
-	if expected != v.Version || v.Publication == nil || in.RequestID == "" || !map[string]bool{"pull_request": true, "workspace": true}[in.Kind] || !map[string]bool{"migrated": true, "closed": true}[in.Action] || in.ResourceID == "" || len(in.ReplacementRevision) != 40 || !in.DiscussionPreserved || !in.AttributionPreserved {
+	if expected != v.Version || v.Publication == nil || in.RequestID == "" || !map[string]bool{"pull_request": true, "workspace": true}[in.Kind] || !map[string]bool{"migrated": true, "closed": true}[in.Action] || in.ResourceID == "" || !publishedCandidateContainsRevision(v, in.ReplacementRevision) || !in.DiscussionPreserved || !in.AttributionPreserved {
 		return Remediation{}, ErrInvalid
 	}
 	in.ID = randomID()
@@ -522,6 +522,28 @@ func (s *Store) RecordMigration(repo, id string, expected int, in MigrationActio
 		return Remediation{}, e
 	}
 	return v, nil
+}
+
+func publishedCandidateContainsRevision(v Remediation, revision string) bool {
+	if v.Publication == nil || len(revision) != 40 {
+		return false
+	}
+	for _, candidate := range v.RewriteCandidates {
+		if candidate.ID != v.Publication.CandidateID {
+			continue
+		}
+		for _, ref := range candidate.CandidateRefs {
+			if ref.NewTip == revision {
+				return true
+			}
+		}
+		for _, mapping := range candidate.CommitMap {
+			if mapping.NewCommitID == revision {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (s *Store) Restore(repo, id string, expected int, in Restoration, actor string) (Remediation, error) {
@@ -570,7 +592,11 @@ func (s *Store) Restore(repo, id string, expected int, in Restoration, actor str
 	if seen["pushes"] {
 		v.Publication.PausedSystems = []string{}
 	}
-	v.Publication.State = "contained_with_residuals"
+	if len(v.Publication.PausedSystems) == 0 {
+		v.Publication.State = "contained_with_residuals"
+	} else {
+		v.Publication.State = "migration_in_progress"
+	}
 	v.Version++
 	out, _ := json.MarshalIndent(v, "", "  ")
 	if e = atomicWrite(s.path(repo, id), out, s.beforeReplace); e != nil {

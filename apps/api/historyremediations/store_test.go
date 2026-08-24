@@ -243,13 +243,17 @@ func TestContainmentPassKeepsResidualsVisibleAndGatesScopedRestoration(t *testin
 	if err != nil || passing.ContainmentPasses[1].State != "passing" {
 		t.Fatalf("passing = %#v, %v", passing.ContainmentPasses, err)
 	}
-	restored, err := s.Restore("repo", created.ID, 3, Restoration{RequestID: "restore", ContainmentPassID: passing.ContainmentPasses[1].ID, Systems: []string{"pushes", "contributions"}}, "security")
+	partial, err := s.Restore("repo", created.ID, 3, Restoration{RequestID: "restore-contributions", ContainmentPassID: passing.ContainmentPasses[1].ID, Systems: []string{"contributions"}}, "security")
+	if err != nil || partial.Publication.State != "migration_in_progress" || len(partial.Publication.PausedSystems) != 1 {
+		t.Fatalf("partial restore disabled push containment = %#v, %v", partial.Publication, err)
+	}
+	restored, err := s.Restore("repo", created.ID, 4, Restoration{RequestID: "restore", ContainmentPassID: passing.ContainmentPasses[1].ID, Systems: []string{"pushes"}}, "security")
 	if err != nil || restored.Publication.State != "contained_with_residuals" || len(restored.Publication.PausedSystems) != 0 {
 		t.Fatalf("restore = %#v, %v", restored.Publication, err)
 	}
 	pass.RequestID = "pass-reintroduced"
 	pass.Observations[0].State = "reintroduced"
-	recontained, err := s.RecordContainmentPass("repo", created.ID, 4, pass, "security")
+	recontained, err := s.RecordContainmentPass("repo", created.ID, 5, pass, "security")
 	if err != nil || recontained.Publication.State != "migration_in_progress" || len(recontained.Publication.PausedSystems) != 1 {
 		t.Fatalf("reintroduced history was not re-contained = %#v, %v", recontained.Publication, err)
 	}
@@ -258,13 +262,20 @@ func TestContainmentPassKeepsResidualsVisibleAndGatesScopedRestoration(t *testin
 func TestMigrationRequiresExactReplacementAndPreservedContext(t *testing.T) {
 	s, _ := New(t.TempDir())
 	v, _ := s.Create(fixture(), "maintainer", "digest")
-	v.Publication = &Publication{ID: "publication", State: "migration_in_progress"}
+	v.RewriteCandidates = []RewriteCandidate{{ID: "candidate", CandidateRefs: []CandidateRef{{NewTip: strings.Repeat("e", 40)}}, CommitMap: []CommitMapping{{NewCommitID: strings.Repeat("f", 40)}}}}
+	v.Publication = &Publication{ID: "publication", CandidateID: "candidate", State: "migration_in_progress"}
 	b, _ := json.Marshal(v)
 	_ = atomicWrite(s.path("repo", v.ID), b, nil)
 	a := MigrationAction{RequestID: "migration", Kind: "pull_request", ResourceID: "pull-1", Action: "migrated", ReplacementRevision: strings.Repeat("e", 40), DiscussionPreserved: true, AttributionPreserved: true}
 	got, err := s.RecordMigration("repo", v.ID, 1, a, "security")
 	if err != nil || len(got.MigrationActions) != 1 {
 		t.Fatalf("migration = %#v, %v", got.MigrationActions, err)
+	}
+	unrelated := a
+	unrelated.RequestID = "unrelated"
+	unrelated.ReplacementRevision = strings.Repeat("a", 40)
+	if _, err = s.RecordMigration("repo", v.ID, 2, unrelated, "security"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("unrelated replacement = %v", err)
 	}
 	a.RequestID = "unsafe"
 	a.AttributionPreserved = false

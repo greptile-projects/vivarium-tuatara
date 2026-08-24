@@ -1779,7 +1779,7 @@ func historyRewritePushPaused(store *historyremediations.Store, remote string) (
 		return true, "push paused: remediation state is unavailable; retry after a maintainer confirms migration"
 	}
 	for _, item := range items {
-		if item.Publication == nil || (item.Publication.State != "publishing" && item.Publication.State != "migration_in_progress") {
+		if item.Publication == nil {
 			continue
 		}
 		for _, system := range item.Publication.PausedSystems {
@@ -5785,6 +5785,12 @@ func runGitService(w http.ResponseWriter, r *http.Request, repo *storage.Reposit
 		// Embargoed repair refs never appear through ordinary clone, fetch, or
 		// push discovery, including to repository owners.
 		args = append([]string{"-c", "transfer.hideRefs=refs/heads/vivarium-security/"}, args...)
+	}
+	if service == uploadPackService {
+		// History quarantine depends on upload-pack refusing direct or merely
+		// reachable SHA wants. Only objects reachable from advertised safe refs
+		// may be served after a rewrite.
+		args = append([]string{"-c", "uploadpack.allowAnySHA1InWant=false", "-c", "uploadpack.allowReachableSHA1InWant=false"}, args...)
 	}
 	var removeHooks func()
 	if service == receivePackService {

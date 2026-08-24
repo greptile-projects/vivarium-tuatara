@@ -85,11 +85,13 @@ After publication, owners append immutable current-evidence passes through `POST
 The completion policy covers repository reachability, ordinary object access, fork and federation
 acknowledgements, package and artifact replacement, credential rotation, deployment use, caches, and protected
 recovery copies. The server discards caller claims for Git reachability and quarantine and derives those facts
-from the authoritative repository and publication. Other dimensions require bounded SHA-256 evidence. Failed,
+from the authoritative repository and publication. A quarantined Git object passes only when it is unreachable
+from every advertised ref, while upload-pack disables direct and reachable SHA wants. Other dimensions require bounded SHA-256 evidence. Failed,
 unreachable, independently controlled, legally retained, reintroduced, and exceptional copies remain explicit;
 exceptions expire within 30 days, and no pass claims erasure. Owners can retain exact-revision pull/workspace
-migration or supersession with discussion and attribution preserved. `POST .../restorations` reopens only named
-push, automation, release, and contribution flows, and only against the latest complete passing pass.
+migration or supersession with discussion and attribution preserved against a commit in the published rewrite
+candidate. `POST .../restorations` reopens only named push, automation, release, and contribution flows, and only
+against the latest complete passing pass; a remaining push pause is enforced independently of display state.
 
 ## Propagation campaigns
 

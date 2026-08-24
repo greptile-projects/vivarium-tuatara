@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"net/http"
+	"os/exec"
 	"strings"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
@@ -73,16 +74,37 @@ func registerHistoryContainmentRoutes(mux *http.ServeMux, git *storage.Store, ca
 		digest := sha256.Sum256([]byte(v.ID + ":" + state + ":" + summary))
 		filtered = append(filtered, historyremediations.ContainmentObservation{Kind: "repository_reachability", ResourceID: v.RepositoryID, State: state, EvidenceSHA256: hex.EncodeToString(digest[:]), Summary: summary})
 		objectState := "passed"
-		objectSummary := "affected objects remain quarantined from ordinary reads and fetches"
+		objectSummary := "affected objects are unreachable from advertised refs and direct SHA wants are disabled"
 		quarantined := []string{}
+		repoPath := ""
 		if v.Publication != nil {
-			quarantined = v.Publication.QuarantinedObjects
+			published := map[string]bool{}
+			for _, id := range v.Publication.QuarantinedObjects {
+				published[id] = true
+			}
+			for _, scope := range v.Scopes {
+				if scope.Kind == "git_object" && published[scope.ObjectID] {
+					quarantined = append(quarantined, scope.ObjectID)
+				}
+			}
 		}
 		if len(quarantined) == 0 {
 			objectState = "failed"
 			objectSummary = "no active object quarantine was found"
+		} else if repo, openErr := git.Open(v.RepositoryID); openErr != nil {
+			objectState = "unreachable"
+			objectSummary = "repository object reachability could not be rechecked"
+		} else {
+			repoPath = repo.Path()
+			if reachable, checkErr := historyQuarantinedObjectsReachable(repoPath, quarantined); checkErr != nil {
+				objectState = "unreachable"
+				objectSummary = "repository object reachability could not be rechecked"
+			} else if len(reachable) != 0 {
+				objectState = "reintroduced"
+				objectSummary = "an affected object is reachable from an ordinarily advertised ref"
+			}
 		}
-		d2 := sha256.Sum256([]byte(v.ID + ":" + objectState + ":" + strings.Join(quarantined, ",")))
+		d2 := sha256.Sum256([]byte(v.ID + ":" + objectState + ":" + repoPath + ":" + strings.Join(quarantined, ",")))
 		filtered = append(filtered, historyremediations.ContainmentObservation{Kind: "object_access", ResourceID: v.RepositoryID, State: objectState, EvidenceSHA256: hex.EncodeToString(d2[:]), Summary: objectSummary})
 		in.Pass.Observations = filtered
 		out, e := store.RecordContainmentPass(v.RepositoryID, v.ID, in.ExpectedVersion, in.Pass, c.UserID)
@@ -137,4 +159,24 @@ func registerHistoryContainmentRoutes(mux *http.ServeMux, git *storage.Store, ca
 		}
 		writeJSON(w, 201, historyRemediationPublic(out))
 	})
+}
+
+func historyQuarantinedObjectsReachable(gitDir string, quarantined []string) ([]string, error) {
+	out, err := exec.Command("git", "--git-dir="+gitDir, "rev-list", "--objects", "--all").Output()
+	if err != nil {
+		return nil, err
+	}
+	wanted := map[string]bool{}
+	for _, id := range quarantined {
+		wanted[id] = true
+	}
+	found := []string{}
+	for _, line := range strings.Split(string(out), "\n") {
+		id, _, _ := strings.Cut(line, " ")
+		if wanted[id] {
+			found = append(found, id)
+			delete(wanted, id)
+		}
+	}
+	return found, nil
 }
