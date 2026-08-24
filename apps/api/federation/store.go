@@ -237,6 +237,7 @@ type ContributionAuthority struct {
 	SourceRevision     string   `json:"source_revision,omitempty"`
 	TargetRepositoryID string   `json:"target_repository_id,omitempty"`
 	TargetPullID       string   `json:"target_pull_id,omitempty"`
+	TargetRevision     string   `json:"target_revision,omitempty"`
 }
 
 func (s *Store) BindContributionTarget(id, repository, pull, revision string) error {
@@ -256,11 +257,14 @@ func (s *Store) BindContributionTarget(id, repository, pull, revision string) er
 	if err != nil || json.Unmarshal(raw, &v) != nil || v.ContributionID != id {
 		return ErrNotFound
 	}
-	if v.TargetRepositoryID != "" && (v.TargetRepositoryID != repository || v.TargetPullID != pull) {
+	if v.TargetRepositoryID != "" && (v.TargetRepositoryID != repository || v.TargetPullID != pull || (v.TargetRevision != "" && v.TargetRevision != revision)) {
 		return ErrConflict
 	}
 	v.TargetRepositoryID, v.TargetPullID = repository, pull
-	v.SourceRevision = revision
+	v.TargetRevision = revision
+	if v.SourceRevision == "" {
+		v.SourceRevision = revision
+	}
 	return writeJSON(path, v)
 }
 

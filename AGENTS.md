@@ -3094,3 +3094,27 @@ there from outside the checkout — as a symlink or a read-only bind mount — a
 is gitignored for that reason. Read it for context on what is being built, but
 never edit it, `git add` it, or delete it, and do not treat its presence as
 uncommitted work.
+Repository restructuring plans at `/repositories/{id}/restructuring-plans` and the repository
+`/restructuring` workspace freeze proposed splits, extractions, consolidations, and ownership
+realignments before identities change beneath `$RESTRUCTURING_PLAN_STORAGE_ROOT`
+(`restructuring-plans`). Human collaborators select exact source commits and declare destination
+names, owners, visibility, default branches, retained identities, content/history mappings,
+deadlines, success criteria, and rollback limits. Every plan explicitly accounts for refs, pulls,
+issues, tasks, releases, packages, documentation, policies, workspaces, automation, consumers, and
+federated relationships as resolved, inaccessible, ambiguous, or shared at a source revision.
+Resolved identities must match their authoritative Git, pull, issue, proposal-task, release,
+package, documentation, governance, workspace, workflow, relationship, or federation store;
+unavailable identities remain explicit gaps. Source and finding participation stay locked through
+persistence, and a filesystem-wide ledger lock preserves finding CAS across API processes.
+Resolved federated relationships are contribution-authority records with a nonempty peer set and
+must bind the inventory's exact local source/target repository and revision; peer trust alone is
+not evidence that a repository participates in that relationship. Federation retains source and
+target revisions separately. Resolved issue and task inventory requires respectively an exact
+implementation affected revision or assignment base revision. Organization-agent findings hold
+their live repository access grant through persistence rather than requiring the operator to be a
+human repository collaborator.
+CAS-versioned human or repository-bound read-only-agent findings must cite retained inventory
+items and evidence. Plans are coordination records only and grant no repository creation, Git,
+resource migration, ownership, visibility, policy, or destination authority.
+
+Sensitive history remediations at `/repositories/{id}/history-remediations` and the repository
