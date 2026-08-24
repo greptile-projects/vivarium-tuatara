@@ -13,6 +13,11 @@ can read a retained record, and every named principal must remain a source-repos
 The creator must maintain every affected repository and exact revisions must resolve. These records establish
 coordination only and grant no inspection, Git, object deletion, ref rewrite, package, artifact, release,
 environment, disclosure, or delivery authority.
+Creates reconcile a retained request before mutable source/scope/participant validation. New publication runs
+under the catalog's serialized source-participant and affected-repository maintainer boundary; repository-bound
+credentials cannot cross repositories. Closed scope kinds resolve Git objects/refs, releases, package artifacts,
+environments, and check artifacts through their authoritative stores, and all caller prose is bounded and
+credential-screened before persistence.
 
 Propagation campaigns at `/repositories/{id}/propagation-campaigns` and the repository
 `/propagation` workspace freeze an exact source outcome from a merged pull, security repair,

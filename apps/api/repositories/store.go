@@ -505,6 +505,58 @@ func (s *Store) WithCurrentParticipantsAndReadAccess(userIDs []string, repositor
 	return fn()
 }
 
+// WithCurrentParticipantsAndMaintainerAccess is the restricted-write variant:
+// it also requires the actor to remain an owner or collaborator of every
+// affected repository while the dependent mutation commits.
+func (s *Store) WithCurrentParticipantsAndMaintainerAccess(userIDs []string, repositoryID, actorID string, affectedRepositoryIDs []string, fn func() error) error {
+	if !validID(repositoryID) || !validID(actorID) || len(userIDs) == 0 || len(affectedRepositoryIDs) == 0 || fn == nil {
+		return ErrInvalidCollaborator
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lockRoot()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	provider, err := s.read(repositoryID)
+	if err != nil {
+		return ErrNotFound
+	}
+	if _, err = s.git.Open(repositoryID); err != nil {
+		return ErrNotFound
+	}
+	for _, userID := range userIDs {
+		if !validID(userID) || (provider.OwnerID != userID && !slices.Contains(collaboratorIDs(provider), userID)) {
+			return ErrInvalidCollaborator
+		}
+	}
+	seen := map[string]bool{}
+	for _, id := range affectedRepositoryIDs {
+		if !validID(id) {
+			return ErrNotFound
+		}
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		repository, readErr := s.read(id)
+		if readErr != nil {
+			return ErrNotFound
+		}
+		if _, openErr := s.git.Open(id); openErr != nil {
+			return ErrNotFound
+		}
+		if repository.OwnerID != actorID && !slices.Contains(collaboratorIDs(repository), actorID) {
+			return ErrInvalidCollaborator
+		}
+	}
+	if s.afterParticipantAuthorization != nil {
+		s.afterParticipantAuthorization()
+	}
+	return fn()
+}
+
 // WithCurrentDeliveryAuthority additionally freezes an optional organization
 // association while a dependent delivery mutation commits.
 func (s *Store) WithCurrentDeliveryAuthority(userIDs []string, repositoryID, organizationID string, fn func() error) error {

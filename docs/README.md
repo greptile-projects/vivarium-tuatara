@@ -11,6 +11,11 @@ caller-stable request freezes its security-finding, privacy-incident, support-ca
 a short payload-free description and reason; and exact repository objects plus optional revisions, refs,
 releases, packages, artifact digests, and environments. The creator must currently maintain every affected
 repository, and supplied commit revisions must resolve before publication.
+Scope kinds are closed and authoritative: Git objects and refs resolve from stock Git, releases and
+environments resolve from their repository stores, packages bind their published artifact ID and SHA-256, and
+check artifacts bind `pull/run/artifact` identity plus digest. Repository-bound credentials cannot name another
+repository. Exact retry reconciliation happens before these mutable checks, while new publication holds current
+source participants and affected-repository maintainer access stable through persistence.
 
 Discovery evidence retains only its source identity and SHA-256 digest, classification, safe note, and human
 attribution. Matches, false matches, inaccessible resources, legal holds, and conflicting retention or

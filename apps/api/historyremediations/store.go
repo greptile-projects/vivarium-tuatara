@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -17,6 +18,8 @@ import (
 var ErrNotFound = errors.New("history remediation not found")
 var ErrInvalid = errors.New("invalid history remediation")
 var ErrConflict = errors.New("history remediation request changed")
+
+var credentialPattern = regexp.MustCompile(`(?i)(authorization\s*:|bearer\s+[a-z0-9._-]{12,}|-----begin [a-z ]*private key-----|(?:api[_-]?key|password|passwd|secret|token)\s*[:=]\s*[^\s]{8,}|(?:ghp|github_pat|glpat-|xox[baprs]-|sk-)[a-z0-9_-]{12,})`)
 
 type Source struct {
 	Kind       string `json:"kind"`
@@ -100,18 +103,22 @@ func valid(v Remediation) bool {
 	if len(v.Title) > 160 || len(v.ContentDescription) > 500 || len(v.Reason) > 1000 || strings.ContainsAny(v.ContentDescription, "\r\n") {
 		return false
 	}
+	encoded, err := json.Marshal(v)
+	if err != nil || credentialPattern.Match(encoded) {
+		return false
+	}
 	for _, x := range v.Scopes {
 		if x.RepositoryID == "" || x.Kind == "" || x.ObjectID == "" {
 			return false
 		}
 	}
 	for _, x := range v.Evidence {
-		if x.Kind == "" || x.ResourceID == "" || len(x.SHA256) != 64 || !map[string]bool{"matched": true, "false_match": true, "inaccessible": true}[x.State] || x.AttributedTo == "" {
+		if x.Kind == "" || x.ResourceID == "" || len(x.SHA256) != 64 || len(x.Note) > 300 || strings.ContainsAny(x.Note, "\r\n") || !map[string]bool{"matched": true, "false_match": true, "inaccessible": true}[x.State] || x.AttributedTo == "" {
 			return false
 		}
 	}
 	for _, x := range v.Constraints {
-		if !map[string]bool{"legal_hold": true, "retention_commitment": true, "continuity_commitment": true, "inaccessible_resource": true, "false_match": true}[x.Kind] || x.State == "" || x.Reason == "" || x.AttributedTo == "" {
+		if !map[string]bool{"legal_hold": true, "retention_commitment": true, "continuity_commitment": true, "inaccessible_resource": true, "false_match": true}[x.Kind] || x.State == "" || x.Reason == "" || len(x.Reason) > 500 || strings.ContainsAny(x.Reason, "\r\n") || x.AttributedTo == "" {
 			return false
 		}
 	}
@@ -150,6 +157,30 @@ func (s *Store) Create(v Remediation, actor, digest string) (Remediation, error)
 		return Remediation{}, err
 	}
 	return v, nil
+}
+
+// Reconcile returns a previously committed request before callers consult
+// mutable resource and participant state. Authentication remains route-owned.
+func (s *Store) Reconcile(repo, requestID, digest string) (Remediation, bool, error) {
+	if strings.TrimSpace(requestID) == "" || strings.TrimSpace(digest) == "" {
+		return Remediation{}, false, ErrInvalid
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	values, err := s.list(repo)
+	if err != nil {
+		return Remediation{}, false, err
+	}
+	for _, value := range values {
+		if value.RequestID != requestID {
+			continue
+		}
+		if value.RequestDigest != digest {
+			return Remediation{}, false, ErrConflict
+		}
+		return value, true, nil
+	}
+	return Remediation{}, false, nil
 }
 func (s *Store) list(repo string) ([]Remediation, error) {
 	files, err := filepath.Glob(filepath.Join(s.root, repo, "*.json"))

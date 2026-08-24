@@ -47,4 +47,33 @@ func TestRejectsPayloadLikeMultilineDescriptionAndIncompleteEvidence(t *testing.
 	if _, e := s.Create(v, "maintainer", "d"); !errors.Is(e, ErrInvalid) {
 		t.Fatalf("weak evidence = %v", e)
 	}
+	for name, mutate := range map[string]func(*Remediation){
+		"evidence note credential":     func(v *Remediation) { v.Evidence[0].Note = "Authorization: Bearer abcdefghijklmnop" },
+		"constraint reason credential": func(v *Remediation) { v.Constraints[0].Reason = "api_key=abcdefghijklmnop" },
+		"unbounded evidence note":      func(v *Remediation) { v.Evidence[0].Note = strings.Repeat("x", 301) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			v := fixture()
+			mutate(&v)
+			if _, err := s.Create(v, "maintainer", name); !errors.Is(err, ErrInvalid) {
+				t.Fatalf("unsafe payload = %v", err)
+			}
+		})
+	}
+}
+
+func TestReconcilePrecedesMutableValidation(t *testing.T) {
+	s, _ := New(t.TempDir())
+	v := fixture()
+	created, err := s.Create(v, "maintainer", "digest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reconciled, found, err := s.Reconcile(v.RepositoryID, v.RequestID, "digest")
+	if err != nil || !found || reconciled.ID != created.ID {
+		t.Fatalf("reconcile = %#v, %v, %v", reconciled, found, err)
+	}
+	if _, _, err = s.Reconcile(v.RepositoryID, v.RequestID, "changed"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("changed reconcile = %v", err)
+	}
 }
