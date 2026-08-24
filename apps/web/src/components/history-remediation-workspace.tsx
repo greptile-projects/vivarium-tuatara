@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent, type SetStateAction } from "react";
 import { api } from "@/lib/api";
 import { useAuth } from "./auth";
 import { Badge, Button, Card } from "./ui";
@@ -14,8 +14,9 @@ const rows=(v:FormDataEntryValue|null)=>String(v??"").split("\n").map(x=>x.trim(
 const ids=(v:FormDataEntryValue|null)=>String(v??"").split(",").map(x=>x.trim()).filter(Boolean);
 const normalized=(v:Remediation):Remediation=>({...v,rewrite_candidates:(v.rewrite_candidates??[]).map(c=>({...c,commit_map:c.commit_map??[],candidate_refs:c.candidate_refs??[],broken_signatures:c.broken_signatures??[],broken_links:c.broken_links??[],unrewritable_resources:c.unrewritable_resources??[],rehearsals:c.rehearsals??[]}))});
 export function HistoryRemediationWorkspace({repositoryID}:{repositoryID:string}){
- const {token}=useAuth(),[items,setItems]=useState<Remediation[]>([]),[error,setError]=useState(""),[saving,setSaving]=useState(false),requestID=useRef(crypto.randomUUID());
- const load=useCallback(async()=>{if(!token)return;try{const x=await api<{history_remediations:Remediation[]}>(`/repositories/${repositoryID}/history-remediations`,{},token);setItems(x.history_remediations.map(normalized));setError("")}catch(e){setError(e instanceof Error?e.message:"Restricted remediations could not be loaded.")}},[repositoryID,token]);
+ const {token}=useAuth(),[items,rawSetItems]=useState<Remediation[]>([]),[error,setError]=useState(""),[saving,setSaving]=useState(false),requestID=useRef(crypto.randomUUID());
+ const setItems=useCallback((next:SetStateAction<Remediation[]>)=>rawSetItems(current=>(typeof next==="function"?next(current):next).map(normalized)),[]);
+ const load=useCallback(async()=>{if(!token)return;try{const x=await api<{history_remediations:Remediation[]}>(`/repositories/${repositoryID}/history-remediations`,{},token);setItems(x.history_remediations);setError("")}catch(e){setError(e instanceof Error?e.message:"Restricted remediations could not be loaded.")}},[repositoryID,setItems,token]);
  useEffect(()=>{void Promise.resolve().then(load)},[load]);
  async function create(e:FormEvent<HTMLFormElement>){e.preventDefault();setSaving(true);const form=e.currentTarget,f=new FormData(form);try{
   const scopes=rows(f.get("scopes")).map((line)=>{const [repo,kind,object_id,revision="",ref="",release_id="",pkg="",artifact_digest="",environment_id=""]=line.split("|").map(x=>x.trim());return{repository_id:repo,kind,object_id,revision,ref,release_id,package:pkg,artifact_digest,environment_id}});
