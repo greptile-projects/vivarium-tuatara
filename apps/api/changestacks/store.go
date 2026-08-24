@@ -120,6 +120,69 @@ type Acknowledgement struct {
 	CreatedAt         time.Time         `json:"created_at"`
 }
 
+// Assignment preserves who controls one layer without transferring the
+// source repository or branch authority attached to that layer.
+type Assignment struct {
+	ID            string    `json:"id"`
+	MemberID      string    `json:"member_id"`
+	PrincipalType string    `json:"principal_type"`
+	PrincipalID   string    `json:"principal_id"`
+	OperatorID    string    `json:"operator_id,omitempty"`
+	AccessGrantID string    `json:"access_grant_id,omitempty"`
+	AssignedBy    string    `json:"assigned_by"`
+	AssignedAt    time.Time `json:"assigned_at"`
+	Status        string    `json:"status"`
+}
+
+type WorkEvidence struct {
+	Kind       string `json:"kind"`
+	ResourceID string `json:"resource_id"`
+	Revision   string `json:"revision"`
+}
+
+// WorkLaunch is the immutable input boundary for a scoped change session,
+// shared workspace, or conflict-resolution workspace. CurrentUpstream is
+// derived on reads and is deliberately not persisted as authority.
+type WorkLaunch struct {
+	ID                 string            `json:"id"`
+	RequestID          string            `json:"request_id"`
+	RequestDigest      string            `json:"request_digest"`
+	MemberID           string            `json:"member_id"`
+	Kind               string            `json:"kind"`
+	AssignmentID       string            `json:"assignment_id"`
+	Outcome            string            `json:"outcome"`
+	Revision           string            `json:"revision"`
+	ParentRevision     string            `json:"parent_revision"`
+	UpstreamRevisions  map[string]string `json:"upstream_revisions"`
+	AcceptanceCriteria []string          `json:"acceptance_criteria"`
+	Evidence           []WorkEvidence    `json:"evidence"`
+	OpenedBy           string            `json:"opened_by"`
+	OpenedAt           time.Time         `json:"opened_at"`
+	CurrentUpstream    bool              `json:"current_upstream"`
+	ChangedUpstream    []string          `json:"changed_upstream,omitempty"`
+	Authority          string            `json:"authority"`
+}
+
+type TimelineEvent struct {
+	ID                string            `json:"id"`
+	RequestID         string            `json:"request_id"`
+	RequestDigest     string            `json:"request_digest"`
+	MemberID          string            `json:"member_id"`
+	Kind              string            `json:"kind"`
+	Summary           string            `json:"summary"`
+	Revision          string            `json:"revision"`
+	UpstreamRevisions map[string]string `json:"upstream_revisions"`
+	WorkLaunchID      string            `json:"work_launch_id,omitempty"`
+	RestackID         string            `json:"restack_id,omitempty"`
+	FromPrincipalID   string            `json:"from_principal_id,omitempty"`
+	ToPrincipalID     string            `json:"to_principal_id,omitempty"`
+	ActorID           string            `json:"actor_id"`
+	ActorType         string            `json:"actor_type"`
+	CreatedAt         time.Time         `json:"created_at"`
+	CurrentUpstream   bool              `json:"current_upstream"`
+	ChangedUpstream   []string          `json:"changed_upstream,omitempty"`
+}
+
 type Stack struct {
 	ID              string                       `json:"id"`
 	RequestID       string                       `json:"request_id"`
@@ -136,6 +199,9 @@ type Stack struct {
 	Authority       string                       `json:"authority"`
 	Restacks        []Restack                    `json:"restacks,omitempty"`
 	RevisionLineage map[string][]RevisionLineage `json:"revision_lineage,omitempty"`
+	Assignments     []Assignment                 `json:"assignments,omitempty"`
+	WorkLaunches    []WorkLaunch                 `json:"work_launches,omitempty"`
+	Timeline        []TimelineEvent              `json:"timeline,omitempty"`
 }
 
 type Store struct {
@@ -387,6 +453,166 @@ func (s *Store) Acknowledge(repo, stackID, memberID, owner, decision, note strin
 	a := Acknowledgement{ID: randomID(), MemberID: memberID, Revision: v.Members[index].Revision, UpstreamRevisions: upstream, Decision: decision, Note: strings.TrimSpace(note), OwnerID: owner, CreatedAt: now}
 	v.Members[index].Acknowledgements = append(v.Members[index].Acknowledgements, a)
 	return v, s.write(v)
+}
+
+func (s *Store) Assign(repo, stackID, memberID string, assignment Assignment) (Stack, Assignment, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v, err := s.read(repo, stackID)
+	if err != nil {
+		return Stack{}, Assignment{}, err
+	}
+	if assignment.AssignedBy == "" || assignment.PrincipalID == "" || (assignment.PrincipalType != "human" && assignment.PrincipalType != "agent") {
+		return Stack{}, Assignment{}, ErrInvalid
+	}
+	found := false
+	for _, member := range v.Members {
+		if member.ID == memberID {
+			found = true
+			break
+		}
+	}
+	if !found || (assignment.PrincipalType == "agent" && (assignment.OperatorID == "" || assignment.AccessGrantID == "")) {
+		return Stack{}, Assignment{}, ErrInvalid
+	}
+	for i := range v.Assignments {
+		if v.Assignments[i].MemberID == memberID && v.Assignments[i].Status == "active" {
+			v.Assignments[i].Status = "superseded"
+		}
+	}
+	assignment.ID, assignment.MemberID, assignment.Status = randomID(), memberID, "active"
+	assignment.AssignedAt = time.Now().UTC()
+	v.Assignments = append(v.Assignments, assignment)
+	return v, assignment, s.write(v)
+}
+
+func (s *Store) OpenWork(repo, stackID string, launch WorkLaunch) (Stack, WorkLaunch, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v, err := s.read(repo, stackID)
+	if err != nil {
+		return Stack{}, WorkLaunch{}, err
+	}
+	if launch.RequestID == "" || launch.RequestDigest == "" || launch.OpenedBy == "" || launch.AssignmentID == "" || (launch.Kind != "change_session" && launch.Kind != "shared_workspace" && launch.Kind != "conflict_resolution_workspace") {
+		return Stack{}, WorkLaunch{}, ErrInvalid
+	}
+	for _, prior := range v.WorkLaunches {
+		if prior.RequestID == launch.RequestID {
+			if prior.RequestDigest != launch.RequestDigest {
+				return Stack{}, WorkLaunch{}, ErrInvalid
+			}
+			return v, prior, nil
+		}
+	}
+	var member *Member
+	for i := range v.Members {
+		if v.Members[i].ID == launch.MemberID {
+			member = &v.Members[i]
+			break
+		}
+	}
+	active := false
+	for _, a := range v.Assignments {
+		if a.ID == launch.AssignmentID && a.MemberID == launch.MemberID && a.Status == "active" {
+			active = true
+		}
+	}
+	if member == nil || !active || member.Revision == "" {
+		return Stack{}, WorkLaunch{}, ErrInvalid
+	}
+	launch.ID, launch.Outcome, launch.Revision, launch.ParentRevision = randomID(), v.Outcome, member.Revision, member.BaseRevision
+	launch.AcceptanceCriteria = append([]string(nil), member.AcceptanceCriteria...)
+	launch.UpstreamRevisions = upstreamSnapshot(v, member.ID)
+	sourceRepositoryID := member.SourceRepositoryID
+	if sourceRepositoryID == "" {
+		sourceRepositoryID = repo
+	}
+	launch.Evidence = []WorkEvidence{{Kind: "source_revision", ResourceID: sourceRepositoryID, Revision: member.Revision}}
+	if member.PullRequestID != "" {
+		launch.Evidence = append(launch.Evidence, WorkEvidence{Kind: "pull_request", ResourceID: member.PullRequestID, Revision: member.Revision})
+	}
+	launch.OpenedAt, launch.Authority = time.Now().UTC(), "work context grants no repository, branch, pull, review, merge, federation, fork, or disclosure authority"
+	v.WorkLaunches = append(v.WorkLaunches, launch)
+	return v, launch, s.write(v)
+}
+
+func (s *Store) AppendTimeline(repo, stackID string, event TimelineEvent) (Stack, TimelineEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v, err := s.read(repo, stackID)
+	if err != nil {
+		return Stack{}, TimelineEvent{}, err
+	}
+	if event.RequestID == "" || event.RequestDigest == "" || event.ActorID == "" || len(strings.TrimSpace(event.Summary)) == 0 || len(event.Summary) > 2000 || (event.Kind != "checkpoint" && event.Kind != "question" && event.Kind != "handoff" && event.Kind != "restack_proposal") {
+		return Stack{}, TimelineEvent{}, ErrInvalid
+	}
+	for _, prior := range v.Timeline {
+		if prior.RequestID == event.RequestID {
+			if prior.RequestDigest != event.RequestDigest {
+				return Stack{}, TimelineEvent{}, ErrInvalid
+			}
+			return v, prior, nil
+		}
+	}
+	var member *Member
+	for i := range v.Members {
+		if v.Members[i].ID == event.MemberID {
+			member = &v.Members[i]
+			break
+		}
+	}
+	if member == nil || member.Revision == "" || event.Revision != member.Revision {
+		return Stack{}, TimelineEvent{}, ErrInvalid
+	}
+	activeAssignee := false
+	for _, assignment := range v.Assignments {
+		if assignment.MemberID == event.MemberID && assignment.PrincipalID == event.ActorID && assignment.Status == "active" {
+			activeAssignee = true
+			break
+		}
+	}
+	if !activeAssignee {
+		return Stack{}, TimelineEvent{}, ErrInvalid
+	}
+	if event.Kind == "handoff" && (event.FromPrincipalID == "" || event.ToPrincipalID == "" || event.FromPrincipalID != event.ActorID || event.FromPrincipalID == event.ToPrincipalID) {
+		return Stack{}, TimelineEvent{}, ErrInvalid
+	}
+	if event.WorkLaunchID != "" {
+		found := false
+		for _, launch := range v.WorkLaunches {
+			if launch.ID == event.WorkLaunchID && launch.MemberID == event.MemberID && launch.Revision == event.Revision {
+				found = true
+			}
+		}
+		if !found {
+			return Stack{}, TimelineEvent{}, ErrInvalid
+		}
+	}
+	if event.Kind == "restack_proposal" {
+		found := false
+		for _, r := range v.Restacks {
+			if r.ID == event.RestackID {
+				found = true
+			}
+		}
+		if !found {
+			return Stack{}, TimelineEvent{}, ErrInvalid
+		}
+	}
+	event.ID, event.Summary, event.UpstreamRevisions, event.CreatedAt = randomID(), strings.TrimSpace(event.Summary), upstreamSnapshot(v, member.ID), time.Now().UTC()
+	v.Timeline = append(v.Timeline, event)
+	return v, event, s.write(v)
+}
+
+func upstreamSnapshot(v Stack, memberID string) map[string]string {
+	out := map[string]string{}
+	for _, m := range v.Members {
+		if m.ID == memberID {
+			break
+		}
+		out[m.ID] = m.Revision
+	}
+	return out
 }
 func (s *Store) read(repo, id string) (Stack, error) {
 	var v Stack

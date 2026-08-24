@@ -1620,8 +1620,8 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	if authStore != nil && repositoryCatalog != nil && organizationStore != nil && restructuringPlanStore != nil && store != nil && pullRequestStore != nil && issueStore != nil && proposalStore != nil && releaseStore != nil && packageStore != nil && documentationStore != nil && governanceStore != nil && workspaceStore != nil && collaborationWorkflowStore != nil && relationshipStore != nil && federationStore != nil {
 		registerRestructuringPlanRoutes(mux, store, repositoryCatalog, authStore, organizationStore, restructuringPlanStore, pullRequestStore, issueStore, proposalStore, releaseStore, packageStore, documentationStore, governanceStore, workspaceStore, collaborationWorkflowStore, relationshipStore, federationStore)
 	}
-	if authStore != nil && repositoryCatalog != nil && store != nil && pullRequestStore != nil && changeStackStore != nil {
-		registerChangeStackRoutes(mux, store, repositoryCatalog, authStore, changeStackStore, pullRequestStore, checkRunStore, previewStore)
+	if authStore != nil && repositoryCatalog != nil && organizationStore != nil && store != nil && pullRequestStore != nil && changeStackStore != nil {
+		registerChangeStackRoutes(mux, store, repositoryCatalog, organizationStore, authStore, changeStackStore, pullRequestStore, checkRunStore, previewStore)
 	}
 	if authStore != nil && userStore != nil && repositoryCatalog != nil && apiContractStore != nil && pullRequestStore != nil && releaseStore != nil {
 		registerAPIContractRoutes(mux, store, repositoryCatalog, authStore, apiContractStore, pullRequestStore, releaseStore)

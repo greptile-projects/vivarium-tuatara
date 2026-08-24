@@ -19,6 +19,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/changestacks"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/previews"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
@@ -60,7 +61,7 @@ type stackPullContext struct {
 	Authority             string             `json:"authority"`
 }
 
-func registerChangeStackRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, stacks *changestacks.Store, pulls *pullrequests.Store, checks *checkruns.Store, previewStore *previews.Store) {
+func registerChangeStackRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, organizationsStore *organizations.Store, credentials *auth.Store, stacks *changestacks.Store, pulls *pullrequests.Store, checks *checkruns.Store, previewStore *previews.Store) {
 	project := func(v changestacks.Stack, actor auth.Credential, authenticated bool) changestacks.Stack {
 		participant := func(repositoryID string) bool {
 			if !authenticated {
@@ -202,6 +203,35 @@ func registerChangeStackRoutes(mux *http.ServeMux, git *storage.Store, catalog *
 		for _, m := range v.Members {
 			v.Diagnostics = append(v.Diagnostics, m.Diagnostics...)
 		}
+		visible := map[string]bool{}
+		current := map[string]string{}
+		for _, m := range v.Members {
+			visible[m.ID] = m.Permissions.Read
+			current[m.ID] = m.Revision
+		}
+		assignments := v.Assignments[:0]
+		for _, a := range v.Assignments {
+			if visible[a.MemberID] {
+				assignments = append(assignments, a)
+			}
+		}
+		v.Assignments = assignments
+		launches := v.WorkLaunches[:0]
+		for _, launch := range v.WorkLaunches {
+			if visible[launch.MemberID] {
+				launch.CurrentUpstream, launch.ChangedUpstream = stackUpstreamCurrent(launch.UpstreamRevisions, current)
+				launches = append(launches, launch)
+			}
+		}
+		v.WorkLaunches = launches
+		timeline := v.Timeline[:0]
+		for _, event := range v.Timeline {
+			if visible[event.MemberID] {
+				event.CurrentUpstream, event.ChangedUpstream = stackUpstreamCurrent(event.UpstreamRevisions, current)
+				timeline = append(timeline, event)
+			}
+		}
+		v.Timeline = timeline
 		return v
 	}
 	mux.HandleFunc("GET /repositories/{id}/change-stacks", func(w http.ResponseWriter, r *http.Request) {
@@ -450,6 +480,18 @@ func registerChangeStackRoutes(mux *http.ServeMux, git *storage.Store, catalog *
 		writeJSON(w, 201, project(out, actor, true))
 	})
 	registerChangeStackRestackRoutes(mux, git, catalog, credentials, stacks, pulls, checks)
+	registerChangeStackCollaborationRoutes(mux, catalog, organizationsStore, credentials, stacks)
+}
+
+func stackUpstreamCurrent(frozen, current map[string]string) (bool, []string) {
+	changed := []string{}
+	for id, revision := range frozen {
+		if current[id] != revision {
+			changed = append(changed, id)
+		}
+	}
+	sort.Strings(changed)
+	return len(changed) == 0, changed
 }
 
 func appendUniquePath(paths []string, candidate string) []string {
