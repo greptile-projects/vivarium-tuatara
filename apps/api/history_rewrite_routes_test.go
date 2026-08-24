@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -32,6 +35,7 @@ func TestAssembleAndRehearseHistoryCandidateWithoutMovingRef(t *testing.T) {
 	}
 	historyGit(t, repo, "add", ".")
 	historyGit(t, repo, "commit", "-m", "original")
+	historyGit(t, repo, "branch", "release")
 	oldTip := historyGit(t, repo, "rev-parse", "HEAD")
 	affected := historyGit(t, repo, "rev-parse", "HEAD:affected.txt")
 	cmd := exec.Command("git", "-C", repo, "hash-object", "-w", "--stdin")
@@ -42,7 +46,7 @@ func TestAssembleAndRehearseHistoryCandidateWithoutMovingRef(t *testing.T) {
 	}
 	replacement := strings.TrimSpace(string(replacementBytes))
 	v := historyremediations.Remediation{Scopes: []historyremediations.Scope{{Kind: "git_object", ObjectID: affected}}, ExposureMap: []historyremediations.ExposureFinding{{CopyKind: "active_clone", ResourceID: "clone-private", IndependentlyControlled: true}}}
-	in := historyremediations.RewriteCandidate{RequestID: "candidate-1", Rules: []historyremediations.RewriteRule{{ID: "replace", AffectedObjectID: affected, Action: "replace", ReplacementObjectID: replacement, Reason: "Replace the affected category"}}, SelectedRefs: []historyremediations.RewriteRef{{Name: "refs/heads/main", ExpectedTip: oldTip}}, RollbackLimit: "Old clones can restore the lineage.", CollaboratorActions: []string{"replace local branches"}}
+	in := historyremediations.RewriteCandidate{RequestID: "candidate-1", Rules: []historyremediations.RewriteRule{{ID: "replace", AffectedObjectID: affected, Action: "replace", ReplacementObjectID: replacement, Reason: "Replace the affected category"}}, SelectedRefs: []historyremediations.RewriteRef{{Name: "refs/heads/main", ExpectedTip: oldTip}, {Name: "refs/heads/release", ExpectedTip: oldTip}}, ObjectMap: []historyremediations.ObjectMapping{{OldObjectID: "forged", Action: "remove"}}, BrokenLinks: []string{"forged-link"}, Unrewritable: []string{"forged-resource"}, RollbackLimit: "Old clones can restore the lineage.", CollaboratorActions: []string{"replace local branches"}}
 	candidate, err := assembleHistoryCandidate(filepath.Join(repo, ".git"), v, in)
 	if err != nil {
 		t.Fatal(err)
@@ -50,8 +54,11 @@ func TestAssembleAndRehearseHistoryCandidateWithoutMovingRef(t *testing.T) {
 	if historyGit(t, repo, "rev-parse", "refs/heads/main") != oldTip {
 		t.Fatal("candidate assembly moved the authoritative ref")
 	}
-	if len(candidate.CandidateRefs) != 1 || candidate.CandidateRefs[0].NewTip == oldTip || len(candidate.CommitMap) != 1 || !candidate.CommitMap[0].Changed {
+	if len(candidate.CandidateRefs) != 2 || candidate.CandidateRefs[0].NewTip == oldTip || len(candidate.CommitMap) != 1 || !candidate.CommitMap[0].Changed {
 		t.Fatalf("candidate = %#v", candidate)
+	}
+	if len(candidate.ObjectMap) != 1 || candidate.ObjectMap[0].OldObjectID == "forged" || slices.Contains(candidate.BrokenLinks, "forged-link") || slices.Contains(candidate.Unrewritable, "forged-resource") {
+		t.Fatalf("client-derived audit fields survived: %#v", candidate)
 	}
 	if got := historyGit(t, repo, "show", candidate.CandidateRefs[0].NewTip+":affected.txt"); got != "sanitized" {
 		t.Fatalf("affected content = %q", got)
@@ -64,18 +71,48 @@ func TestAssembleAndRehearseHistoryCandidateWithoutMovingRef(t *testing.T) {
 	}
 	kinds := []string{"repository_integrity", "build", "check", "release", "dependency", "clone", "fetch"}
 	rehearsal := historyremediations.Rehearsal{RequestID: "run-1"}
-	for i, kind := range kinds {
-		command := "test \"$(cat affected.txt)\" = sanitized"
-		rehearsal.Scenarios = append(rehearsal.Scenarios, historyremediations.RehearsalScenario{ID: kind, Kind: kind, Command: command, Expectation: "candidate usable", TimeoutSeconds: 10})
-		_ = i
+	for _, kind := range kinds {
+		rehearsal.Scenarios = append(rehearsal.Scenarios, historyremediations.RehearsalScenario{ID: kind, Kind: kind, Expectation: "candidate usable", TimeoutSeconds: 10})
 	}
 	run, err := runHistoryRehearsal(filepath.Join(repo, ".git"), candidate, rehearsal)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(run.Outcomes) != len(kinds)*2 {
+		t.Fatalf("only part of the ref matrix ran: %#v", run.Outcomes)
+	}
+	covered := map[string]int{}
 	for _, outcome := range run.Outcomes {
-		if outcome.State != "passed" {
+		covered[outcome.RefName]++
+		if map[string]bool{"repository_integrity": true, "clone": true, "fetch": true}[outcome.Kind] && outcome.State != "passed" {
 			t.Fatalf("outcome = %#v", outcome)
 		}
+	}
+	if covered["refs/heads/main"] != 7 || covered["refs/heads/release"] != 7 {
+		t.Fatalf("coverage = %v", covered)
+	}
+}
+
+func TestBoundedRehearsalCommandHasNoHostOrNetworkAuthority(t *testing.T) {
+	cmd := boundedRehearsalCommand(context.Background(), t.TempDir(), "bounded-test", historyremediations.RehearsalScenario{Image: "example.invalid/preinstalled:test", Command: "touch /host-marker"})
+	joined := strings.Join(cmd.Args, " ")
+	for _, required := range []string{"--network=none", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "readonly"} {
+		if !strings.Contains(joined, required) {
+			t.Fatalf("missing %q in %s", required, joined)
+		}
+	}
+	if strings.HasPrefix(strings.Join(cmd.Args[:3], " "), "sh -c") {
+		t.Fatalf("host shell selected: %v", cmd.Args)
+	}
+}
+
+func TestHistoryRewriteCandidateInputRejectsDerivedAuditFields(t *testing.T) {
+	r := httptest.NewRequest("POST", "/", strings.NewReader(`{"expected_version":1,"candidate":{"request_id":"request","rules":[],"selected_refs":[],"rollback_limit":"limit","collaborator_actions":[],"object_map":[{"old_object_id":"forged"}]}}`))
+	var input struct {
+		ExpectedVersion int                          `json:"expected_version"`
+		Candidate       historyRewriteCandidateInput `json:"candidate"`
+	}
+	if err := decodeJSON(r, &input); err == nil {
+		t.Fatal("client-supplied derived audit projection was accepted")
 	}
 }

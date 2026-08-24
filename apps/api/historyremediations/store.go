@@ -133,6 +133,7 @@ type RewriteCandidate struct {
 type RehearsalScenario struct {
 	ID             string `json:"id"`
 	Kind           string `json:"kind"`
+	Image          string `json:"image,omitempty"`
 	Command        string `json:"command,omitempty"`
 	Expectation    string `json:"expectation"`
 	TimeoutSeconds int    `json:"timeout_seconds"`
@@ -140,6 +141,7 @@ type RehearsalScenario struct {
 type RehearsalOutcome struct {
 	ScenarioID string `json:"scenario_id"`
 	Kind       string `json:"kind"`
+	RefName    string `json:"ref_name"`
 	State      string `json:"state"`
 	ExitCode   int    `json:"exit_code"`
 	Output     string `json:"output,omitempty"`
@@ -348,7 +350,7 @@ func (s *Store) AddRewriteCandidate(repo, id string, expected int, in RewriteCan
 }
 
 func validRehearsal(v Rehearsal) bool {
-	if v.RequestID == "" || len(v.Scenarios) < 7 || len(v.Outcomes) != len(v.Scenarios) {
+	if v.RequestID == "" || len(v.Scenarios) < 7 || len(v.Outcomes) < len(v.Scenarios) {
 		return false
 	}
 	kinds := map[string]bool{"repository_integrity": true, "build": true, "check": true, "release": true, "dependency": true, "clone": true, "fetch": true}
@@ -361,10 +363,11 @@ func validRehearsal(v Rehearsal) bool {
 	}
 	outcomes := map[string]bool{}
 	for _, x := range v.Outcomes {
-		if seen[x.ScenarioID] != x.Kind || outcomes[x.ScenarioID] || !map[string]bool{"passed": true, "failed": true, "unsupported": true}[x.State] || len(x.Output) > 2000 {
+		key := x.RefName + "\x00" + x.ScenarioID
+		if x.RefName == "" || seen[x.ScenarioID] != x.Kind || outcomes[key] || !map[string]bool{"passed": true, "failed": true, "unsupported": true}[x.State] || len(x.Output) > 2000 {
 			return false
 		}
-		outcomes[x.ScenarioID] = true
+		outcomes[key] = true
 	}
 	b, err := json.Marshal(v)
 	return err == nil && !credentialPattern.Match(b)
@@ -400,6 +403,20 @@ func (s *Store) AddRehearsal(repo, id, candidateID string, expected int, in Rehe
 			return Remediation{}, ErrVersionConflict
 		}
 		in.CandidateID = candidateID
+		for _, ref := range c.CandidateRefs {
+			for _, scenario := range in.Scenarios {
+				found := false
+				for _, outcome := range in.Outcomes {
+					if outcome.RefName == ref.Name && outcome.ScenarioID == scenario.ID {
+						found = true
+						break
+					}
+				}
+				if !found {
+					return Remediation{}, ErrInvalid
+				}
+			}
+		}
 		if !validRehearsal(in) {
 			return Remediation{}, ErrInvalid
 		}

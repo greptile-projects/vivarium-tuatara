@@ -20,6 +20,18 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 )
 
+type historyRewriteCandidateInput struct {
+	RequestID           string                            `json:"request_id"`
+	Rules               []historyremediations.RewriteRule `json:"rules"`
+	SelectedRefs        []historyremediations.RewriteRef  `json:"selected_refs"`
+	RollbackLimit       string                            `json:"rollback_limit"`
+	CollaboratorActions []string                          `json:"collaborator_actions"`
+}
+type historyRewriteRehearsalInput struct {
+	RequestID string                                  `json:"request_id"`
+	Scenarios []historyremediations.RehearsalScenario `json:"scenarios"`
+}
+
 func registerHistoryRewriteRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, store *historyremediations.Store) {
 	mux.HandleFunc("POST /repositories/{id}/history-remediations/{remediation_id}/rewrite-candidates", func(w http.ResponseWriter, r *http.Request) {
 		c, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
@@ -32,8 +44,8 @@ func registerHistoryRewriteRoutes(mux *http.ServeMux, git *storage.Store, catalo
 			return
 		}
 		var in struct {
-			ExpectedVersion int                                  `json:"expected_version"`
-			Candidate       historyremediations.RewriteCandidate `json:"candidate"`
+			ExpectedVersion int                          `json:"expected_version"`
+			Candidate       historyRewriteCandidateInput `json:"candidate"`
 		}
 		if decodeJSON(r, &in) != nil {
 			writeAPIError(w, 400, "invalid_request", "an immutable rewrite candidate is required")
@@ -44,7 +56,8 @@ func registerHistoryRewriteRoutes(mux *http.ServeMux, git *storage.Store, catalo
 			writeAPIError(w, 422, "history_rewrite_repository_unavailable", "repository objects could not be resolved")
 			return
 		}
-		assembled, err := assembleHistoryCandidate(repo.Path(), v, in.Candidate)
+		candidateInput := historyremediations.RewriteCandidate{RequestID: in.Candidate.RequestID, Rules: in.Candidate.Rules, SelectedRefs: in.Candidate.SelectedRefs, RollbackLimit: in.Candidate.RollbackLimit, CollaboratorActions: in.Candidate.CollaboratorActions}
+		assembled, err := assembleHistoryCandidate(repo.Path(), v, candidateInput)
 		if err != nil {
 			writeAPIError(w, 422, "history_rewrite_candidate_invalid", err.Error())
 			return
@@ -72,8 +85,8 @@ func registerHistoryRewriteRoutes(mux *http.ServeMux, git *storage.Store, catalo
 			return
 		}
 		var in struct {
-			ExpectedVersion int                           `json:"expected_version"`
-			Rehearsal       historyremediations.Rehearsal `json:"rehearsal"`
+			ExpectedVersion int                          `json:"expected_version"`
+			Rehearsal       historyRewriteRehearsalInput `json:"rehearsal"`
 		}
 		if decodeJSON(r, &in) != nil {
 			writeAPIError(w, 400, "invalid_request", "a bounded rehearsal is required")
@@ -94,7 +107,8 @@ func registerHistoryRewriteRoutes(mux *http.ServeMux, git *storage.Store, catalo
 			writeAPIError(w, 422, "history_rewrite_repository_unavailable", "repository objects could not be resolved")
 			return
 		}
-		run, e := runHistoryRehearsal(repo.Path(), *candidate, in.Rehearsal)
+		rehearsalInput := historyremediations.Rehearsal{RequestID: in.Rehearsal.RequestID, Scenarios: in.Rehearsal.Scenarios}
+		run, e := runHistoryRehearsal(repo.Path(), *candidate, rehearsalInput)
 		if e != nil {
 			writeAPIError(w, 422, "history_rewrite_rehearsal_invalid", e.Error())
 			return
@@ -268,6 +282,19 @@ func assembleHistoryCandidate(gitDir string, v historyremediations.Remediation, 
 	if in.RequestID == "" || len(in.Rules) == 0 || len(in.SelectedRefs) == 0 {
 		return in, errors.New("request_id, rules, and selected refs are required")
 	}
+	// All audit projections are server-derived. Never append to request values.
+	in.ID = ""
+	in.CandidateRefs = nil
+	in.CommitMap = nil
+	in.ObjectMap = nil
+	in.BrokenSignatures = nil
+	in.BrokenLinks = nil
+	in.Unrewritable = nil
+	in.OriginalBytes = 0
+	in.CandidateBytes = 0
+	in.CreatedBy = ""
+	in.CreatedAt = time.Time{}
+	in.Rehearsals = nil
 	allowed := map[string]bool{}
 	for _, s := range v.Scopes {
 		if s.Kind == "git_object" {
@@ -359,99 +386,138 @@ func objectBytes(gitDir string, m []historyremediations.ObjectMapping, replaceme
 	return n
 }
 
-func runHistoryRehearsal(gitDir string, c historyremediations.RewriteCandidate, in historyremediations.Rehearsal) (historyremediations.Rehearsal, error) {
-	if in.RequestID == "" || len(in.Scenarios) < 7 {
-		return in, errors.New("request_id and all seven rehearsal scenario kinds are required")
+func validRehearsalImage(image string) bool {
+	if image == "" || len(image) > 200 || strings.ContainsAny(image, " \t\r\n@") {
+		return false
 	}
-	tips := map[string]string{}
-	for _, r := range c.CandidateRefs {
-		tips[r.Name] = r.NewTip
+	for _, r := range image {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("./:_-", r)) {
+			return false
+		}
 	}
-	if len(tips) == 0 {
-		return in, errors.New("candidate has no replacement tips")
-	}
-	first := ""
-	for _, r := range c.CandidateRefs {
-		first = r.NewTip
-		break
-	}
-	work, err := os.MkdirTemp("", "history-rehearsal-*")
+	return true
+}
+
+func candidateCheckout(gitDir, tip, work string) error {
+	index, err := os.CreateTemp("", "history-rehearsal-index-*")
 	if err != nil {
-		return in, err
+		return err
 	}
-	defer os.RemoveAll(work)
-	index := filepath.Join(work, "index")
-	cmd := exec.Command("git", "--git-dir="+gitDir, "--work-tree="+work, "checkout", "--force", first, "--", ".")
-	cmd.Env = append(os.Environ(), "GIT_INDEX_FILE="+index)
+	indexPath := index.Name()
+	_ = index.Close()
+	_ = os.Remove(indexPath)
+	defer os.Remove(indexPath)
+	cmd := exec.Command("git", "--git-dir="+gitDir, "--work-tree="+work, "checkout", "--force", tip, "--", ".")
+	cmd.Env = append(os.Environ(), "GIT_INDEX_FILE="+indexPath)
 	if b, e := cmd.CombinedOutput(); e != nil {
-		return in, fmt.Errorf("candidate checkout failed: %s", strings.TrimSpace(string(b)))
+		return fmt.Errorf("candidate checkout failed: %s", strings.TrimSpace(string(b)))
 	}
-	started := time.Now()
+	return nil
+}
+
+func boundedRehearsalCommand(ctx context.Context, work, containerName string, scenario historyremediations.RehearsalScenario) *exec.Cmd {
+	return exec.CommandContext(ctx, "docker", "run", "--name", containerName, "--rm", "--pull=never", "--network=none", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=128", "--memory=512m", "--cpus=1", "--user", fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid()), "--mount", "type=bind,src="+work+",dst=/workspace,readonly", "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,size=64m,mode=1777", "--workdir", "/workspace", "--env", "HOME=/tmp", "--env", "CI=true", scenario.Image, "sh", "-c", scenario.Command)
+}
+
+func runHistoryRehearsal(gitDir string, c historyremediations.RewriteCandidate, in historyremediations.Rehearsal) (historyremediations.Rehearsal, error) {
+	if in.RequestID == "" || len(in.Scenarios) < 7 || len(c.CandidateRefs) == 0 {
+		return in, errors.New("request_id, candidate refs, and all seven rehearsal scenario kinds are required")
+	}
+	// Results and attribution are executor/store derived, never accepted from callers.
+	in.ID = ""
+	in.CandidateID = ""
+	in.Outcomes = nil
+	in.State = ""
+	in.CreatedBy = ""
+	in.CreatedAt = time.Time{}
+	in.ComputeSeconds = 0
 	seen := map[string]bool{}
 	for _, scenario := range in.Scenarios {
 		seen[scenario.Kind] = true
-		outcome := historyremediations.RehearsalOutcome{ScenarioID: scenario.ID, Kind: scenario.Kind, State: "failed", ExitCode: 1}
-		timeout := scenario.TimeoutSeconds
-		if timeout < 1 || timeout > 600 {
+		if scenario.TimeoutSeconds < 1 || scenario.TimeoutSeconds > 600 {
 			return in, errors.New("scenario timeout must be between 1 and 600 seconds")
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
-		var run *exec.Cmd
-		switch scenario.Kind {
-		case "repository_integrity":
-			run = exec.CommandContext(ctx, "git", "--git-dir="+gitDir, "fsck", "--no-dangling", first)
-		case "fetch":
-			bare := filepath.Join(work, "representative-"+scenario.Kind+".git")
-			if e := exec.Command("git", "init", "--bare", bare).Run(); e != nil {
-				cancel()
-				return in, e
-			}
-			run = exec.CommandContext(ctx, "git", "--git-dir="+bare, "fetch", "--no-tags", gitDir, first)
-		case "clone":
-			bare := filepath.Join(work, "representative-clone-source.git")
-			if e := exec.Command("git", "init", "--bare", bare).Run(); e != nil {
-				cancel()
-				return in, e
-			}
-			if b, e := exec.Command("git", "--git-dir="+bare, "fetch", "--no-tags", gitDir, first).CombinedOutput(); e != nil {
-				cancel()
-				return in, fmt.Errorf("representative clone preparation failed: %s", strings.TrimSpace(string(b)))
-			}
-			if e := exec.Command("git", "--git-dir="+bare, "update-ref", "refs/heads/candidate", "FETCH_HEAD").Run(); e != nil {
-				cancel()
-				return in, e
-			}
-			run = exec.CommandContext(ctx, "git", "clone", "--no-local", "--branch", "candidate", bare, filepath.Join(work, "representative-clone"))
-		default:
-			if strings.TrimSpace(scenario.Command) == "" {
-				outcome.State = "unsupported"
-				outcome.Output = "No revision-appropriate command was supplied."
-				in.Outcomes = append(in.Outcomes, outcome)
-				cancel()
-				continue
-			}
-			run = exec.CommandContext(ctx, "sh", "-c", scenario.Command)
-			run.Dir = work
-			run.Env = []string{"PATH=" + os.Getenv("PATH"), "LANG=C.UTF-8", "LC_ALL=C.UTF-8"}
+		if scenario.Command != "" && !validRehearsalImage(scenario.Image) {
+			return in, errors.New("command scenarios require a bounded preinstalled container image")
 		}
-		b, e := run.CombinedOutput()
-		cancel()
-		if len(b) > 2000 {
-			b = b[:2000]
-		}
-		outcome.Output = strings.TrimSpace(string(b))
-		if e == nil {
-			outcome.State = "passed"
-			outcome.ExitCode = 0
-		} else if exit, ok := e.(*exec.ExitError); ok {
-			outcome.ExitCode = exit.ExitCode()
-		}
-		in.Outcomes = append(in.Outcomes, outcome)
 	}
 	for _, kind := range []string{"repository_integrity", "build", "check", "release", "dependency", "clone", "fetch"} {
 		if !seen[kind] {
 			return in, errors.New("all required rehearsal scenario kinds must be present")
 		}
+	}
+	started := time.Now()
+	for refIndex, candidateRef := range c.CandidateRefs {
+		work, err := os.MkdirTemp("", "history-rehearsal-*")
+		if err != nil {
+			return in, err
+		}
+		if err = candidateCheckout(gitDir, candidateRef.NewTip, work); err != nil {
+			_ = os.RemoveAll(work)
+			return in, err
+		}
+		for scenarioIndex, scenario := range in.Scenarios {
+			outcome := historyremediations.RehearsalOutcome{ScenarioID: scenario.ID, Kind: scenario.Kind, RefName: candidateRef.Name, State: "failed", ExitCode: 1}
+			if strings.TrimSpace(scenario.Command) == "" && !map[string]bool{"repository_integrity": true, "clone": true, "fetch": true}[scenario.Kind] {
+				outcome.State = "unsupported"
+				outcome.Output = "No revision-appropriate command and image were supplied."
+				in.Outcomes = append(in.Outcomes, outcome)
+				continue
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Duration(scenario.TimeoutSeconds)*time.Second)
+			var run *exec.Cmd
+			containerName := ""
+			switch scenario.Kind {
+			case "repository_integrity":
+				run = exec.CommandContext(ctx, "git", "--git-dir="+gitDir, "fsck", "--no-dangling", candidateRef.NewTip)
+			case "fetch":
+				bare := filepath.Join(work, fmt.Sprintf("representative-fetch-%d-%d.git", refIndex, scenarioIndex))
+				if e := exec.Command("git", "init", "--bare", bare).Run(); e != nil {
+					cancel()
+					_ = os.RemoveAll(work)
+					return in, e
+				}
+				run = exec.CommandContext(ctx, "git", "--git-dir="+bare, "fetch", "--no-tags", gitDir, candidateRef.NewTip)
+			case "clone":
+				bare := filepath.Join(work, fmt.Sprintf("representative-clone-source-%d-%d.git", refIndex, scenarioIndex))
+				if e := exec.Command("git", "init", "--bare", bare).Run(); e != nil {
+					cancel()
+					_ = os.RemoveAll(work)
+					return in, e
+				}
+				if b, e := exec.Command("git", "--git-dir="+bare, "fetch", "--no-tags", gitDir, candidateRef.NewTip).CombinedOutput(); e != nil {
+					cancel()
+					_ = os.RemoveAll(work)
+					return in, fmt.Errorf("representative clone preparation failed: %s", strings.TrimSpace(string(b)))
+				}
+				if e := exec.Command("git", "--git-dir="+bare, "update-ref", "refs/heads/candidate", "FETCH_HEAD").Run(); e != nil {
+					cancel()
+					_ = os.RemoveAll(work)
+					return in, e
+				}
+				run = exec.CommandContext(ctx, "git", "clone", "--no-local", "--branch", "candidate", bare, filepath.Join(work, fmt.Sprintf("representative-clone-%d-%d", refIndex, scenarioIndex)))
+			default:
+				containerName = fmt.Sprintf("vivarium-history-rehearsal-%d-%d-%d-%d", os.Getpid(), refIndex, scenarioIndex, time.Now().UnixNano())
+				run = boundedRehearsalCommand(ctx, work, containerName, scenario)
+			}
+			b, e := run.CombinedOutput()
+			cancel()
+			if containerName != "" {
+				_ = exec.Command("docker", "rm", "-f", containerName).Run()
+			}
+			if len(b) > 2000 {
+				b = b[:2000]
+			}
+			outcome.Output = strings.TrimSpace(string(b))
+			if e == nil {
+				outcome.State = "passed"
+				outcome.ExitCode = 0
+			} else if exit, ok := e.(*exec.ExitError); ok {
+				outcome.ExitCode = exit.ExitCode()
+			}
+			in.Outcomes = append(in.Outcomes, outcome)
+		}
+		_ = os.RemoveAll(work)
 	}
 	in.ComputeSeconds = int64(time.Since(started).Seconds())
 	return in, nil

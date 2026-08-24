@@ -174,7 +174,7 @@ func TestRewriteCandidateAndRehearsalAreCASVersionedAndRetryStable(t *testing.T)
 	run := Rehearsal{RequestID: "run-1"}
 	for _, kind := range kinds {
 		run.Scenarios = append(run.Scenarios, RehearsalScenario{ID: kind, Kind: kind, Expectation: "usable", TimeoutSeconds: 10})
-		run.Outcomes = append(run.Outcomes, RehearsalOutcome{ScenarioID: kind, Kind: kind, State: "passed"})
+		run.Outcomes = append(run.Outcomes, RehearsalOutcome{ScenarioID: kind, Kind: kind, RefName: "refs/heads/main", State: "passed"})
 	}
 	finished, err := s.AddRehearsal("repo", created.ID, updated.RewriteCandidates[0].ID, 2, run, "maintainer")
 	if err != nil || finished.Version != 3 || finished.RewriteCandidates[0].Rehearsals[0].State != "passed" {
