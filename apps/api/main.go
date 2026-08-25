@@ -100,6 +100,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/restructuringplans"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/reviewplans"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/roadmaps"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/securityadvisories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/securityconfidence"
@@ -199,6 +200,14 @@ func main() {
 		pullRequestRoot = "pull-requests"
 	}
 	pullRequestStore, err := pullrequests.New(pullRequestRoot, store)
+	if err != nil {
+		log.Fatal(err)
+	}
+	reviewPlanRoot := os.Getenv("REVIEW_PLAN_STORAGE_ROOT")
+	if reviewPlanRoot == "" {
+		reviewPlanRoot = "review-plans"
+	}
+	reviewPlanStore, err := reviewplans.New(reviewPlanRoot)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -926,7 +935,7 @@ func main() {
 		port = "8080"
 	}
 
-	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, charterStore, governanceStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, supportThreadStore, supportVerificationStore, supportSolutionStore, knowledgeAnswerStore, contributorPathwayStore, learningPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore, performanceGoalStore, performanceEvidenceStore, productExperimentStore, feedbackStore, productOpportunityStore, roadmapStore, outcomeValidationStore, projectFundStore, incubatorStore, adoptionWorkspaceStore, accessibilityCommitmentStore, accessibilityReportStore, accessibilityAssessmentStore, accessibilityDeliveryStore, dataCommitmentStore, dataFlowStore, privacyReviewStore, privacyCheckStore, dataObservationStore, localePlanStore, localizationStore, serviceObjectiveStore, recoveryCommitmentStore, protectionPlanStore, recoveryExerciseStore, recoveryOperationStore, agentEvaluationStore, agentProjectStore, agentCandidateStore, apiContractStore, durableSchemaStore, infrastructureStore, debugWorkspaceStore, interfaceSystemStore, capabilityStore, designProposalStore, interfaceCheckStore, designGovernanceStore, qualityPlanStore, assuranceProgramStore, assuranceEvidenceStore, assuranceImpactStore, assuranceAssessmentStore, testScenarioStore, exploratorySessionStore, releaseConfidenceStore, securityExpectationStore, threatModelStore, securityScenarioStore, securityFindingStore, securityConfidenceStore, collaborationWorkflowStore, workflowComponentStore, regressionInvestigationStore, propagationCampaignStore, historyRemediationStore, restructuringPlanStore, changeStackStore)
+	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, reviewPlanStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, charterStore, governanceStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, supportThreadStore, supportVerificationStore, supportSolutionStore, knowledgeAnswerStore, contributorPathwayStore, learningPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore, performanceGoalStore, performanceEvidenceStore, productExperimentStore, feedbackStore, productOpportunityStore, roadmapStore, outcomeValidationStore, projectFundStore, incubatorStore, adoptionWorkspaceStore, accessibilityCommitmentStore, accessibilityReportStore, accessibilityAssessmentStore, accessibilityDeliveryStore, dataCommitmentStore, dataFlowStore, privacyReviewStore, privacyCheckStore, dataObservationStore, localePlanStore, localizationStore, serviceObjectiveStore, recoveryCommitmentStore, protectionPlanStore, recoveryExerciseStore, recoveryOperationStore, agentEvaluationStore, agentProjectStore, agentCandidateStore, apiContractStore, durableSchemaStore, infrastructureStore, debugWorkspaceStore, interfaceSystemStore, capabilityStore, designProposalStore, interfaceCheckStore, designGovernanceStore, qualityPlanStore, assuranceProgramStore, assuranceEvidenceStore, assuranceImpactStore, assuranceAssessmentStore, testScenarioStore, exploratorySessionStore, releaseConfidenceStore, securityExpectationStore, threatModelStore, securityScenarioStore, securityFindingStore, securityConfidenceStore, collaborationWorkflowStore, workflowComponentStore, regressionInvestigationStore, propagationCampaignStore, historyRemediationStore, restructuringPlanStore, changeStackStore)
 	startCheckRunRecovery(store, checkRunStore)
 	startIntegrationQueueRecovery(pullRequestStore)
 	startDeploymentRecovery(deploymentStore, checkRunStore)
@@ -1143,6 +1152,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	var securityConfidenceStore *securityconfidence.Store
 	var collaborationWorkflowStore *collaborationworkflows.Store
 	var workflowComponentStore *workflowcomponents.Store
+	var reviewPlanStore *reviewplans.Store
 	for _, optional := range optionalStores {
 		switch value := optional.(type) {
 		case *releases.Store:
@@ -1325,6 +1335,8 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 			collaborationWorkflowStore = value
 		case *workflowcomponents.Store:
 			workflowComponentStore = value
+		case *reviewplans.Store:
+			reviewPlanStore = value
 		}
 	}
 	mux := http.NewServeMux()
@@ -1376,6 +1388,9 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 			registerAcceptanceRoutes(mux, repositoryCatalog, pullRequestStore, acceptanceStore, previewStore, authStore)
 		}
 		registerPullRequestRoutes(mux, store, repositoryCatalog, proposalStore, pullRequestStore, authStore, activityStore, userStore, checkRunStore, changeSessionStore, documentationStore, durableSchemaStore, federationStore)
+		if reviewPlanStore != nil {
+			registerReviewPlanRoutes(mux, repositoryCatalog, authStore, pullRequestStore, reviewPlanStore)
+		}
 		if documentationStore != nil {
 			registerDocumentationReviewRoutes(mux, store, repositoryCatalog, pullRequestStore, documentationStore, checkRunStore, authStore)
 		}

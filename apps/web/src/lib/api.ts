@@ -3926,6 +3926,37 @@ export type PullRequestReview = {
   created_at: string;
   updated_at: string;
 };
+export type ReviewPlan = {
+  id: string;
+  request_id: string;
+  repository_id: string;
+  pull_request_id: string;
+  version: number;
+  source_revision: string;
+  target_revision: string;
+  intent: string;
+  risk_summary: string;
+  changed_paths: string[];
+  policy_requirements: string[];
+  affected_commitments: string[];
+  areas: {
+    id: string;
+    title: string;
+    rationale: string;
+    paths: string[];
+    owner_ids?: string[];
+    acceptance_questions: string[];
+    required_evidence: { kind: string; description: string; required: boolean }[];
+    depends_on?: string[];
+    completion_rule: string;
+  }[];
+  completion_rule: string;
+  diagnostics: { code: string; area_id?: string; message: string; attributed_to?: string }[];
+  stale: boolean;
+  created_by: string;
+  created_at: string;
+  authority: string;
+};
 export type DocumentationPullReview = {
   repository_id: string;
   pull_request_id: string;
