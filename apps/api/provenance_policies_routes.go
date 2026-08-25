@@ -46,6 +46,10 @@ func registerProvenancePolicyRoutes(mux *http.ServeMux, repos *repositories.Stor
 			if !ok {
 				return a, false
 			}
+			if a.RepositoryID != "" {
+				writeAPIError(w, 404, "organization_not_found", "organization not found")
+				return a, false
+			}
 			if orgs == nil {
 				writeAPIError(w, 404, "organization_not_found", "organization not found")
 				return a, false
@@ -128,7 +132,17 @@ func registerProvenancePolicyRoutes(mux *http.ServeMux, repos *repositories.Stor
 					}
 					e = repos.WithCurrentParticipants(participants, r.PathValue("id"), save)
 				} else {
-					e = save()
+					repositoryIDs := []string{}
+					for _, link := range in.Revision.Links {
+						if link.RepositoryID != "" {
+							repositoryIDs = append(repositoryIDs, link.RepositoryID)
+						}
+					}
+					if len(repositoryIDs) == 0 {
+						e = save()
+					} else {
+						e = repos.WithCurrentOrganizationRepositories(r.PathValue("id"), repositoryIDs, save)
+					}
 				}
 				status := 201
 				if revise {
@@ -228,6 +242,8 @@ func writeProvenancePolicy(w http.ResponseWriter, v provenancepolicies.Policy, e
 		writeAPIError(w, 400, "invalid_provenance_policy", "material rules, licenses, owners, distribution contexts, links, and exceptions must be complete and consistent")
 	case errors.Is(e, repositories.ErrInvalidCollaborator):
 		writeAPIError(w, 403, "provenance_policy_owner_invalid", "policy, review, and exception owners must be current repository participants")
+	case errors.Is(e, repositories.ErrNotFound):
+		writeAPIError(w, 422, "invalid_provenance_link", "a linked repository no longer belongs to the policy scope")
 	default:
 		writeAPIError(w, 500, "provenance_policies_unavailable", "provenance policy could not be persisted")
 	}

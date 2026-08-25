@@ -485,6 +485,41 @@ func (s *Store) WithCurrentParticipants(userIDs []string, repositoryID string, f
 	return s.WithCurrentDeliveryAuthority(userIDs, repositoryID, "", fn)
 }
 
+// WithCurrentOrganizationRepositories holds the catalog mutation boundary while
+// proving every named active repository still belongs to the organization. It
+// prevents organization-scoped dependent records from committing a repository
+// identity concurrently deleted or transferred across that boundary.
+func (s *Store) WithCurrentOrganizationRepositories(organizationID string, repositoryIDs []string, fn func() error) error {
+	if !validID(organizationID) || len(repositoryIDs) == 0 || fn == nil {
+		return ErrNotFound
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lockRoot()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	seen := map[string]bool{}
+	for _, repositoryID := range repositoryIDs {
+		if !validID(repositoryID) {
+			return ErrNotFound
+		}
+		if seen[repositoryID] {
+			continue
+		}
+		seen[repositoryID] = true
+		repository, readErr := s.read(repositoryID)
+		if readErr != nil || repository.OrganizationID != organizationID {
+			return ErrNotFound
+		}
+		if _, openErr := s.git.Open(repositoryID); openErr != nil {
+			return ErrNotFound
+		}
+	}
+	return fn()
+}
+
 // WithCurrentParticipantsAndReadAccess holds one catalog boundary while
 // proving provider ownership roles and the publisher's read access to every
 // repository whose existence a dependent record would disclose.
