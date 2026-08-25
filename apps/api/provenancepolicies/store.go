@@ -137,6 +137,21 @@ func (s *Store) Get(id string) (Policy, error) {
 	err := s.lock(func() error { var e error; out, e = s.read(id); return e })
 	return s.project(out), err
 }
+
+// WithCurrent holds the policy mutation boundary while a caller validates and
+// commits a decision against the supplied authoritative policy snapshot.
+func (s *Store) WithCurrent(id string, fn func(Policy) error) error {
+	if fn == nil {
+		return ErrInvalid
+	}
+	return s.lock(func() error {
+		p, err := s.read(id)
+		if err != nil {
+			return err
+		}
+		return fn(s.project(p))
+	})
+}
 func (s *Store) List(kind, scope string) ([]Policy, error) {
 	out := []Policy{}
 	err := s.lock(func() error {

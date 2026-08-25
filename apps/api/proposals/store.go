@@ -106,6 +106,9 @@ type ReasoningOrigin struct {
 	PropagationCampaignID          string                     `json:"propagation_campaign_id,omitempty"`
 	PropagationTargetID            string                     `json:"propagation_target_id,omitempty"`
 	PropagationAssessmentID        string                     `json:"propagation_assessment_id,omitempty"`
+	ProvenanceAssessmentID         string                     `json:"provenance_assessment_id,omitempty"`
+	ProvenanceFindingID            string                     `json:"provenance_finding_id,omitempty"`
+	ProvenanceRepairRequestID      string                     `json:"provenance_repair_request_id,omitempty"`
 }
 
 type ReasoningItem struct {
@@ -156,14 +159,14 @@ type Task struct {
 }
 
 type ImplementationTaskInput struct {
-	Title, Outcome, Risk, VerificationPlan, AssigneeType, AssigneeID string
-	DependsOnPrevious                                                bool
+	ID, Title, Outcome, Risk, VerificationPlan, AssigneeType, AssigneeID string
+	DependsOnPrevious                                                    bool
 }
 
 type ImplementationInput struct {
-	RepositoryID, ActorID, Title, Body string
-	Origin                             ReasoningOrigin
-	Tasks                              []ImplementationTaskInput
+	RepositoryID, ActorID, ProposalID, Title, Body string
+	Origin                                         ReasoningOrigin
+	Tasks                                          []ImplementationTaskInput
 }
 
 // TaskContribution is the bidirectional review handoff. Status follows the
@@ -417,13 +420,14 @@ func (s *Store) CreateImplementation(input ImplementationInput) (Proposal, []Tas
 	isSecurityFinding := validID(input.Origin.SecurityFindingID) && input.Origin.SecurityFindingVersion > 0 && validThreatModelReference(input.Origin.ThreatModelID) && input.Origin.ThreatModelVersion > 0
 	isRegression := validID(input.Origin.RegressionInvestigationID) && validID(input.Origin.RegressionResponseID)
 	isPropagation := validReliabilityReference(input.Origin.PropagationCampaignID) && strings.TrimSpace(input.Origin.PropagationTargetID) != "" && validReliabilityReference(input.Origin.PropagationAssessmentID) && input.Origin.AssessmentVersion > 0
+	isProvenance := validID(input.Origin.ProvenanceAssessmentID) && input.Origin.AssessmentVersion > 0 && strings.TrimSpace(input.Origin.ProvenanceFindingID) != "" && validID(input.Origin.ProvenanceRepairRequestID)
 	originCount := 0
-	for _, present := range []bool{isAssessment, isAccessibility, isDecision, isIssue, isGovernance, isRoadmap, isDataObservation, isReliability, isRecovery, isSupport, isDebugging, isDesign, isExploratory, isSecurityFinding, isRegression, isPropagation} {
+	for _, present := range []bool{isAssessment, isAccessibility, isDecision, isIssue, isGovernance, isRoadmap, isDataObservation, isReliability, isRecovery, isSupport, isDebugging, isDesign, isExploratory, isSecurityFinding, isRegression, isPropagation, isProvenance} {
 		if present {
 			originCount++
 		}
 	}
-	if !validID(input.RepositoryID) || !validID(input.ActorID) || originCount != 1 || len(input.Origin.Revision) != 40 || len(input.Tasks) == 0 || len(input.Tasks) > 20 || len(input.Origin.Items) == 0 {
+	if !validID(input.RepositoryID) || !validID(input.ActorID) || (input.ProposalID != "" && !validID(input.ProposalID)) || originCount != 1 || len(input.Origin.Revision) != 40 || len(input.Tasks) == 0 || len(input.Tasks) > 20 || len(input.Origin.Items) == 0 {
 		return Proposal{}, nil, ErrInvalid
 	}
 	title, body, err := validateContent(input.Title, input.Body)
@@ -441,6 +445,7 @@ func (s *Store) CreateImplementation(input ImplementationInput) (Proposal, []Tas
 	if err != nil {
 		return Proposal{}, nil, err
 	}
+	reservedIDOccupied := false
 	for _, entry := range entries {
 		id, ok := strings.CutSuffix(entry.Name(), ".json")
 		if entry.IsDir() || !ok || !validID(id) {
@@ -449,6 +454,9 @@ func (s *Store) CreateImplementation(input ImplementationInput) (Proposal, []Tas
 		r, readErr := s.read(id)
 		if readErr != nil {
 			return Proposal{}, nil, readErr
+		}
+		if input.ProposalID != "" && r.Proposal.ID == input.ProposalID {
+			reservedIDOccupied = true
 		}
 		if isDebugging && r.Proposal.RepositoryID == input.RepositoryID && r.Proposal.Reasoning != nil && r.Proposal.Reasoning.DebuggingRepairWorkID == input.Origin.DebuggingRepairWorkID {
 			if !reflect.DeepEqual(*r.Proposal.Reasoning, input.Origin) || r.Proposal.Title != title || r.Proposal.Body != body || len(r.Tasks) != len(input.Tasks) {
@@ -498,6 +506,18 @@ func (s *Store) CreateImplementation(input ImplementationInput) (Proposal, []Tas
 			}
 			return r.Proposal, append([]Task(nil), r.Tasks...), nil
 		}
+		if isProvenance && r.Proposal.RepositoryID == input.RepositoryID && r.Proposal.Reasoning != nil && r.Proposal.Reasoning.ProvenanceAssessmentID == input.Origin.ProvenanceAssessmentID && r.Proposal.Reasoning.ProvenanceRepairRequestID == input.Origin.ProvenanceRepairRequestID {
+			if !reflect.DeepEqual(*r.Proposal.Reasoning, input.Origin) || r.Proposal.Title != title || r.Proposal.Body != body || len(r.Tasks) != len(input.Tasks) {
+				return Proposal{}, nil, ErrImplementationConflict
+			}
+			for i, task := range r.Tasks {
+				value := input.Tasks[i]
+				if task.Title != strings.TrimSpace(value.Title) || task.Outcome != strings.TrimSpace(value.Outcome) || task.Risk != strings.TrimSpace(value.Risk) || task.VerificationPlan != strings.TrimSpace(value.VerificationPlan) || task.Assignment == nil || task.Assignment.AssigneeType != value.AssigneeType || (value.AssigneeID != "" && task.Assignment.AssigneeID != value.AssigneeID) || (i > 0 && value.DependsOnPrevious != (len(task.DependencyIDs) == 1 && task.DependencyIDs[0] == r.Tasks[i-1].ID)) {
+					return Proposal{}, nil, ErrImplementationConflict
+				}
+			}
+			return r.Proposal, append([]Task(nil), r.Tasks...), nil
+		}
 		if r.Proposal.RepositoryID == input.RepositoryID && r.Proposal.Reasoning != nil && ((isAccessibility && r.Proposal.Reasoning.AssessmentID == input.Origin.AssessmentID && r.Proposal.Reasoning.AccessibilityFindingID == input.Origin.AccessibilityFindingID) || (isAssessment && r.Proposal.Reasoning.AssessmentID == input.Origin.AssessmentID && r.Proposal.Reasoning.AssuranceFindingID == input.Origin.AssuranceFindingID) || (isDecision && r.Proposal.Reasoning.DecisionID == input.Origin.DecisionID && r.Proposal.Reasoning.CommitmentVersion == input.Origin.CommitmentVersion) || (isIssue && r.Proposal.Reasoning.IssueID == input.Origin.IssueID && r.Proposal.Reasoning.ReproductionID == input.Origin.ReproductionID) || (isGovernance && r.Proposal.Reasoning.GovernanceProposalID == input.Origin.GovernanceProposalID) || (isRoadmap && r.Proposal.Reasoning.RoadmapItemID == input.Origin.RoadmapItemID && r.Proposal.Reasoning.RoadmapVersion == input.Origin.RoadmapVersion) || (isDataObservation && r.Proposal.Reasoning.DataObservationID == input.Origin.DataObservationID) || (isReliability && r.Proposal.Reasoning.ReliabilityContractID == input.Origin.ReliabilityContractID && r.Proposal.Reasoning.ReliabilityFindingID == input.Origin.ReliabilityFindingID && r.Proposal.Reasoning.ReliabilityImpactID == input.Origin.ReliabilityImpactID) || (isRecovery && r.Proposal.Reasoning.RecoveryExerciseID == input.Origin.RecoveryExerciseID && r.Proposal.Reasoning.RecoveryFindingID == input.Origin.RecoveryFindingID) || (isSupport && r.Proposal.Reasoning.SupportThreadID == input.Origin.SupportThreadID) || (isDesign && r.Proposal.Reasoning.DesignProposalID == input.Origin.DesignProposalID)) {
 			if ((isAccessibility || isIssue || isGovernance || isRoadmap || isReliability || isRecovery || isSupport || isDesign) && !reflect.DeepEqual(*r.Proposal.Reasoning, input.Origin)) || r.Proposal.Title != title || r.Proposal.Body != body || len(r.Tasks) != len(input.Tasks) {
 				return Proposal{}, nil, ErrImplementationConflict
@@ -511,9 +531,15 @@ func (s *Store) CreateImplementation(input ImplementationInput) (Proposal, []Tas
 			return r.Proposal, append([]Task(nil), r.Tasks...), nil
 		}
 	}
-	proposalID, err := newID()
-	if err != nil {
-		return Proposal{}, nil, err
+	if reservedIDOccupied {
+		return Proposal{}, nil, ErrImplementationConflict
+	}
+	proposalID := input.ProposalID
+	if proposalID == "" {
+		proposalID, err = newID()
+		if err != nil {
+			return Proposal{}, nil, err
+		}
 	}
 	now := s.now().Truncate(time.Microsecond)
 	origin := input.Origin
@@ -535,9 +561,12 @@ func (s *Store) CreateImplementation(input ImplementationInput) (Proposal, []Tas
 		if err != nil || !validID(assignee) {
 			return Proposal{}, nil, ErrInvalid
 		}
-		taskID, idErr := newID()
-		if idErr != nil {
-			return Proposal{}, nil, idErr
+		taskID := value.ID
+		if taskID == "" {
+			taskID, err = newID()
+		}
+		if err != nil || !validID(taskID) {
+			return Proposal{}, nil, ErrInvalid
 		}
 		assignmentID, idErr := newID()
 		if idErr != nil {

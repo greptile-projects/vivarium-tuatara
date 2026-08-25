@@ -67,6 +67,16 @@ func TestDecisionImplementationFreezesCriteriaOwnershipAndRetry(t *testing.T) {
 	}
 }
 
+func TestImplementationHonorsPreReservedWorkIDs(t *testing.T) {
+	store, _ := New(t.TempDir())
+	proposalID, taskID := strings.Repeat("1", 32), strings.Repeat("2", 32)
+	origin := ReasoningOrigin{DecisionID: strings.Repeat("d", 32), CommitmentVersion: 1, Revision: strings.Repeat("a", 40), AnalysisStatus: "accepted_decision", SelectedItemIDs: []string{"decision"}, Items: []ReasoningItem{{ID: "decision", Kind: "decision", Summary: "reserved work", Status: "accepted"}}}
+	p, tasks, err := store.CreateImplementation(ImplementationInput{RepositoryID: repositoryID, ActorID: authorID, ProposalID: proposalID, Title: "Reserved repair", Body: "Publish exact prelinked identities.", Origin: origin, Tasks: []ImplementationTaskInput{{ID: taskID, Title: "Repair", Outcome: "Complete repair", AssigneeType: "human", AssigneeID: commenterID}}})
+	if err != nil || p.ID != proposalID || len(tasks) != 1 || tasks[0].ID != taskID {
+		t.Fatalf("reserved identities = %#v %#v, %v", p, tasks, err)
+	}
+}
+
 func TestAssuranceImplementationAcceptsCanonicalAssessmentReferences(t *testing.T) {
 	store, _ := New(t.TempDir())
 	origin := ReasoningOrigin{AssessmentID: strings.Repeat("a", 24), AssessmentVersion: 4, AssuranceFindingID: strings.Repeat("b", 24), Revision: strings.Repeat("c", 40), AnalysisStatus: "authorized_assurance_remediation", SelectedItemIDs: []string{strings.Repeat("b", 24)}, Items: []ReasoningItem{{ID: strings.Repeat("b", 24), Kind: "assurance_finding", Summary: "retention evidence is incomplete", Status: "contested"}}}
