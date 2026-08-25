@@ -9,6 +9,7 @@ import {
   type ReleaseBuild,
   type ReleaseCandidate,
   type PackageVersion,
+  type ProvenanceBundle,
   type Repository,
   type User,
 } from "@/lib/api";
@@ -245,6 +246,10 @@ export function ReleaseDetail({
   const [identityWarning, setIdentityWarning] = useState("");
   const [building, setBuilding] = useState(false);
   const [publishing, setPublishing] = useState(false);
+  const [bundles, setBundles] = useState<ProvenanceBundle[]>([]);
+  const [graphs, setGraphs] = useState<{ id: string; revision: string; analysis_digest: string; stale: boolean }[]>([]);
+  const [assessments, setAssessments] = useState<{ id: string; candidate: { kind: string; id: string; revision: string }; graph_id: string; ready: boolean }[]>([]);
+  const [bundling, setBundling] = useState(false);
   useEffect(() => {
     if (loading) return;
     let active = true;
@@ -257,16 +262,22 @@ export function ReleaseDetail({
         if (!active) return;
         setRelease(item);
         setError("");
-        const [buildSet, repo, packageSet] = await Promise.all([
+        const [buildSet, repo, packageSet, bundleSet, graphSet, assessmentSet] = await Promise.all([
           api<{ builds: ReleaseBuild[] }>(
             `/repositories/${repositoryID}/releases/${releaseID}/builds`, {}, token),
           api<Repository>(`/repositories/${repositoryID}`, {}, token),
           api<{ packages: PackageVersion[] }>(`/repositories/${repositoryID}/packages`, {}, token),
+          api<{ bundles: ProvenanceBundle[] }>(`/repositories/${repositoryID}/releases/${releaseID}/provenance-bundles`, {}, token),
+          api<{ graphs: { id: string; revision: string; analysis_digest: string; stale: boolean }[] }>(`/repositories/${repositoryID}/provenance-graphs`, {}, token),
+          api<{ assessments: { id: string; candidate: { kind: string; id: string; revision: string }; graph_id: string; ready: boolean }[] }>(`/repositories/${repositoryID}/provenance-assessments`, {}, token),
         ]);
         if (!active) return;
         setRepository(repo);
         setPackages(packageSet.packages.filter((value) => value.release_id === releaseID));
         setBuilds(buildSet.builds);
+        setBundles(bundleSet.bundles);
+        setGraphs(graphSet.graphs);
+        setAssessments(assessmentSet.assessments);
         const evidence = await Promise.all(
           buildSet.builds.map((build) =>
             api<ReleaseAttestation>(
@@ -412,6 +423,20 @@ export function ReleaseDetail({
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Package could not be published.");
     } finally { setPublishing(false); }
+  }
+  async function publishBundle(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); if (!token) return;
+    const form = event.currentTarget; const data = new FormData(form);
+    setBundling(true); setError("");
+    try {
+      const created = await api<ProvenanceBundle>(`/repositories/${repositoryID}/releases/${releaseID}/provenance-bundles`, { method: "POST", body: JSON.stringify({
+        request_id: crypto.randomUUID(), graph_id: data.get("graph_id"), assessment_id: data.get("assessment_id"), audience: data.get("audience"),
+        omissions: String(data.get("omissions") || "").split("\n").filter(Boolean), notices: String(data.get("notices") || "").split("\n").filter(Boolean),
+        verification: String(data.get("verification") || "").split("\n").filter(Boolean),
+      }) }, token);
+      setBundles((current) => [created, ...current]); form.reset();
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "Provenance bundle could not be published."); }
+    finally { setBundling(false); }
   }
   if (error)
     return (
@@ -585,6 +610,32 @@ export function ReleaseDetail({
         releaseID={releaseID}
         builds={builds}
       />
+      <Card className="p-5">
+        <h2 className="text-lg font-semibold">Verifiable provenance</h2>
+        <p className="mt-1 text-sm text-[var(--muted)]">Signed release claims preserve the exact SBOM, licenses, attestations, omissions, and artifact digests consumers received. Current trust changes appear as notices without changing that signature.</p>
+        <div className="mt-4 space-y-3">
+          {bundles.length === 0 ? <p className="text-sm text-[var(--muted)]">No provenance bundle has been published.</p> : bundles.map((bundle) => (
+            <div key={bundle.id} className="rounded-lg border border-[var(--line)] p-4">
+              <div className="flex flex-wrap items-center gap-2"><Badge tone={bundle.current ? "success" : "warning"}>{bundle.current ? "Current trust" : "Trust changed"}</Badge><Badge>{bundle.claim.audience}</Badge><span className="text-xs text-[var(--muted)]">{bundle.algorithm}</span></div>
+              <code className="mt-3 block break-all text-xs">sha256:{bundle.payload_sha256}</code>
+              <p className="mt-2 text-xs text-[var(--muted)]">{bundle.claim.artifacts.length} artifact(s) · {bundle.claim.materials.length} material(s) · {bundle.claim.dependencies.length} dependency edge(s) · {bundle.claim.licenses.join(", ") || "licenses declared through notices"}</p>
+              {bundle.claim.omissions.length > 0 && <p className="mt-2 text-sm"><strong>Declared omissions:</strong> {bundle.claim.omissions.join("; ")}</p>}
+              {bundle.notices.map((notice) => <p key={notice.id} className="mt-2 rounded bg-[var(--warning-soft)] p-2 text-sm text-[var(--warning)]"><strong>{notice.kind.replaceAll("_", " ")}:</strong> {notice.summary}</p>)}
+              <details className="mt-3"><summary className="cursor-pointer text-sm font-semibold text-[var(--brand)]">Independent verification material</summary><div className="mt-2 space-y-2 text-xs"><p>Public key: <code className="break-all">{bundle.public_key}</code></p><p>Signature: <code className="break-all">{bundle.signature}</code></p>{bundle.claim.verification.map((step) => <p key={step}>• {step}</p>)}<a className="font-semibold text-[var(--brand)] hover:underline" href={`data:application/json;charset=utf-8,${encodeURIComponent(JSON.stringify(bundle, null, 2))}`} download={`${release.version}-provenance.json`}>Download signed JSON bundle</a></div></details>
+            </div>
+          ))}
+        </div>
+        {user?.id === repository?.owner_id && packages.length > 0 && (() => { const eligibleGraphs = graphs.filter((graph) => graph.revision === release.commit_id && !graph.stale); const eligibleAssessments = assessments.filter((assessment) => assessment.candidate.kind === "release_candidate" && assessment.candidate.id === release.id && assessment.candidate.revision === release.commit_id && assessment.ready); return eligibleGraphs.length > 0 && eligibleAssessments.length > 0 ? (
+          <form onSubmit={publishBundle} className="mt-6 grid gap-4 border-t border-[var(--line)] pt-5 md:grid-cols-2">
+            <label className="text-xs font-semibold">Exact provenance graph<select name="graph_id" required className="mt-2 min-h-10 w-full rounded-lg border border-[var(--line-strong)] bg-white px-3 font-mono text-sm font-normal">{eligibleGraphs.map((graph) => <option key={graph.id} value={graph.id}>{graph.id.slice(0, 12)} · {graph.analysis_digest.slice(0, 12)}</option>)}</select></label>
+            <label className="text-xs font-semibold">Blocking-free assessment<select name="assessment_id" required className="mt-2 min-h-10 w-full rounded-lg border border-[var(--line-strong)] bg-white px-3 font-mono text-sm font-normal">{eligibleAssessments.map((assessment) => <option key={assessment.id} value={assessment.id}>{assessment.id.slice(0, 12)}</option>)}</select></label>
+            <label className="text-xs font-semibold">Consumer audience<select name="audience" className="mt-2 min-h-10 w-full rounded-lg border border-[var(--line-strong)] bg-white px-3 text-sm font-normal"><option value="public">Public consumers</option><option value="repository">Repository participants</option></select></label>
+            <label className="text-xs font-semibold md:col-span-2">Verification instructions <span className="font-normal text-[var(--muted)]">(one step per line)</span><textarea name="verification" required rows={3} defaultValue={"Decode payload with base64url\nHash decoded payload with SHA-256 and compare payload_sha256\nVerify the Ed25519 signature over that digest, then hash each artifact"} className="mt-2 w-full rounded-lg border border-[var(--line-strong)] p-3 text-sm font-normal" /></label>
+            <label className="text-xs font-semibold">Declared omissions<textarea name="omissions" rows={3} placeholder="One audience-safe omission per line" className="mt-2 w-full rounded-lg border border-[var(--line-strong)] p-3 text-sm font-normal" /></label>
+            <label className="text-xs font-semibold">Distribution notices<textarea name="notices" rows={3} placeholder="One required notice per line" className="mt-2 w-full rounded-lg border border-[var(--line-strong)] p-3 text-sm font-normal" /></label>
+            <div><Button type="submit" disabled={bundling}>{bundling ? "Signing…" : "Publish signed bundle"}</Button></div>
+          </form>) : <p className="mt-4 text-sm text-[var(--muted)]">A current exact graph and blocking-free release assessment are required before signing.</p>; })()}
+      </Card>
       <Card className="p-5">
         <h2 className="text-lg font-semibold">Published packages</h2>
         <p className="mt-1 text-sm text-[var(--muted)]">
