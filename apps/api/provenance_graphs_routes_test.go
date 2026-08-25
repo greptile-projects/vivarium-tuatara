@@ -26,8 +26,9 @@ func TestProvenanceAnalysisResolvesExactGitEvidenceAndRedactsRestrictedOrigin(t 
 		t.Fatalf("server citation = %#v", citation)
 	}
 	g.Diagnostics = append(g.Diagnostics, provenancegraphs.Diagnostic{Kind: "private", NodeID: "private", Message: "embargoed-kit is missing", AttributedTo: "owner"})
+	g.Diagnostics = append(g.Diagnostics, provenancegraphs.Diagnostic{Kind: "visible", NodeID: "output", Message: "Visible output needs review", AttributedTo: "owner"})
 	reader := projectProvenanceGraph(g, "reader")
-	if len(reader.Nodes) != 1 || reader.Nodes[0].ID != "output" || len(reader.Edges) != 0 || len(reader.Diagnostics) != 1 || reader.Diagnostics[0].Kind != "restricted_provenance" {
+	if len(reader.Nodes) != 1 || reader.Nodes[0].ID != "output" || len(reader.Edges) != 0 || len(reader.Diagnostics) != 2 || reader.Diagnostics[0].Kind != "visible" || reader.Diagnostics[1].Kind != "restricted_provenance" {
 		t.Fatalf("restricted evidence leaked: %#v", reader)
 	}
 	owner := projectProvenanceGraph(g, "owner")
@@ -51,7 +52,14 @@ func TestProvenanceDiagnosticsUseExactMaterialIdentityForLicenseClaims(t *testin
 	if kinds["contradictory_license"] {
 		t.Fatalf("distinct same-label materials conflicted: %#v", ds)
 	}
-	g.Edges = []provenancegraphs.Edge{{ID: "left-claim", From: "left", To: "output", Transformation: "attested", Confidence: "verified"}, {ID: "right-claim", From: "right", To: "output", Transformation: "attested", Confidence: "verified"}}
+	g.Edges = []provenancegraphs.Edge{{ID: "left-ordinary", From: "left", To: "output", Transformation: "packaged", Confidence: "verified"}, {ID: "right-ordinary", From: "right", To: "output", Transformation: "attested", Confidence: "verified"}}
+	ds = deriveProvenanceDiagnostics(g)
+	for _, d := range ds {
+		if d.Kind == "contradictory_license" {
+			t.Fatalf("ordinary transformations became claims: %#v", ds)
+		}
+	}
+	g.Edges = []provenancegraphs.Edge{{ID: "left-claim", From: "left", To: "output", Transformation: "licensed_as", Confidence: "verified"}, {ID: "right-claim", From: "right", To: "output", Transformation: "licensed_as", Confidence: "verified"}}
 	ds = deriveProvenanceDiagnostics(g)
 	found := false
 	for _, d := range ds {

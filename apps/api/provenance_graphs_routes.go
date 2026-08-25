@@ -172,7 +172,7 @@ func deriveProvenanceDiagnostics(g provenancegraphs.Graph) []provenancegraphs.Di
 		// A license node can make an additional claim about one exact material.
 		// Labels are deliberately excluded: they are presentation text and need
 		// not be unique. The edge provides the stable material identity.
-		if source, ok := nodes[e.From]; ok && source.Kind == "license" && source.License != "" {
+		if source, ok := nodes[e.From]; ok && e.Transformation == "licensed_as" && source.Kind == "license" && source.License != "" {
 			if licenses[e.To] == nil {
 				licenses[e.To] = map[string]bool{}
 			}
@@ -268,7 +268,7 @@ func projectProvenanceGraph(g provenancegraphs.Graph, actor string) provenancegr
 		}
 		sensitive := false
 		for _, n := range hidden {
-			if d.AttributedTo == n.DeclaredBy || n.Label != "" && strings.Contains(strings.ToLower(d.Message), strings.ToLower(n.Label)) {
+			if n.Label != "" && strings.Contains(strings.ToLower(d.Message), strings.ToLower(n.Label)) {
 				sensitive = true
 				break
 			}

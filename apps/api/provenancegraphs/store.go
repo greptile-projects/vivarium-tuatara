@@ -132,15 +132,20 @@ func valid(g Graph) bool {
 		return false
 	}
 	ids := map[string]bool{}
+	nodes := map[string]Node{}
 	for _, n := range g.Nodes {
 		if n.ID == "" || ids[n.ID] || !one(n.Kind, "file", "commit", "fragment", "asset", "dependency", "build_step", "artifact", "contributor", "agent", "upstream_project", "license", "attestation", "tool") || n.Label == "" || !one(n.Confidence, "declared", "verified", "inferred", "unknown", "contradicted") || !one(n.Audience, "public", "repository", "restricted") {
 			return false
 		}
 		ids[n.ID] = true
+		nodes[n.ID] = n
 	}
 	edgeIDs := map[string]bool{}
 	for _, e := range g.Edges {
-		if e.ID == "" || edgeIDs[e.ID] || !ids[e.From] || !ids[e.To] || !one(e.Transformation, "authored", "copied", "generated", "packaged", "compiled", "linked", "downloaded", "derived", "attested", "contributed") || !one(e.Confidence, "declared", "verified", "inferred", "unknown", "contradicted") {
+		if e.ID == "" || edgeIDs[e.ID] || !ids[e.From] || !ids[e.To] || !one(e.Transformation, "authored", "copied", "generated", "packaged", "compiled", "linked", "downloaded", "derived", "attested", "contributed", "licensed_as") || !one(e.Confidence, "declared", "verified", "inferred", "unknown", "contradicted") {
+			return false
+		}
+		if e.Transformation == "licensed_as" && (nodes[e.From].Kind != "license" || nodes[e.From].License == "" || !one(nodes[e.To].Kind, "file", "fragment", "asset", "dependency", "artifact")) {
 			return false
 		}
 		edgeIDs[e.ID] = true
