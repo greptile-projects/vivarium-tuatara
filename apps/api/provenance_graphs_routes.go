@@ -158,7 +158,7 @@ func analyzeProvenanceGraph(g *provenancegraphs.Graph, gitStore *storage.Store) 
 }
 func deriveProvenanceDiagnostics(g provenancegraphs.Graph) []provenancegraphs.Diagnostic {
 	out := []provenancegraphs.Diagnostic{}
-	incoming := map[string]int{}
+	originIncoming := map[string]int{}
 	licenses := map[string]map[string]bool{}
 	nodes := map[string]provenancegraphs.Node{}
 	for _, n := range g.Nodes {
@@ -168,7 +168,9 @@ func deriveProvenanceDiagnostics(g provenancegraphs.Graph) []provenancegraphs.Di
 		}
 	}
 	for _, e := range g.Edges {
-		incoming[e.To]++
+		if provenanceOriginTransformation(e.Transformation) {
+			originIncoming[e.To]++
+		}
 		// A license node can make an additional claim about one exact material.
 		// Labels are deliberately excluded: they are presentation text and need
 		// not be unique. The edge provides the stable material identity.
@@ -183,7 +185,7 @@ func deriveProvenanceDiagnostics(g provenancegraphs.Graph) []provenancegraphs.Di
 		}
 	}
 	for _, n := range g.Nodes {
-		if (n.Kind == "file" || n.Kind == "fragment" || n.Kind == "asset" || n.Kind == "artifact") && incoming[n.ID] == 0 {
+		if (n.Kind == "file" || n.Kind == "fragment" || n.Kind == "asset" || n.Kind == "artifact") && originIncoming[n.ID] == 0 {
 			out = append(out, provenancegraphs.Diagnostic{Kind: "missing_origin", Severity: "blocking", NodeID: n.ID, Message: "No attributable origin transformation reaches this shipped material.", AttributedTo: n.DeclaredBy})
 		}
 		if n.Confidence == "unknown" {
@@ -198,6 +200,18 @@ func deriveProvenanceDiagnostics(g provenancegraphs.Graph) []provenancegraphs.Di
 	sort.Slice(out, func(i, j int) bool { return out[i].Kind+out[i].NodeID < out[j].Kind+out[j].NodeID })
 	return out
 }
+
+func provenanceOriginTransformation(value string) bool {
+	switch value {
+	case "authored", "copied", "generated", "packaged", "compiled", "linked", "downloaded", "derived", "contributed":
+		return true
+	default:
+		// attested and licensed_as support a claim but do not establish how the
+		// shipped material came into existence.
+		return false
+	}
+}
+
 func currentProvenanceGraph(g provenancegraphs.Graph, gitStore *storage.Store, repos *repositories.Store) provenancegraphs.Graph {
 	r, e := repos.GetByID(g.RepositoryID)
 	if e != nil {

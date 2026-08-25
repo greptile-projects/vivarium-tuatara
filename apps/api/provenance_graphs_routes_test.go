@@ -62,12 +62,19 @@ func TestProvenanceDiagnosticsUseExactMaterialIdentityForLicenseClaims(t *testin
 	g.Edges = []provenancegraphs.Edge{{ID: "left-claim", From: "left", To: "output", Transformation: "licensed_as", Confidence: "verified"}, {ID: "right-claim", From: "right", To: "output", Transformation: "licensed_as", Confidence: "verified"}}
 	ds = deriveProvenanceDiagnostics(g)
 	found := false
+	missingOrigin := false
 	for _, d := range ds {
 		if d.Kind == "contradictory_license" && d.NodeID == "output" {
 			found = true
 		}
+		if d.Kind == "missing_origin" && d.NodeID == "output" {
+			missingOrigin = true
+		}
 	}
 	if !found {
 		t.Fatalf("exact material conflict missing: %#v", ds)
+	}
+	if !missingOrigin {
+		t.Fatalf("license-only relationship satisfied material origin: %#v", ds)
 	}
 }
