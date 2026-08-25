@@ -2,11 +2,16 @@ package main
 
 import (
 	"errors"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/agentprojects"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/contributorpathways"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
+	packages "github.com/greptile-projects/vivarium-tuatara/apps/api/packages"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/provenancepolicies"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"net/http"
+	"strings"
 )
 
 type provenancePolicyInput struct {
@@ -14,7 +19,7 @@ type provenancePolicyInput struct {
 	Revision        provenancepolicies.Revision `json:"revision"`
 }
 
-func registerProvenancePolicyRoutes(mux *http.ServeMux, repos *repositories.Store, orgs *organizations.Store, credentials *auth.Store, store *provenancepolicies.Store) {
+func registerProvenancePolicyRoutes(mux *http.ServeMux, repos *repositories.Store, orgs *organizations.Store, credentials *auth.Store, store *provenancepolicies.Store, pathways *contributorpathways.Store, agents *agentprojects.Store, packageStore *packages.Store, releaseStore *releases.Store) {
 	register := func(kind, prefix string) {
 		authorize := func(w http.ResponseWriter, r *http.Request, write bool) (auth.Credential, bool) {
 			id := r.PathValue("id")
@@ -33,7 +38,11 @@ func registerProvenancePolicyRoutes(mux *http.ServeMux, repos *repositories.Stor
 				}
 				return a, true
 			}
-			a, ok := authenticateRequest(w, r, credentials, "organizations:write", false)
+			scope := "repositories:read"
+			if write {
+				scope = "repositories:write"
+			}
+			a, ok := authenticateRequest(w, r, credentials, scope, false)
 			if !ok {
 				return a, false
 			}
@@ -91,6 +100,10 @@ func registerProvenancePolicyRoutes(mux *http.ServeMux, repos *repositories.Stor
 					writeAPIError(w, 400, "invalid_request", "a complete provenance policy revision is required")
 					return
 				}
+				if !validProvenanceLinks(kind, r.PathValue("id"), in.Revision.Links, repos, pathways, agents, packageStore, releaseStore) {
+					writeAPIError(w, 422, "invalid_provenance_link", "every linked pathway, agent contract, package, release, and contribution boundary must resolve within the policy scope")
+					return
+				}
 				var out provenancepolicies.Policy
 				var e error
 				save := func() error {
@@ -129,6 +142,79 @@ func registerProvenancePolicyRoutes(mux *http.ServeMux, repos *repositories.Stor
 	}
 	register("repository", "/repositories")
 	register("organization", "/organizations")
+}
+
+func validProvenanceLinks(scopeKind, scopeID string, links []provenancepolicies.Link, repos *repositories.Store, pathways *contributorpathways.Store, agents *agentprojects.Store, packageStore *packages.Store, releaseStore *releases.Store) bool {
+	for _, link := range links {
+		repositoryID := link.RepositoryID
+		if scopeKind == "repository" {
+			if repositoryID != "" && repositoryID != scopeID {
+				return false
+			}
+			repositoryID = scopeID
+		} else {
+			if repositoryID == "" {
+				return false
+			}
+			repository, err := repos.GetByID(repositoryID)
+			if err != nil || repository.OrganizationID != scopeID {
+				return false
+			}
+		}
+		switch link.Kind {
+		case "contributor_pathway":
+			if pathways == nil {
+				return false
+			}
+			values, err := pathways.List(repositoryID)
+			if err != nil {
+				return false
+			}
+			found := false
+			for _, value := range values {
+				if value.ID == link.ResourceID {
+					found = true
+				}
+			}
+			if !found {
+				return false
+			}
+		case "agent_contract":
+			if agents == nil {
+				return false
+			}
+			value, err := agents.Get(link.ResourceID)
+			if err != nil || value.RepositoryID != repositoryID {
+				return false
+			}
+		case "package":
+			if packageStore == nil {
+				return false
+			}
+			name, version, ok := strings.Cut(link.ResourceID, "@")
+			if !ok {
+				return false
+			}
+			value, err := packageStore.Get(name, version)
+			if err != nil || value.RepositoryID != repositoryID {
+				return false
+			}
+		case "release":
+			if releaseStore == nil {
+				return false
+			}
+			if _, err := releaseStore.Get(repositoryID, link.ResourceID); err != nil {
+				return false
+			}
+		case "contribution_boundary":
+			if link.ResourceID != repositoryID {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }
 func writeProvenancePolicy(w http.ResponseWriter, v provenancepolicies.Policy, e error, status int) {
 	switch {

@@ -1462,7 +1462,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		provenancePolicyStore, _ = provenancepolicies.New(root)
 	}
 	if authStore != nil && repositoryCatalog != nil && provenancePolicyStore != nil {
-		registerProvenancePolicyRoutes(mux, repositoryCatalog, organizationStore, authStore, provenancePolicyStore)
+		registerProvenancePolicyRoutes(mux, repositoryCatalog, organizationStore, authStore, provenancePolicyStore, contributorPathwayStore, agentProjectStore, packageStore, releaseStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && userStore != nil && assuranceProgramStore != nil && assuranceEvidenceStore != nil && assuranceAssessmentStore != nil {
 		registerAssuranceAssessmentRoutes(mux, store, repositoryCatalog, authStore, userStore, assuranceProgramStore, assuranceEvidenceStore, assuranceAssessmentStore, proposalStore, pullRequestStore, releaseStore)
