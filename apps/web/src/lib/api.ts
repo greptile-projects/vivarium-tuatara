@@ -3980,6 +3980,10 @@ export type ReviewWorkPage = {
   plan_id: string; plan_version: number; source_revision: string; target_revision: string; stale: boolean;
   queues: { area: ReviewPlan["areas"][number]; assignments: ReviewAssignment[]; entries: ReviewWorkEntry[];
     coverage: { entry_count: number; finding_count: number; uncertainty_count: number; conflicting_conclusions: boolean }; dependencies: string[] }[];
+  finding_resolutions: { finding: ReviewWorkEntry; current_state: "applicable" | "stale" | "accept" | "defer" | "supersede" | "resolved" | "accepted_risk" | "exception" | "remains_applicable"; verified: boolean;
+    events: { id: string; actor_type: "human" | "agent"; actor_id: string; action: string; classification?: string; rationale: string; dissent?: string;
+      candidate_revision: string; links: { kind: string; resource_id: string; container_id?: string; revision?: string; description?: string }[];
+      verification_evidence: ReviewWorkEntry["citations"]; expires_at?: string; created_at: string }[] }[];
   authority: string;
 };
 export type DocumentationPullReview = {

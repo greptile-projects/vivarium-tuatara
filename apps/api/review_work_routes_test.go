@@ -47,3 +47,19 @@ func TestReviewWorkCheckCitationBindsExactPullAndRevision(t *testing.T) {
 		t.Fatal("fabricated check citation accepted")
 	}
 }
+
+func TestFindingResolutionProjectionPreservesStaleReasoningAndRequiresPassingCurrentCheck(t *testing.T) {
+	old := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	current := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	finding := reviewplans.WorkEntry{ID: "finding", Kind: "finding", SourceRevision: old, Body: "Retry may duplicate publication."}
+	values := []reviewplans.FindingResolution{{FindingID: "finding", CandidateRevision: old, Action: "resolved", Rationale: "Old candidate changed."}}
+	projected := projectFindingResolutions([]reviewplans.WorkEntry{finding}, values, current, nil, "repo", "pull")
+	if projected[0]["current_state"] != "stale" || projected[0]["verified"] != false {
+		t.Fatalf("moved finding projection = %#v", projected[0])
+	}
+	values = append(values, reviewplans.FindingResolution{FindingID: "finding", CandidateRevision: current, Action: "remains_applicable", Rationale: "The same path remains in the diff."})
+	projected = projectFindingResolutions([]reviewplans.WorkEntry{finding}, values, current, nil, "repo", "pull")
+	if projected[0]["current_state"] != "remains_applicable" {
+		t.Fatalf("reaffirmed finding projection = %#v", projected[0])
+	}
+}
