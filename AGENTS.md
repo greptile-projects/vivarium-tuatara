@@ -2702,6 +2702,23 @@ whenever dependencies change or the web job fails before it starts.
   skills, and explicit next-opportunity readiness; exact retries are
   idempotent.
 
+- **Project learning pathways** — Authorized repository collaborators publish
+  immutable role- or outcome-specific curricula at
+  `/repositories/{id}/learning-pathways/{slug}` and readers discover current
+  pathways from the collection route. Revisions retain prerequisites,
+  objectives, supported commits, ordered modules, exercises, completion
+  evidence, effort, mentors, accessibility needs, locales, and supported or
+  unsupported learner environments. Module materials cite exact documentation,
+  symbols, decisions, issues, APIs, packages, or contributor guidance. Reads
+  recheck exact Git objects and symbols, current project movement, linked
+  records, mentor/support-owner participation, and project guidance versions;
+  stale, inaccessible, unsupported, and missing-owner states remain explicit
+  without rewriting history. Storage defaults beneath
+  `$LEARNING_PATHWAY_STORAGE_ROOT` (`learning-pathways`), and the repository web
+  surface is `/repositories/{id}/learning`. These records coordinate learning
+  only and grant no repository, Git, issue, package, mentor, workspace, review,
+  or completion authority.
+
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
 
   Pull privacy review at `/repositories/{id}/pulls/{pull_id}/privacy-review` requires a candidate

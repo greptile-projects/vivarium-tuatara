@@ -231,6 +231,7 @@ export function RepositoryBrowser({ id }: { id: string }) {
           </p>
           <div className="mt-3 flex flex-wrap gap-4">
             <Link href={`/repositories/${id}/contribute`} className="text-sm font-semibold text-[var(--brand)] hover:underline">How to contribute</Link>
+            <Link href={`/repositories/${id}/learning`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Project learning</Link>
             <Link href={`/repositories/${id}/charter`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Project charter</Link>
             <Link href={`/repositories/${id}/documentation`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Documentation</Link>
             <Link href={`/repositories/${id}/api-contracts`} className="text-sm font-semibold text-[var(--brand)] hover:underline">API contracts</Link>
