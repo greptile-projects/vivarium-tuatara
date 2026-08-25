@@ -335,16 +335,16 @@ export function ProvenanceAssessmentsWorkspace({
               <Badge tone="success">{r.strategy.replaceAll("_", " ")}</Badge>{" "}
               {r.clean_room && <Badge>clean room</Badge>}
               <p className="mt-2">{r.acceptance_criteria.join(" · ")}</p>
-              {r.state === "published" ? (
-                <Link
-                  className="text-[var(--brand)]"
-                  href={`/proposals/${repositoryID}/${r.proposal_id}`}
-                >
-                  Open ordinary repair work
-                </Link>
-              ) : (
+              <Link
+                className="text-[var(--brand)]"
+                href={`/proposals/${repositoryID}/${r.proposal_id}`}
+              >
+                Open ordinary repair work
+              </Link>
+              {r.state === "reserved" && (
                 <p className="text-[var(--muted)]">
-                  Work publication is reserved and can be retried safely.
+                  Exact work identities are reserved; publication or
+                  finalization can be retried safely.
                 </p>
               )}
             </div>

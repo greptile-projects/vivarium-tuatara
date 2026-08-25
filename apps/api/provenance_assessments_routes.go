@@ -168,6 +168,13 @@ func registerProvenanceAssessmentRoutes(mux *http.ServeMux, repos *repositories.
 			}{in.FindingID, in.Strategy, in.PermittedEvidence, in.AcceptanceCriteria, in.CleanRoom, in.Title, in.Tasks})
 			workSum := sha256.Sum256(workBytes)
 			workDigest := hex.EncodeToString(workSum[:])
+			proposalSum := sha256.Sum256([]byte(a.ID + "\x00" + in.RequestID + "\x00proposal"))
+			proposalID := hex.EncodeToString(proposalSum[:16])
+			plannedTaskIDs := make([]string, len(in.Tasks))
+			for i := range in.Tasks {
+				taskSum := sha256.Sum256([]byte(a.ID + "\x00" + in.RequestID + "\x00task\x00" + fmt.Sprint(i)))
+				plannedTaskIDs[i] = hex.EncodeToString(taskSum[:16])
+			}
 			var reservation *provenanceassessments.Repair
 			for i := range projected.Repairs {
 				prior := &projected.Repairs[i]
@@ -206,13 +213,22 @@ func registerProvenanceAssessmentRoutes(mux *http.ServeMux, repos *repositories.
 				return
 			}
 			if reservation == nil {
-				reserved := provenanceassessments.Repair{RequestID: in.RequestID, WorkDigest: workDigest, FindingID: finding.ID, AffectedRevision: a.Candidate.Revision, Strategy: in.Strategy, PermittedEvidence: in.PermittedEvidence, AcceptanceCriteria: in.AcceptanceCriteria, CleanRoom: in.CleanRoom}
+				reserved := provenanceassessments.Repair{RequestID: in.RequestID, WorkDigest: workDigest, FindingID: finding.ID, AffectedRevision: a.Candidate.Revision, Strategy: in.Strategy, PermittedEvidence: in.PermittedEvidence, AcceptanceCriteria: in.AcceptanceCriteria, CleanRoom: in.CleanRoom, ProposalID: proposalID, TaskIDs: plannedTaskIDs}
 				var reservedAssessment provenanceassessments.Assessment
 				err = policies.WithCurrent(a.PolicyID, func(policy provenancepolicies.Policy) error {
 					fresh := provenanceAssessmentCurrentWithPolicy(a, repos, graphs, policy, pulls, stackStore, releaseStore, packageStore)
 					var reserveErr error
-					reservedAssessment, reserveErr = store.LinkRepair(a.RepositoryID, a.ID, actor.UserID, in.ExpectedVersion, reserved, func() provenanceassessments.Current { return fresh })
-					return reserveErr
+					participationErr := repos.WithCurrentParticipant(actor.UserID, a.RepositoryID, func() error {
+						reservedAssessment, reserveErr = store.LinkRepair(a.RepositoryID, a.ID, actor.UserID, in.ExpectedVersion, reserved, func() provenanceassessments.Current { return fresh })
+						return reserveErr
+					})
+					if reserveErr != nil {
+						return reserveErr
+					}
+					if participationErr != nil {
+						return provenanceassessments.ErrForbidden
+					}
+					return nil
 				})
 				if err != nil {
 					writeProvenanceAssessment(w, reservedAssessment, err, 201)
@@ -239,12 +255,12 @@ func registerProvenanceAssessmentRoutes(mux *http.ServeMux, repos *repositories.
 				if task.AssigneeType == "human" && assignee == "" {
 					assignee = actor.UserID
 				}
-				tasks[i] = proposals.ImplementationTaskInput{Title: task.Title, Outcome: criteria, Risk: "Unresolved " + finding.Kind + " at " + a.Candidate.Revision + ". " + boundary, VerificationPlan: "Prove the acceptance criteria without rewriting original authorship: " + criteria, AssigneeType: task.AssigneeType, AssigneeID: assignee, DependsOnPrevious: i > 0}
+				tasks[i] = proposals.ImplementationTaskInput{ID: plannedTaskIDs[i], Title: task.Title, Outcome: criteria, Risk: "Unresolved " + finding.Kind + " at " + a.Candidate.Revision + ". " + boundary, VerificationPlan: "Prove the acceptance criteria without rewriting original authorship: " + criteria, AssigneeType: task.AssigneeType, AssigneeID: assignee, DependsOnPrevious: i > 0}
 			}
 			digest := sha256.Sum256([]byte(a.ID + "\x00" + in.RequestID))
 			origin := proposals.ReasoningOrigin{ProvenanceAssessmentID: a.ID, ProvenanceFindingID: finding.ID, ProvenanceRepairRequestID: hex.EncodeToString(digest[:16]), AssessmentVersion: reservation.AssessmentVersion, Revision: a.Candidate.Revision, SelectedItemIDs: []string{finding.ID}, Items: []proposals.ReasoningItem{{ID: finding.ID, Kind: "provenance_finding", Summary: finding.Summary, Status: finding.Severity}}, AnalysisStatus: "authorized_provenance_repair"}
 			body := "Repair provenance finding " + finding.ID + " using strategy " + in.Strategy + ".\n\nAffected revision: " + a.Candidate.Revision + "\nPolicy: " + a.PolicyID + " revision " + fmt.Sprint(a.PolicyVersion) + "\nObligations: " + strings.Join(finding.Obligations, "; ") + "\nPermitted evidence: " + strings.Join(evidenceIDs, "; ") + "\nAcceptance criteria: " + criteria + "\n" + boundary + "\n\nThis handoff grants no Git, fork, session, workspace, review, merge, disclosure, permission, release, or distribution authority."
-			p, createdTasks, err := proposalStore.CreateImplementation(proposals.ImplementationInput{RepositoryID: a.RepositoryID, ActorID: actor.UserID, Title: in.Title, Body: body, Origin: origin, Tasks: tasks})
+			p, createdTasks, err := proposalStore.CreateImplementation(proposals.ImplementationInput{RepositoryID: a.RepositoryID, ActorID: actor.UserID, ProposalID: proposalID, Title: in.Title, Body: body, Origin: origin, Tasks: tasks})
 			if err != nil {
 				writeAPIError(w, 409, "provenance_repair_publication_failed", "repair work could not be published")
 				return

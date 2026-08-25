@@ -281,7 +281,7 @@ func (s *Store) LinkRepair(repo, id, actor string, expected int, repair Repair, 
 			}
 		}
 		projected := project(a, current)
-		if finding == nil || !currentFinding(projected, repair.FindingID) || repair.RequestID == "" || len(repair.WorkDigest) != 64 || repair.AffectedRevision != a.Candidate.Revision || !one(repair.Strategy, "replace", "reimplement", "remove", "obtain_permission", "isolate") || len(repair.AcceptanceCriteria) == 0 || repair.ProposalID != "" || len(repair.TaskIDs) != 0 {
+		if finding == nil || !currentFinding(projected, repair.FindingID) || repair.RequestID == "" || len(repair.WorkDigest) != 64 || repair.AffectedRevision != a.Candidate.Revision || !one(repair.Strategy, "replace", "reimplement", "remove", "obtain_permission", "isolate") || len(repair.AcceptanceCriteria) == 0 || repair.ProposalID == "" || len(repair.TaskIDs) == 0 {
 			return ErrInvalid
 		}
 		for _, criterion := range repair.AcceptanceCriteria {

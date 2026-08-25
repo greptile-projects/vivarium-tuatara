@@ -159,14 +159,14 @@ type Task struct {
 }
 
 type ImplementationTaskInput struct {
-	Title, Outcome, Risk, VerificationPlan, AssigneeType, AssigneeID string
-	DependsOnPrevious                                                bool
+	ID, Title, Outcome, Risk, VerificationPlan, AssigneeType, AssigneeID string
+	DependsOnPrevious                                                    bool
 }
 
 type ImplementationInput struct {
-	RepositoryID, ActorID, Title, Body string
-	Origin                             ReasoningOrigin
-	Tasks                              []ImplementationTaskInput
+	RepositoryID, ActorID, ProposalID, Title, Body string
+	Origin                                         ReasoningOrigin
+	Tasks                                          []ImplementationTaskInput
 }
 
 // TaskContribution is the bidirectional review handoff. Status follows the
@@ -427,7 +427,7 @@ func (s *Store) CreateImplementation(input ImplementationInput) (Proposal, []Tas
 			originCount++
 		}
 	}
-	if !validID(input.RepositoryID) || !validID(input.ActorID) || originCount != 1 || len(input.Origin.Revision) != 40 || len(input.Tasks) == 0 || len(input.Tasks) > 20 || len(input.Origin.Items) == 0 {
+	if !validID(input.RepositoryID) || !validID(input.ActorID) || (input.ProposalID != "" && !validID(input.ProposalID)) || originCount != 1 || len(input.Origin.Revision) != 40 || len(input.Tasks) == 0 || len(input.Tasks) > 20 || len(input.Origin.Items) == 0 {
 		return Proposal{}, nil, ErrInvalid
 	}
 	title, body, err := validateContent(input.Title, input.Body)
@@ -445,6 +445,7 @@ func (s *Store) CreateImplementation(input ImplementationInput) (Proposal, []Tas
 	if err != nil {
 		return Proposal{}, nil, err
 	}
+	reservedIDOccupied := false
 	for _, entry := range entries {
 		id, ok := strings.CutSuffix(entry.Name(), ".json")
 		if entry.IsDir() || !ok || !validID(id) {
@@ -453,6 +454,9 @@ func (s *Store) CreateImplementation(input ImplementationInput) (Proposal, []Tas
 		r, readErr := s.read(id)
 		if readErr != nil {
 			return Proposal{}, nil, readErr
+		}
+		if input.ProposalID != "" && r.Proposal.ID == input.ProposalID {
+			reservedIDOccupied = true
 		}
 		if isDebugging && r.Proposal.RepositoryID == input.RepositoryID && r.Proposal.Reasoning != nil && r.Proposal.Reasoning.DebuggingRepairWorkID == input.Origin.DebuggingRepairWorkID {
 			if !reflect.DeepEqual(*r.Proposal.Reasoning, input.Origin) || r.Proposal.Title != title || r.Proposal.Body != body || len(r.Tasks) != len(input.Tasks) {
@@ -527,9 +531,15 @@ func (s *Store) CreateImplementation(input ImplementationInput) (Proposal, []Tas
 			return r.Proposal, append([]Task(nil), r.Tasks...), nil
 		}
 	}
-	proposalID, err := newID()
-	if err != nil {
-		return Proposal{}, nil, err
+	if reservedIDOccupied {
+		return Proposal{}, nil, ErrImplementationConflict
+	}
+	proposalID := input.ProposalID
+	if proposalID == "" {
+		proposalID, err = newID()
+		if err != nil {
+			return Proposal{}, nil, err
+		}
 	}
 	now := s.now().Truncate(time.Microsecond)
 	origin := input.Origin
@@ -551,9 +561,12 @@ func (s *Store) CreateImplementation(input ImplementationInput) (Proposal, []Tas
 		if err != nil || !validID(assignee) {
 			return Proposal{}, nil, ErrInvalid
 		}
-		taskID, idErr := newID()
-		if idErr != nil {
-			return Proposal{}, nil, idErr
+		taskID := value.ID
+		if taskID == "" {
+			taskID, err = newID()
+		}
+		if err != nil || !validID(taskID) {
+			return Proposal{}, nil, ErrInvalid
 		}
 		assignmentID, idErr := newID()
 		if idErr != nil {
