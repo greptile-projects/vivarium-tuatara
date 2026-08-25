@@ -516,6 +516,7 @@ type MergeReadiness struct {
 	SecurityConfidence      any                                    `json:"security_confidence,omitempty"`
 	AssuranceImpact         any                                    `json:"assurance_impact,omitempty"`
 	ProvenanceReadiness     any                                    `json:"provenance_readiness,omitempty"`
+	ReviewReadiness         any                                    `json:"review_readiness,omitempty"`
 }
 
 type commentRecord struct {
@@ -556,6 +557,7 @@ type Store struct {
 	securityConfidence       func(PullRequest, []FileChange) (any, []ReadinessBlocker, error)
 	assuranceImpact          func(PullRequest, []FileChange) (any, []ReadinessBlocker, error)
 	provenanceReadiness      func(PullRequest, []FileChange) (any, []ReadinessBlocker, error)
+	reviewReadiness          func(PullRequest) (any, []ReadinessBlocker, error)
 }
 
 // ConfigureDesignReadiness adds an evidence-only policy projection to ordinary
@@ -580,6 +582,9 @@ func (s *Store) ConfigureAssuranceImpact(fn func(PullRequest, []FileChange) (any
 }
 func (s *Store) ConfigureProvenanceReadiness(fn func(PullRequest, []FileChange) (any, []ReadinessBlocker, error)) {
 	s.provenanceReadiness = fn
+}
+func (s *Store) ConfigureReviewReadiness(fn func(PullRequest) (any, []ReadinessBlocker, error)) {
+	s.reviewReadiness = fn
 }
 
 func (s *Store) ConfigurePerformanceEvidence(store *performanceevidence.Store) { s.performance = store }
@@ -1924,6 +1929,14 @@ func (s *Store) Readiness(repositoryID, pullRequestID string, actorCanMerge bool
 			return MergeReadiness{}, provenanceErr
 		}
 		report.ProvenanceReadiness = projection
+		report.Blockers = append(report.Blockers, blockers...)
+	}
+	if s.reviewReadiness != nil {
+		projection, blockers, reviewErr := s.reviewReadiness(p)
+		if reviewErr != nil {
+			return MergeReadiness{}, reviewErr
+		}
+		report.ReviewReadiness = projection
 		report.Blockers = append(report.Blockers, blockers...)
 	}
 	report.Mergeable = len(report.Blockers) == 0

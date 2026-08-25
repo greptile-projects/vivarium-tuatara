@@ -1441,6 +1441,17 @@ export function PullRequestDetail({
                   </p>
                 </div>
                 {readiness.required_checks.length > 0 && <div className="mt-4 space-y-2"><p className="text-xs font-semibold text-[var(--muted)]">Required checks</p>{readiness.required_checks.map((check) => <div key={check.name} className="flex items-center justify-between gap-3 text-xs"><span className="font-medium">{check.name}</span><Badge tone={check.status === "passed" ? "success" : check.status === "pending" ? "warning" : "neutral"}>{check.status}</Badge></div>)}</div>}
+                {readiness.review_readiness?.plan_id && <div className="mt-4 space-y-3 border-t border-[var(--line)] pt-4 text-xs">
+                  <div className="flex items-center justify-between gap-2"><p className="font-semibold">Review coverage matrix</p><Badge tone={readiness.review_readiness.complete ? "success" : "warning"}>{readiness.review_readiness.complete ? "Complete" : "Gaps remain"}</Badge></div>
+                  <p className="text-[var(--muted)]">Plan v{readiness.review_readiness.plan_version} for exact source <code title={readiness.review_readiness.source_revision}>{short(readiness.review_readiness.source_revision)}</code>.</p>
+                  {readiness.review_readiness.areas.map((area) => <div key={area.area_id} className="rounded-lg bg-[var(--canvas)] p-3">
+                    <div className="flex items-center justify-between gap-2"><p className="font-medium">{area.title}</p><Badge tone={area.complete ? "success" : "warning"}>{area.complete ? "current" : "incomplete"}</Badge></div>
+                    <p className="mt-1 text-[var(--muted)]">{area.assignments.length ? area.assignments.map((assignment) => `${assignment.principal_id} (${assignment.status})`).join(", ") : "No accountable assignee"}</p>
+                    <p className="mt-1">{area.evidence_inspected.length} evidence citation(s) · {area.findings.length} finding(s) · {area.decisions.length} human decision(s)</p>
+                    {area.unresolved_gaps.map((gap) => <p key={gap} className="mt-1 text-[var(--warning)]">{gap}</p>)}
+                  </div>)}
+                  {readiness.review_readiness.stale_approvals.length > 0 && <p className="text-[var(--muted)]">{readiness.review_readiness.stale_approvals.length} approval(s) apply only to an older source revision.</p>}
+                </div>}
                 {readiness.assurance_impact && readiness.assurance_impact.length > 0 && (
                   <div className="mt-4 space-y-3 border-t border-[var(--line)] pt-4 text-xs">
                     <div className="flex items-center justify-between gap-2"><p className="font-semibold">Compliance impact</p><Badge tone={readiness.assurance_impact.every((assessment) => assessment.ready) ? "success" : "warning"}>{readiness.assurance_impact.every((assessment) => assessment.ready) ? "Acknowledged" : "Review required"}</Badge></div>

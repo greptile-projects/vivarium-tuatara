@@ -3973,7 +3973,7 @@ export type ReviewWorkEntry = {
   source_revision: string; target_revision: string; actor_type: "human" | "agent"; actor_id: string;
   kind: "progress" | "finding" | "uncertainty" | "question" | "handoff" | "decision";
   conclusion?: string; body: string; uncertainty?: string;
-  citations: { kind: "file" | "symbol" | "requirement" | "diff" | "check" | "preview" | "decision"; value: string; label?: string }[];
+  citations: { kind: "file" | "symbol" | "requirement" | "diff" | "check" | "preview" | "decision"; value: string; label?: string; domain?: string; covered_paths?: string[] }[];
   recipient_type?: "human" | "agent"; recipient_id?: string; created_at: string; authority: string;
 };
 export type ReviewWorkPage = {
@@ -4054,6 +4054,7 @@ export type MergeReadiness = {
   required_approvals: number;
   approvals: number;
   evaluated_commit_id: string;
+  review_readiness?: ReviewReadiness;
   required_checks: {
     name: string;
     status: "missing" | "pending" | "failed" | "cancelled" | "stale" | "passed";
@@ -4182,6 +4183,30 @@ export type MergeReadiness = {
     required_approvals: number;
   };
   can_enqueue: boolean;
+};
+export type ReviewReadiness = {
+  plan_id?: string;
+  plan_version?: number;
+  source_revision: string;
+  target_revision: string;
+  current: boolean;
+  complete: boolean;
+  unresolved_gaps: string[];
+  stale_approvals: { reviewer_id: string; revision: string; decision: string; created_at: string }[];
+  areas: {
+    area_id: string;
+    title: string;
+    required: boolean;
+    owners: string[];
+    assignments: { id: string; principal_id: string; principal_type: string; status: string }[];
+    evidence_inspected: { kind: string; value: string; label?: string; domain?: string; covered_paths?: string[] }[];
+    findings: { id: string; body: string; actor_id: string }[];
+    decisions: { id: string; body: string; actor_id: string; conclusion?: string }[];
+    required_acknowledgements: string[];
+    missing_acknowledgements: string[];
+    unresolved_gaps: string[];
+    complete: boolean;
+  }[];
 };
 export type ConflictAnalysis = {
   repository_id: string;

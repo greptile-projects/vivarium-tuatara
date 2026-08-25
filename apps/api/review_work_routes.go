@@ -278,6 +278,10 @@ func registerReviewWorkRoutes(mux *http.ServeMux, git *storage.Store, catalog *r
 			}
 			expiry = &v
 		}
+		if in.Action == "exception" && !slices.ContainsFunc(in.Links, func(link reviewplans.ResolutionLink) bool { return link.Kind == "follow_up" }) {
+			writeAPIError(w, 422, "review_exception_invalid", "an emergency review exception must link to ordinary follow-up work")
+			return
+		}
 		existing, _ := plans.ListFindingResolutions(repo.ID, pull.ID)
 		if in.SupersedesID != "" && !slices.ContainsFunc(existing, func(x reviewplans.FindingResolution) bool {
 			return x.ID == in.SupersedesID && x.FindingID == finding.ID
@@ -417,6 +421,16 @@ func validResolutionLinks(git *storage.Store, repoID string, pull pullrequests.P
 func validWorkCitations(repoID, pullID, revision string, area reviewplans.Area, plan reviewplans.Plan, citations []reviewplans.WorkCitation, checks *checkruns.Store, previewStore *previews.Store, decisionStore *decisions.Store) bool {
 	for _, citation := range citations {
 		value := strings.TrimSpace(citation.Value)
+		if citation.Domain != "" {
+			if citation.Domain != area.ID || len(citation.CoveredPaths) == 0 {
+				return false
+			}
+			for _, path := range citation.CoveredPaths {
+				if !slices.Contains(area.Paths, path) {
+					return false
+				}
+			}
+		}
 		switch citation.Kind {
 		case "file", "diff":
 			if !slices.Contains(area.Paths, value) {
@@ -458,6 +472,13 @@ func validWorkCitations(repoID, pullID, revision string, area reviewplans.Area, 
 			}
 		default:
 			return false
+		}
+		if citation.Domain != "" {
+			for _, path := range area.Paths {
+				if !slices.Contains(citation.CoveredPaths, path) {
+					return false
+				}
+			}
 		}
 	}
 	return true
