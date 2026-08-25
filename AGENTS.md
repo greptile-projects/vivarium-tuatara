@@ -2726,6 +2726,9 @@ whenever dependencies change or the web job fails before it starts.
   `/repositories/{id}/learning-pathways/{slug}/modules/{module_id}/attempts`.
   Launches require a caller-stable request identity; exact retries atomically
   reuse the retained attempt and changed reuse conflicts before provisioning.
+  Provisioning is serialized per attempt: a concurrent retry observes the first
+  launch's completed state, while a retry after interruption performs missing
+  setup and finalizes the same durable attempt instead of stranding it.
   The exercise freezes its exact commit, practice kind, instructions, starter
   commands, acceptance criteria, hints, and bounded synthetic or exact-commit
   permitted data into the ordinary bounded workspace. Effective resource policy

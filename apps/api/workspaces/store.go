@@ -1643,6 +1643,54 @@ func (s *Store) CreateLearning(w Workspace, definitionBytes []byte) (Workspace, 
 	return created, false, err
 }
 
+// ReconcileLearningProvisioning serializes setup for a retained attempt. A
+// concurrent retry waits for the active launch and observes its completed
+// state; after interruption or restart, the retry performs the missing setup.
+func (s *Store) ReconcileLearningProvisioning(id string, operation func() ([]SetupStep, bool)) (Workspace, bool, error) {
+	control := s.controlLock(id)
+	control.Lock()
+	defer control.Unlock()
+	s.mu.Lock()
+	w, err := s.read(id)
+	s.mu.Unlock()
+	if err != nil {
+		return Workspace{}, false, err
+	}
+	if w.Source.Kind != "learning_exercise" || w.LearningContext == nil {
+		return Workspace{}, false, ErrInvalid
+	}
+	if w.State != "provisioning" {
+		return w, false, nil
+	}
+	steps, failure := operation()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w, err = s.read(id)
+	if err != nil {
+		return Workspace{}, true, err
+	}
+	if w.State != "provisioning" {
+		return w, false, nil
+	}
+	w.Setup = steps
+	if w.LearningContext != nil {
+		for _, step := range steps {
+			hours := step.CompletedAt.Sub(step.StartedAt).Hours()
+			if hours > 0 {
+				w.LearningContext.Cost += hours * (w.Definition.Resources.CPUs*0.04 + float64(w.Definition.Resources.MemoryMB)/1024*0.01)
+			}
+		}
+	}
+	if failure {
+		w.State = "failed"
+	} else {
+		w.State = "running"
+	}
+	w.UpdatedAt = s.now()
+	w.Events = append(w.Events, Event{Kind: "setup_completed", ActorID: w.CreatorID, CreatedAt: w.UpdatedAt})
+	return w, true, s.write(w)
+}
+
 func (s *Store) create(w Workspace, definitionBytes []byte) (Workspace, error) {
 	if w.RepositoryID == "" || w.CommitID == "" || w.CreatorID == "" {
 		return Workspace{}, ErrInvalid

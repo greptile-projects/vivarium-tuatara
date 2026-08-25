@@ -348,26 +348,30 @@ func registerLearningPathwayRoutes(mux *http.ServeMux, git *storage.Store, repos
 			writeAPIError(w, 500, "learning_attempt_create_failed", "learning attempt could not be retained")
 			return
 		}
-		if reused {
-			w.Header().Set("Location", "/workspaces/"+created.ID)
-			writeJSON(w, 200, created)
-			return
-		}
-		steps, failed := provisionWorkspace(gr.Path(), workspaceStore.RuntimePath(created.ID), created.ID, exercise.Revision, definition)
-		if !failed {
-			if err = stageLearningData(gr.Path(), created.ID, exercise.Revision, exercise.Data); err != nil {
-				failed = true
-				steps = append(steps, failedSetupStep("stage permitted learning data", nil, err))
+		created, _, err = workspaceStore.ReconcileLearningProvisioning(created.ID, func() ([]workspaces.SetupStep, bool) {
+			if reused {
 				_ = exec.Command("docker", "rm", "-f", "-v", "vivarium-workspace-"+created.ID).Run()
 			}
-		}
-		created, err = workspaceStore.Complete(created.ID, steps, failed)
+			steps, failed := provisionWorkspace(gr.Path(), workspaceStore.RuntimePath(created.ID), created.ID, exercise.Revision, definition)
+			if !failed {
+				if stageErr := stageLearningData(gr.Path(), created.ID, exercise.Revision, exercise.Data); stageErr != nil {
+					failed = true
+					steps = append(steps, failedSetupStep("stage permitted learning data", nil, stageErr))
+					_ = exec.Command("docker", "rm", "-f", "-v", "vivarium-workspace-"+created.ID).Run()
+				}
+			}
+			return steps, failed
+		})
 		if err != nil {
 			writeAPIError(w, 500, "learning_attempt_create_failed", "learning setup evidence could not be retained")
 			return
 		}
 		w.Header().Set("Location", "/workspaces/"+created.ID)
-		writeJSON(w, 201, created)
+		status := 201
+		if reused {
+			status = 200
+		}
+		writeJSON(w, status, created)
 	})
 	mux.HandleFunc("POST /workspaces/{workspace_id}/learning/hints/{index}", func(w http.ResponseWriter, r *http.Request) {
 		item, actor, ok := authorizeWorkspace(w, r, workspaceStore, repos, credentials, "repositories:read")

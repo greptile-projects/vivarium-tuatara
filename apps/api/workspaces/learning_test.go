@@ -49,6 +49,21 @@ func TestLearningLaunchRequestReconcilesAtomically(t *testing.T) {
 	if err != nil || !reused || second.ID != first.ID {
 		t.Fatalf("retry was not reconciled: %#v %v %v", second, reused, err)
 	}
+	runs := 0
+	second, ran, err := s.ReconcileLearningProvisioning(second.ID, func() ([]SetupStep, bool) {
+		runs++
+		return []SetupStep{{Command: "recover setup", State: "passed"}}, false
+	})
+	if err != nil || !ran || second.State != "running" || len(second.Setup) != 1 {
+		t.Fatalf("provisioning retry was not recovered: %#v ran=%v err=%v", second, ran, err)
+	}
+	second, ran, err = s.ReconcileLearningProvisioning(second.ID, func() ([]SetupStep, bool) {
+		runs++
+		return nil, true
+	})
+	if err != nil || ran || second.State != "running" || runs != 1 {
+		t.Fatalf("completed attempt provisioned again: %#v ran=%v runs=%d err=%v", second, ran, runs, err)
+	}
 	changed := input
 	changed.CommitID = "other"
 	if _, _, err = s.CreateLearning(changed, []byte("definition")); err != ErrRequestChanged {
