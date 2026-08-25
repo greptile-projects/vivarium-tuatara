@@ -7,7 +7,10 @@ import (
 	"strings"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/decisions"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/previews"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/reviewplans"
@@ -26,7 +29,7 @@ type reviewWorkInput struct {
 	RecipientID   string                     `json:"recipient_id"`
 }
 
-func registerReviewWorkRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, pulls *pullrequests.Store, plans *reviewplans.Store, orgs *organizations.Store) {
+func registerReviewWorkRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, pulls *pullrequests.Store, plans *reviewplans.Store, orgs *organizations.Store, checks *checkruns.Store, previewStore *previews.Store, decisionStore *decisions.Store) {
 	mux.HandleFunc("GET /repositories/{id}/pulls/{pull_id}/review-work", func(w http.ResponseWriter, r *http.Request) {
 		actor, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id"))
 		if !ok {
@@ -128,7 +131,7 @@ func registerReviewWorkRoutes(mux *http.ServeMux, catalog *repositories.Store, c
 			writeAPIError(w, 403, "review_work_forbidden", "only the accepted reviewer for this exact area can publish review work")
 			return
 		}
-		if !validWorkCitations(area, plan, in.Citations) {
+		if !validWorkCitations(repo.ID, pull.ID, plan.SourceRevision, area, plan, in.Citations, checks, previewStore, decisionStore) {
 			writeAPIError(w, 422, "review_citation_out_of_scope", "citations must belong to the assigned exact review area and public pull surface")
 			return
 		}
@@ -137,8 +140,12 @@ func registerReviewWorkRoutes(mux *http.ServeMux, catalog *repositories.Store, c
 			return
 		}
 		value := reviewplans.WorkEntry{RequestID: in.RequestID, RepositoryID: repo.ID, PullRequestID: pull.ID, PlanID: plan.ID, PlanVersion: plan.Version, AreaID: area.ID, SourceRevision: plan.SourceRevision, TargetRevision: plan.TargetRevision, ActorType: actorType, ActorID: actorID, Kind: in.Kind, Conclusion: in.Conclusion, Body: in.Body, Uncertainty: in.Uncertainty, Citations: in.Citations, RecipientType: in.RecipientType, RecipientID: in.RecipientID}
-		persist := func() error { var createErr error; value, createErr = plans.CreateWork(value); return createErr }
 		assignment := assignments[assignmentIndex]
+		persist := func() error {
+			var createErr error
+			value, createErr = plans.CreateAssignedWork(value, assignment.ID)
+			return createErr
+		}
 		if actorType == "human" {
 			err = catalog.WithCurrentParticipant(actorID, repo.ID, persist)
 		} else if orgs != nil && repo.OrganizationID != "" {
@@ -158,7 +165,7 @@ func registerReviewWorkRoutes(mux *http.ServeMux, catalog *repositories.Store, c
 	})
 }
 
-func validWorkCitations(area reviewplans.Area, plan reviewplans.Plan, citations []reviewplans.WorkCitation) bool {
+func validWorkCitations(repoID, pullID, revision string, area reviewplans.Area, plan reviewplans.Plan, citations []reviewplans.WorkCitation, checks *checkruns.Store, previewStore *previews.Store, decisionStore *decisions.Store) bool {
 	for _, citation := range citations {
 		value := strings.TrimSpace(citation.Value)
 		switch citation.Kind {
@@ -176,10 +183,42 @@ func validWorkCitations(area reviewplans.Area, plan reviewplans.Plan, citations 
 			if !valid {
 				return false
 			}
-		case "check", "preview", "decision": // IDs are public pull-surface references; the ledger never copies their evidence.
+		case "check":
+			if checks == nil {
+				return false
+			}
+			run, err := checks.Get(repoID, pullID, value)
+			if err != nil || run.CommitID != revision {
+				return false
+			}
+		case "preview":
+			if previewStore == nil {
+				return false
+			}
+			preview, err := previewStore.Get(repoID, pullID, value)
+			if err != nil || preview.Revision != revision {
+				return false
+			}
+		case "decision":
+			if decisionStore == nil {
+				return false
+			}
+			decision, err := decisionStore.Get(value)
+			if err != nil || decision.RepositoryID != repoID || !decisionReferencesPull(decision, pullID) {
+				return false
+			}
 		default:
 			return false
 		}
 	}
 	return true
+}
+
+func decisionReferencesPull(decision decisions.Decision, pullID string) bool {
+	if slices.Contains([]string{"pull", "pull_request"}, decision.Source.Kind) && decision.Source.ResourceID == pullID {
+		return true
+	}
+	return slices.ContainsFunc(decision.Scope.AffectedResources, func(resource decisions.Resource) bool {
+		return slices.Contains([]string{"pull", "pull_request"}, resource.Kind) && resource.ResourceID == pullID
+	})
 }

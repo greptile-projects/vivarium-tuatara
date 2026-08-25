@@ -47,9 +47,42 @@ func (s *Store) ListWork(repo, pull string) ([]WorkEntry, error) {
 	return s.readWork(repo, pull)
 }
 
-func (s *Store) CreateWork(value WorkEntry) (WorkEntry, error) {
+func (s *Store) createWork(value WorkEntry) (WorkEntry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	unlock, err := s.lockAssignments(value.RepositoryID)
+	if err != nil {
+		return WorkEntry{}, err
+	}
+	defer unlock()
+	return s.createWorkLocked(value)
+}
+
+// CreateAssignedWork couples the final accepted-assignment check to work
+// persistence under the same repository-wide, cross-process mutation lock used
+// by assignment transitions.
+func (s *Store) CreateAssignedWork(value WorkEntry, assignmentID string) (WorkEntry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lockAssignments(value.RepositoryID)
+	if err != nil {
+		return WorkEntry{}, err
+	}
+	defer unlock()
+	assignments, err := s.readAssignments(value.RepositoryID, value.PullRequestID)
+	if err != nil {
+		return WorkEntry{}, err
+	}
+	accepted := slices.ContainsFunc(assignments, func(assignment Assignment) bool {
+		return assignment.ID == assignmentID && assignment.PlanID == value.PlanID && assignment.PlanVersion == value.PlanVersion && assignment.AreaID == value.AreaID && assignment.PrincipalType == value.ActorType && assignment.PrincipalID == value.ActorID && assignment.Status == "accepted"
+	})
+	if !accepted {
+		return WorkEntry{}, ErrWorkConflict
+	}
+	return s.createWorkLocked(value)
+}
+
+func (s *Store) createWorkLocked(value WorkEntry) (WorkEntry, error) {
 	if !validRequestID(value.RequestID) || value.RepositoryID == "" || value.PullRequestID == "" || value.PlanID == "" || value.PlanVersion < 1 || value.AreaID == "" || len(value.SourceRevision) != 40 || len(value.TargetRevision) != 40 || !slices.Contains([]string{"human", "agent"}, value.ActorType) || value.ActorID == "" || !slices.Contains([]string{"progress", "finding", "uncertainty", "question", "handoff", "decision"}, value.Kind) || strings.TrimSpace(value.Body) == "" || len(value.Body) > 4000 || len(value.Citations) > 20 {
 		return WorkEntry{}, ErrInvalid
 	}
@@ -64,11 +97,6 @@ func (s *Store) CreateWork(value WorkEntry) (WorkEntry, error) {
 			return WorkEntry{}, ErrInvalid
 		}
 	}
-	unlock, err := s.lockAssignments(value.RepositoryID)
-	if err != nil {
-		return WorkEntry{}, err
-	}
-	defer unlock()
 	values, err := s.readWork(value.RepositoryID, value.PullRequestID)
 	if err != nil {
 		return WorkEntry{}, err
