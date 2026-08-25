@@ -2746,6 +2746,20 @@ whenever dependencies change or the web job fails before it starts.
   Storage remains beneath `$WORKSPACE_STORAGE_ROOT`; hint and checkpoint
   mutations are under `/workspaces/{id}/learning`.
 
+- **Accountable learning guidance** — Exact learning attempts expose a
+  permission-aware timeline at `/workspaces/{id}/learning/guidance`. Learners
+  alone select retained checkpoint and command IDs to share; those records keep
+  their original authorship. Current designated pathway mentors can add cited
+  explanations, hints, demonstrations, or direct actions, with direct action
+  requiring explicit bounded workspace control. Citations resolve to a real
+  path at the attempt commit, and mentor participation is held through reads
+  and writes. Organization-approved agents are learner-selected and limited to
+  cited hints under live `guide` control; learners retain the guidance boundary
+  and can pause or revoke the agent. Agent output cannot use demonstration or
+  direct-action categories, and all guidance rejects credential-shaped prose.
+  The timeline grants no repository, assessment, solution, Git, or workspace
+  authority.
+
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
 
   Pull privacy review at `/repositories/{id}/pulls/{pull_id}/privacy-review` requires a candidate

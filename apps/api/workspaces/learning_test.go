@@ -195,3 +195,49 @@ func TestLearningCheckpointCitesDurableCommandBeyondProjection(t *testing.T) {
 		t.Fatalf("durable outcome rejected: %v", err)
 	}
 }
+
+func TestLearningGuidanceRetainsSharedStateAndLearnerAgentControl(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := s.Create(Workspace{RepositoryID: "repo", CommitID: "revision", CreatorID: "learner", LearningContext: &LearningContext{AcceptanceCriteria: []string{"understands routing"}, Guidance: LearningGuidance{Version: 1}}}, []byte("definition"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err = s.RecordCommand(w.ID, CommandOutcome{ActorID: "learner"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err = s.AddLearningCheckpoint(w.ID, "learner", "I traced the route", []string{"understands routing"}, []string{w.Commands[0].ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err = s.AddLearningGuidance(w.ID, "learner", "learner", "", "question", "Why does this branch win?", nil, []string{w.LearningContext.Checkpoints[0].ID}, []string{w.Commands[0].ID}, 1)
+	if err != nil || !w.LearningContext.Guidance.Entries[0].LearnerControlled {
+		t.Fatalf("question = %#v, %v", w.LearningContext.Guidance, err)
+	}
+	w, err = s.AddLearningGuidance(w.ID, "mentor", "mentor", "", "hint", "Inspect registration order.", []LearningEvidenceCitation{{Path: "routes.go", Revision: "revision"}}, nil, nil, 2)
+	if err != nil || w.LearningContext.Guidance.Entries[1].ActorKind != "mentor" {
+		t.Fatalf("mentor help = %#v, %v", w.LearningContext.Guidance, err)
+	}
+	w, err = s.SetLearningAgent(w.ID, "learner", "approved-agent", "active", "Only ask questions about dispatch.", 3)
+	if err != nil || w.LearningContext.Guidance.AgentState != "active" {
+		t.Fatalf("agent activation = %#v, %v", w.LearningContext.Guidance, err)
+	}
+	w, err = s.SetLearningAgent(w.ID, "learner", "approved-agent", "paused", "", 4)
+	if err != nil || w.LearningContext.Guidance.AgentState != "paused" {
+		t.Fatalf("agent pause = %#v, %v", w.LearningContext.Guidance, err)
+	}
+	if _, err = s.SetLearningAgent(w.ID, "mentor", "approved-agent", "revoked", "", 5); err != ErrConflict {
+		t.Fatalf("mentor controlled learner agent: %v", err)
+	}
+}
+
+func TestLearningGuidanceRejectsUnsharedExerciseState(t *testing.T) {
+	s, _ := New(t.TempDir())
+	w, _ := s.Create(Workspace{RepositoryID: "repo", CommitID: "revision", CreatorID: "learner", LearningContext: &LearningContext{Guidance: LearningGuidance{Version: 1}}}, []byte("definition"))
+	if _, err := s.AddLearningGuidance(w.ID, "learner", "learner", "", "question", "Here is unrelated state", nil, []string{"unknown"}, nil, 1); err != ErrInvalid {
+		t.Fatalf("unknown checkpoint accepted: %v", err)
+	}
+}
