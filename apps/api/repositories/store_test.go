@@ -72,6 +72,27 @@ func TestRepositoryVisibilityDefaultsPrivateAndPersists(t *testing.T) {
 	}
 }
 
+func TestCurrentOrganizationRepositoriesRechecksMembershipAtCommitBoundary(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	store, _ := New(t.TempDir(), gitStore)
+	repository, _ := store.Create(testOwnerID, "organization-policy-link")
+	organizationID := "11111111111111111111111111111111"
+	if _, err := store.SetOrganization(testOwnerID, repository.ID, organizationID, []string{testOwnerID}); err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	if err := store.WithCurrentOrganizationRepositories(organizationID, []string{repository.ID, repository.ID}, func() error { called = true; return nil }); err != nil || !called {
+		t.Fatalf("valid organization boundary: called=%v err=%v", called, err)
+	}
+	if err := store.Delete(testOwnerID, repository.ID); err != nil {
+		t.Fatal(err)
+	}
+	called = false
+	if err := store.WithCurrentOrganizationRepositories(organizationID, []string{repository.ID}, func() error { called = true; return nil }); !errors.Is(err, ErrNotFound) || called {
+		t.Fatalf("moved repository admitted: called=%v err=%v", called, err)
+	}
+}
+
 func TestIntegrationQueuePolicyPersistsAndIncludesAdmissionRules(t *testing.T) {
 	gitRoot, metadataRoot := t.TempDir(), t.TempDir()
 	gitStore, _ := storage.New(gitRoot)

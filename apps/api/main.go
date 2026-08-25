@@ -77,6 +77,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/previews"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/privacychecks"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/privacyreviews"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/provenancepolicies"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/productexperiments"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/productopportunities"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/projectfunds"
@@ -1096,6 +1097,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	var designGovernanceStore *designgovernance.Store
 	var qualityPlanStore *qualityplans.Store
 	var assuranceProgramStore *assuranceprograms.Store
+	var provenancePolicyStore *provenancepolicies.Store
 	var assuranceEvidenceStore *assuranceevidence.Store
 	var assuranceImpactStore *assuranceimpact.Store
 	var assuranceAssessmentStore *assuranceassessments.Store
@@ -1253,6 +1255,8 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 			qualityPlanStore = value
 		case *assuranceprograms.Store:
 			assuranceProgramStore = value
+		case *provenancepolicies.Store:
+			provenancePolicyStore = value
 		case *assuranceevidence.Store:
 			assuranceEvidenceStore = value
 		case *assuranceimpact.Store:
@@ -1451,6 +1455,14 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		if assuranceEvidenceStore != nil {
 			registerAssuranceEvidenceRoutes(mux, repositoryCatalog, authStore, assuranceProgramStore, assuranceEvidenceStore, assuranceEvidenceSources{pulls: pullRequestStore, checks: checkRunStore, releases: releaseStore, deployments: deploymentStore, incidents: incidentStore, privacy: privacyReviewStore, continuity: recoveryExerciseStore, access: protectionPlanStore, dependencies: packageStore, governance: governanceStore})
 		}
+	}
+	if provenancePolicyStore == nil {
+		root := os.Getenv("PROVENANCE_POLICY_STORAGE_ROOT")
+		if root == "" { root = "provenance-policies" }
+		provenancePolicyStore, _ = provenancepolicies.New(root)
+	}
+	if authStore != nil && repositoryCatalog != nil && provenancePolicyStore != nil {
+		registerProvenancePolicyRoutes(mux, repositoryCatalog, organizationStore, authStore, provenancePolicyStore, contributorPathwayStore, agentProjectStore, packageStore, releaseStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && userStore != nil && assuranceProgramStore != nil && assuranceEvidenceStore != nil && assuranceAssessmentStore != nil {
 		registerAssuranceAssessmentRoutes(mux, store, repositoryCatalog, authStore, userStore, assuranceProgramStore, assuranceEvidenceStore, assuranceAssessmentStore, proposalStore, pullRequestStore, releaseStore)

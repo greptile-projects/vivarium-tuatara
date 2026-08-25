@@ -3,6 +3,10 @@
 Notes on how this project fits together. Mostly empty for now — things get
 written down here as they're decided, not before.
 
+## Versioned software provenance policy
+
+Repository and organization owners publish acceptable-origin and licensing rules through `/repositories/{id}/provenance-policies` and `/organizations/{id}/provenance-policies`; collaborators use the matching `/provenance` workspace before accepting source, generated code, assets, models, datasets, packages, or build inputs. Immutable revisions retain permitted and prohibited licenses, origins, required attribution and attestations, review owners, distribution contexts, contributor/agent/package/release and private or federated boundary links, and narrow owner-attributed exceptions with follow-up work and expiry. Projection reports unknown licenses, conflicting terms, missing owners, and exceptions approaching expiry instead of treating gaps as approval. The record grants no Git, contribution, package, release, agent, federation, or distribution authority. Storage defaults beneath `$PROVENANCE_POLICY_STORAGE_ROOT` (`provenance-policies`).
+
 ## Collaborative change stacks
 
 Repository contributors can publish an ordered large outcome at `POST /repositories/{id}/change-stacks` and inspect it through `GET /repositories/{id}/change-stacks` or the repository `/stacks` workspace. Each member names a branch or an existing pull request, dependencies, and acceptance criteria. A required caller-stable `request_id` reserves and validates the stack before branch entries open as marker-bound ordinary pull requests against the preceding layer; retries reconcile the reservation and reuse any already-created pull. Pull-list and pull-creation failures fail closed with a retryable non-success response rather than reporting a pending member as published. Every retained member freezes the exact revision offered for review.
