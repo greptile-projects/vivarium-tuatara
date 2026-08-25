@@ -225,3 +225,27 @@ func TestIntegrationCandidatesReconcileAndSupersedeOnlyUnmergedTargetEvidence(t 
 		t.Fatalf("old evidence was not retained as superseded: %#v", updated.IntegrationCandidates)
 	}
 }
+
+func TestCompleteIntegrationIsRetryStableAndPreservesMergedEvidence(t *testing.T) {
+	s, _ := New(t.TempDir())
+	revision := strings.Repeat("1", 40)
+	created, err := s.Create(Stack{RequestID: "complete-stack", RequestDigest: "stack-digest", RepositoryID: "repo", Title: "Outcome", Outcome: "shared", TargetBranch: "main", Members: []Member{{ID: "one", Title: "One", SourceBranch: "one", Revision: revision, AcceptanceCriteria: []string{"passes"}}}}, "alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, candidate, err := s.RetainIntegration("repo", created.ID, IntegrationCandidate{RequestID: "complete-candidate", RequestDigest: "candidate-digest", TargetRevision: strings.Repeat("0", 40), MemberRevisions: map[string]string{"one": revision}, MemberID: "one", Position: 1, ParentRevision: strings.Repeat("0", 40), CandidateRevision: strings.Repeat("2", 40), Status: "passed", CreatedBy: "owner"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, merged, err := s.CompleteIntegration("repo", created.ID, candidate.ID, "owner")
+	if err != nil || merged.Status != "merged" || merged.MergedAt == nil {
+		t.Fatalf("completion = %#v, %v", merged, err)
+	}
+	_, retry, err := s.CompleteIntegration("repo", created.ID, candidate.ID, "owner")
+	if err != nil || retry.MergedAt == nil || !retry.MergedAt.Equal(*merged.MergedAt) {
+		t.Fatalf("retry = %#v, %v", retry, err)
+	}
+	if _, _, err := s.CompleteIntegration("repo", created.ID, candidate.ID, "another-owner"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("different actor retry = %v", err)
+	}
+}

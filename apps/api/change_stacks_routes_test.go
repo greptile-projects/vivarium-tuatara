@@ -28,6 +28,13 @@ func TestStackIntegrationCheckStatusUsesPersistedTerminalStates(t *testing.T) {
 	}
 }
 
+func TestStackMergedPositionPreservesPartialPrefix(t *testing.T) {
+	stack := changestacks.Stack{IntegrationCandidates: []changestacks.IntegrationCandidate{{Position: 1, Status: "merged"}, {Position: 3, Status: "superseded"}, {Position: 2, Status: "merged"}}}
+	if got := stackMergedPosition(stack); got != 2 {
+		t.Fatalf("merged position = %d, want 2", got)
+	}
+}
+
 func TestChangeStackAgentMemberScopeRejectsAnotherBranch(t *testing.T) {
 	repositoryID := strings.Repeat("a", 32)
 	agent := auth.Credential{AgentID: strings.Repeat("b", 32), RepositoryID: repositoryID, GitWriteBranch: "refs/heads/authorized"}

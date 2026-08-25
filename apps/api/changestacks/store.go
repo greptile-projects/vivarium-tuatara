@@ -204,7 +204,43 @@ type IntegrationCandidate struct {
 	CreatedAt         time.Time         `json:"created_at"`
 	SupersededAt      *time.Time        `json:"superseded_at,omitempty"`
 	SupersededReason  string            `json:"superseded_reason,omitempty"`
+	MergedBy          string            `json:"merged_by,omitempty"`
+	MergedAt          *time.Time        `json:"merged_at,omitempty"`
 	Authority         string            `json:"authority"`
+}
+
+// CompleteIntegration records the exact prefix publication after Git has
+// advanced. It is intentionally retryable so metadata can be reconciled after
+// a committed ref transaction whose response was interrupted.
+func (s *Store) CompleteIntegration(repo, stackID, candidateID, actor string) (Stack, IntegrationCandidate, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	v, err := s.read(repo, stackID)
+	if err != nil {
+		return Stack{}, IntegrationCandidate{}, err
+	}
+	for i := range v.IntegrationCandidates {
+		candidate := &v.IntegrationCandidates[i]
+		if candidate.ID != candidateID {
+			continue
+		}
+		if candidate.Status == "merged" {
+			if candidate.MergedBy != actor {
+				return Stack{}, IntegrationCandidate{}, ErrInvalid
+			}
+			return v, *candidate, nil
+		}
+		if candidate.SupersededAt != nil || actor == "" {
+			return Stack{}, IntegrationCandidate{}, ErrInvalid
+		}
+		now := time.Now().UTC()
+		candidate.Status, candidate.MergedBy, candidate.MergedAt = "merged", actor, &now
+		if err := s.write(v); err != nil {
+			return Stack{}, IntegrationCandidate{}, err
+		}
+		return v, *candidate, nil
+	}
+	return Stack{}, IntegrationCandidate{}, ErrNotFound
 }
 
 type Stack struct {

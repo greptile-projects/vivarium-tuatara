@@ -2619,6 +2619,43 @@ func (s *Store) Merge(repositoryID, pullRequestID, mergerID string) (PullRequest
 	return merged, merge()
 }
 
+// RecordStackMerge closes an ordinary pull after an exact stack candidate has
+// already advanced the target. The expected source prevents another revision
+// from borrowing the retained candidate's delivery identity.
+func (s *Store) RecordStackMerge(repositoryID, pullRequestID, expectedSource, commitID, mergerID string) (PullRequest, error) {
+	if !validID(mergerID) || !validCommitID(expectedSource) || !validCommitID(commitID) {
+		return PullRequest{}, ErrInvalid
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return PullRequest{}, err
+	}
+	defer unlock()
+	p, err := s.Get(repositoryID, pullRequestID)
+	if err != nil {
+		return PullRequest{}, err
+	}
+	if p.Status == Merged {
+		if p.MergeCommitID != nil && *p.MergeCommitID == commitID {
+			return p, nil
+		}
+		return PullRequest{}, ErrInvalid
+	}
+	if p.Status != Open || p.SourceCommitID != expectedSource {
+		return PullRequest{}, ErrNotReady
+	}
+	now := s.now().Truncate(time.Microsecond)
+	mergedBy, mergedCommit := mergerID, commitID
+	p.Status, p.UpdatedAt, p.MergedAt, p.MergedBy, p.MergeCommitID = Merged, now, &now, &mergedBy, &mergedCommit
+	if p.TaskID != nil {
+		p.TaskStatePending = "merged"
+	}
+	_, err = s.write(p)
+	return p, err
+}
+
 func (s *Store) merge(repositoryID, pullRequestID, mergerID string) (PullRequest, error) {
 	if !validID(mergerID) {
 		return PullRequest{}, ErrInvalid
