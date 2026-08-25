@@ -1,6 +1,13 @@
 package main
 
 import (
+	"bytes"
+	"crypto/ed25519"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"sort"
@@ -52,7 +59,7 @@ func registerProvenanceBundleRoutes(mux *http.ServeMux, repos *repositories.Stor
 				current = false
 			}
 		}
-		return bundleProjection{Bundle: b, Current: current, ActionableNotices: len(b.Notices), VerificationValid: b.Signature != "" && b.PublicKey != "" && b.PayloadSHA256 != ""}
+		return bundleProjection{Bundle: b, Current: current, ActionableNotices: len(b.Notices), VerificationValid: bundleVerificationValid(b)}
 	}
 	mux.HandleFunc("POST /repositories/{id}/releases/{release_id}/provenance-bundles", func(w http.ResponseWriter, r *http.Request) {
 		actor, owner, ok := authorizeRepositoryParticipant(w, r, repos, credentials, r.PathValue("id"), "repositories:write")
@@ -303,6 +310,34 @@ func cleanStrings(xs []string) []string {
 
 func bundleReadableBy(b provenancebundles.Bundle, userID string) bool {
 	return b.Claim.Audience != "restricted" || containsString(b.Claim.AudienceIDs, userID)
+}
+
+func bundleVerificationValid(b provenancebundles.Bundle) bool {
+	if b.Algorithm != "Ed25519-SHA256" {
+		return false
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(b.Payload)
+	if err != nil {
+		return false
+	}
+	signature, err := base64.RawURLEncoding.DecodeString(b.Signature)
+	if err != nil || len(signature) != ed25519.SignatureSize {
+		return false
+	}
+	publicKey, err := base64.RawURLEncoding.DecodeString(b.PublicKey)
+	if err != nil || len(publicKey) != ed25519.PublicKeySize {
+		return false
+	}
+	declaredDigest, err := hex.DecodeString(b.PayloadSHA256)
+	if err != nil || len(declaredDigest) != sha256.Size {
+		return false
+	}
+	digest := sha256.Sum256(payload)
+	if subtle.ConstantTimeCompare(declaredDigest, digest[:]) != 1 || !ed25519.Verify(ed25519.PublicKey(publicKey), digest[:], signature) {
+		return false
+	}
+	canonicalClaim, err := json.Marshal(b.Claim)
+	return err == nil && bytes.Equal(payload, canonicalClaim)
 }
 
 func nodeVisibleToBundleAudience(n provenancegraphs.Node, audience string, audienceIDs []string) bool {

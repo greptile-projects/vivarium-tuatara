@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"testing"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/packages"
@@ -32,5 +33,38 @@ func TestPackageProvenanceRequiresExactSignedArtifact(t *testing.T) {
 		if bundleCoversPackage(bundle, candidate) {
 			t.Fatalf("uncovered package matched: %#v", candidate)
 		}
+	}
+}
+
+func TestBundleVerificationRejectsTamperedOrMalformedEvidence(t *testing.T) {
+	store, err := provenancebundles.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := store.Create(provenancebundles.Bundle{RequestID: "verify", Claim: provenancebundles.Claim{Schema: "https://vivarium.dev/provenance-bundle/v1", RepositoryID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", ReleaseID: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", ReleaseVersion: "v1", Revision: "cccccccccccccccccccccccccccccccccccccccc", GraphID: "graph", GraphDigest: "digest", AssessmentID: "assessment", AssessmentVersion: 1, PolicyID: "policy", PolicyVersion: 1, Audience: "public", Artifacts: []provenancebundles.Artifact{{ID: "artifact", Name: "sdk", Version: "1.0.0", SHA256: "abcd"}}, Verification: []string{"verify"}, PublishedBy: "owner"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bundleVerificationValid(bundle) {
+		t.Fatal("fresh signed bundle did not verify")
+	}
+	tests := map[string]func(*provenancebundles.Bundle){
+		"payload": func(b *provenancebundles.Bundle) {
+			b.Payload = base64.RawURLEncoding.EncodeToString([]byte("tampered"))
+		},
+		"claim":     func(b *provenancebundles.Bundle) { b.Claim.ReleaseVersion = "substituted" },
+		"digest":    func(b *provenancebundles.Bundle) { b.PayloadSHA256 = "00" },
+		"signature": func(b *provenancebundles.Bundle) { b.Signature = "not-base64!" },
+		"key":       func(b *provenancebundles.Bundle) { b.PublicKey = base64.RawURLEncoding.EncodeToString([]byte("short")) },
+		"algorithm": func(b *provenancebundles.Bundle) { b.Algorithm = "unknown" },
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			candidate := bundle
+			mutate(&candidate)
+			if bundleVerificationValid(candidate) {
+				t.Fatal("tampered bundle reported valid")
+			}
+		})
 	}
 }
