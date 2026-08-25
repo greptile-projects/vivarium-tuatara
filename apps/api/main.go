@@ -1391,6 +1391,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		if reviewPlanStore != nil {
 			registerReviewPlanRoutes(mux, repositoryCatalog, authStore, pullRequestStore, reviewPlanStore)
 			registerReviewAssignmentRoutes(mux, repositoryCatalog, authStore, pullRequestStore, reviewPlanStore, organizationStore)
+			registerReviewWorkRoutes(mux, repositoryCatalog, authStore, pullRequestStore, reviewPlanStore, organizationStore)
 		}
 		if documentationStore != nil {
 			registerDocumentationReviewRoutes(mux, store, repositoryCatalog, pullRequestStore, documentationStore, checkRunStore, authStore)

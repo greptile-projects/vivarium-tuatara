@@ -3968,6 +3968,20 @@ export type ReviewerSuggestion = {
   eligible: boolean; availability: string; conflict?: string; active_load: number;
   evidence: { kind: string; summary: string }[]; missing_evidence?: string[];
 };
+export type ReviewWorkEntry = {
+  id: string; request_id: string; plan_id: string; plan_version: number; area_id: string;
+  source_revision: string; target_revision: string; actor_type: "human" | "agent"; actor_id: string;
+  kind: "progress" | "finding" | "uncertainty" | "question" | "handoff" | "decision";
+  conclusion?: string; body: string; uncertainty?: string;
+  citations: { kind: "file" | "symbol" | "requirement" | "diff" | "check" | "preview" | "decision"; value: string; label?: string }[];
+  recipient_type?: "human" | "agent"; recipient_id?: string; created_at: string; authority: string;
+};
+export type ReviewWorkPage = {
+  plan_id: string; plan_version: number; source_revision: string; target_revision: string; stale: boolean;
+  queues: { area: ReviewPlan["areas"][number]; assignments: ReviewAssignment[]; entries: ReviewWorkEntry[];
+    coverage: { entry_count: number; finding_count: number; uncertainty_count: number; conflicting_conclusions: boolean }; dependencies: string[] }[];
+  authority: string;
+};
 export type DocumentationPullReview = {
   repository_id: string;
   pull_request_id: string;
