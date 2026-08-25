@@ -33,4 +33,8 @@ func TestAssessmentVersionsAttemptsAndReviewEvidence(t *testing.T) {
 	if _, err = s.CreateAttempt(Attempt{RequestID: "attempt-3", RepositoryID: "repo", AssessmentSlug: "practical", AssessmentVersion: 1, WorkspaceID: "workspace-3", LearnerID: "learner"}, 2, 0); err != ErrInvalid {
 		t.Fatalf("retry limit = %v", err)
 	}
+	other, err := s.CreateAttempt(Attempt{RequestID: "attempt-1", RepositoryID: "repo", AssessmentSlug: "practical", AssessmentVersion: 1, WorkspaceID: "workspace-other", LearnerID: "other"}, 2, 0)
+	if err != nil || other.LearnerID != "other" {
+		t.Fatalf("learner-scoped request = %#v, %v", other, err)
+	}
 }

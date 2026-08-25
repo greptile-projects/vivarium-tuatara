@@ -96,6 +96,7 @@ type Attempt struct {
 	LearnerID             string    `json:"learner_id"`
 	ProjectRevision       string    `json:"project_revision"`
 	ReproducibilitySHA256 string    `json:"reproducibility_sha256"`
+	WorkProductSHA256     string    `json:"work_product_sha256,omitempty"`
 	Evidence              Evidence  `json:"evidence"`
 	Accommodation         string    `json:"accommodation,omitempty"`
 	AttemptNumber         int       `json:"attempt_number"`
@@ -223,7 +224,7 @@ func (s *Store) CreateAttempt(a Attempt, max, cooldownHours int) (Attempt, error
 	defer unlock()
 	all, _ := s.attempts(a.RepositoryID, a.AssessmentSlug)
 	for _, x := range all {
-		if x.RequestID == a.RequestID {
+		if x.LearnerID == a.LearnerID && x.RequestID == a.RequestID {
 			if x.WorkspaceID != a.WorkspaceID || x.AssessmentVersion != a.AssessmentVersion {
 				return Attempt{}, ErrConflict
 			}

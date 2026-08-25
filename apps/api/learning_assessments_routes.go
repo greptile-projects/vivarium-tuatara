@@ -1,8 +1,12 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
@@ -149,13 +153,14 @@ func registerLearningAssessmentRoutes(mux *http.ServeMux, git *storage.Store, re
 				blockers = append(blockers, "agent_overreach")
 			}
 		}
+		workProduct := learningWorkProductDigest(ws, actor.UserID)
 		prior, _ := assessments.Attempts(r.PathValue("id"), r.PathValue("slug"))
 		for _, p := range prior {
-			if p.LearnerID != actor.UserID && p.ReproducibilitySHA256 == ws.LearningContext.ReproducibilitySHA256 {
+			if workProduct != "" && p.LearnerID != actor.UserID && p.WorkProductSHA256 == workProduct {
 				blockers = append(blockers, "copied_solution_signal")
 			}
 		}
-		a, e := assessments.CreateAttempt(learningassessments.Attempt{RequestID: in.RequestID, RepositoryID: r.PathValue("id"), AssessmentSlug: d.Slug, AssessmentVersion: d.Version, WorkspaceID: ws.ID, LearnerID: actor.UserID, ProjectRevision: ws.CommitID, ReproducibilitySHA256: ws.LearningContext.ReproducibilitySHA256, Evidence: in.Evidence, Accommodation: in.Accommodation, Blockers: blockers}, d.RetryPolicy.MaximumAttempts, d.RetryPolicy.CooldownHours)
+		a, e := assessments.CreateAttempt(learningassessments.Attempt{RequestID: in.RequestID, RepositoryID: r.PathValue("id"), AssessmentSlug: d.Slug, AssessmentVersion: d.Version, WorkspaceID: ws.ID, LearnerID: actor.UserID, ProjectRevision: ws.CommitID, ReproducibilitySHA256: ws.LearningContext.ReproducibilitySHA256, WorkProductSHA256: workProduct, Evidence: in.Evidence, Accommodation: in.Accommodation, Blockers: blockers}, d.RetryPolicy.MaximumAttempts, d.RetryPolicy.CooldownHours)
 		if e != nil {
 			writeAPIError(w, 409, "learning_attempt_not_permitted", "retry limit or request identity prevents this attempt")
 			return
@@ -216,6 +221,15 @@ func registerLearningAssessmentRoutes(mux *http.ServeMux, git *storage.Store, re
 				}
 			}
 			passedChecks := map[string]bool{}
+			workspace, workspaceErr := workspaceStore.Get(a.WorkspaceID)
+			citedCommands := map[string]bool{}
+			if workspaceErr == nil {
+				for _, outcome := range workspace.Commands {
+					if learningAssessmentContains(a.Evidence.CommandOutcomeIDs, outcome.ID) && outcome.ActorID == a.LearnerID && outcome.ExitCode == 0 {
+						citedCommands[outcome.CommandSHA256] = true
+					}
+				}
+			}
 			for _, ref := range a.Evidence.CheckRunIDs {
 				parts := strings.Split(ref, "/")
 				if len(parts) != 2 {
@@ -225,6 +239,11 @@ func registerLearningAssessmentRoutes(mux *http.ServeMux, git *storage.Store, re
 				run, e := checks.Get(a.RepositoryID, parts[0], parts[1])
 				if e != nil || run.CommitID != a.ProjectRevision || run.State != "succeeded" {
 					blockers = append(blockers, "repository_check_not_passing")
+					continue
+				}
+				commandDigest := sha256.Sum256([]byte(run.Definition.Command))
+				if !citedCommands[hex.EncodeToString(commandDigest[:])] {
+					blockers = append(blockers, "repository_check_not_workspace_bound")
 					continue
 				}
 				passedChecks[run.Definition.Name] = true
@@ -291,7 +310,7 @@ func evidenceExists(w workspaces.Workspace, e learningassessments.Evidence) bool
 	}
 	co := map[string]bool{}
 	for _, x := range w.Commands {
-		co[x.ID] = true
+		co[x.ID] = x.ActorID == w.CreatorID
 	}
 	for _, x := range e.CheckpointIDs {
 		if !cp[x] {
@@ -304,6 +323,26 @@ func evidenceExists(w workspaces.Workspace, e learningassessments.Evidence) bool
 		}
 	}
 	return len(e.CheckpointIDs)+len(e.CommandOutcomeIDs) > 0
+}
+func learningWorkProductDigest(w workspaces.Workspace, learner string) string {
+	type product struct {
+		Path   string `json:"path"`
+		SHA256 string `json:"sha256"`
+		Size   int    `json:"size"`
+	}
+	products := []product{}
+	for _, change := range w.Changes {
+		if change.ActorID == learner {
+			products = append(products, product{change.Path, change.SHA256, change.Size})
+		}
+	}
+	if len(products) == 0 {
+		return ""
+	}
+	sort.Slice(products, func(i, j int) bool { return products[i].Path < products[j].Path })
+	body, _ := json.Marshal(products)
+	digest := sha256.Sum256(body)
+	return hex.EncodeToString(digest[:])
 }
 func learningAssessmentContains(xs []string, v string) bool {
 	for _, x := range xs {
