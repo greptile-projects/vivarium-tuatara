@@ -60,6 +60,14 @@ func (r Repository) CanRead(userID string) bool {
 	return r.Visibility == Public || r.HasParticipant(userID)
 }
 
+// ParticipantIDs returns the current human collaboration boundary without
+// implying a role beyond ordinary repository participation.
+func (r Repository) ParticipantIDs() []string {
+	values := append([]string{r.OwnerID}, collaboratorIDs(r)...)
+	sort.Strings(values)
+	return slices.Compact(values)
+}
+
 // CreateFederatedFork publishes an independently owned repository from an
 // already verified transfer repository and retains only remote lineage.
 func (s *Store) CreateFederatedFork(ownerID, reference, branch, name string, source *storage.Repository, revision string) (Repository, error) {

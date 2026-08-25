@@ -24,6 +24,8 @@ import {
   type PullRequestCommit,
   type PullRequestReview,
   type ReviewPlan,
+  type ReviewAssignment,
+  type ReviewerSuggestion,
   type Repository,
   type User,
 } from "@/lib/api";
@@ -543,6 +545,8 @@ export function PullRequestDetail({
   const [reviews, setReviews] = useState<PullRequestReview[]>([]);
   const [reviewPlans, setReviewPlans] = useState<ReviewPlan[]>([]);
   const [reviewPlanError, setReviewPlanError] = useState("");
+  const [reviewAssignments, setReviewAssignments] = useState<ReviewAssignment[]>([]);
+  const [reviewerSuggestions, setReviewerSuggestions] = useState<ReviewerSuggestion[]>([]);
   const [federationEvents, setFederationEvents] = useState<FederationEvent[]>([]);
   const [stackContexts, setStackContexts] = useState<StackContext[]>([]);
   const [readiness, setReadiness] = useState<MergeReadiness | null>(null);
@@ -596,6 +600,10 @@ export function PullRequestDetail({
 	    if(planPage.page) setReviewPlans(planPage.page.review_plans);
 	    setReviewPlanError(planPage.error);
 	  }
+	  if (planPage.page?.review_plans.length) {
+	    const assignmentPage = await api<{assignments:ReviewAssignment[];suggestions:ReviewerSuggestion[]}>(`${base}/review-assignments`,{},token).catch(()=>null);
+	    if (active() && assignmentPage) { setReviewAssignments(assignmentPage.assignments); setReviewerSuggestions(assignmentPage.suggestions); }
+	  } else if (active()) { setReviewAssignments([]); setReviewerSuggestions([]); }
 	  const stackPage=await api<{stack_contexts:StackContext[]}>(`${base}/stack-context`,{},token).catch(()=>({stack_contexts:[]}));
 	  if(active()) setStackContexts(stackPage.stack_contexts);
 	  if (item.federated_contribution_id) {
@@ -831,6 +839,15 @@ export function PullRequestDetail({
     );
     if (created) reviewPlanRequestID.current = null;
   };
+  const inviteReviewer = (plan: ReviewPlan, areaID: string, suggestion: ReviewerSuggestion) => void mutate(
+    `/repositories/${repositoryID}/pulls/${pullRequestID}/review-assignments`,
+    {method:"POST",body:JSON.stringify({request_id:crypto.randomUUID(),plan_id:plan.id,area_id:areaID,principal_type:suggestion.principal_type,principal_id:suggestion.principal_id,agent_grant_id:suggestion.agent_grant_id,escalation_path:"Return to the repository owner for reassignment."})},
+    "The reviewer could not be invited.", "Reviewer invited within the bounded review area."
+  );
+  const respondToAssignment = (assignment: ReviewAssignment, action: string) => void mutate(
+    `/repositories/${repositoryID}/pulls/${pullRequestID}/review-assignments/${assignment.id}/transitions`,
+    {method:"POST",body:JSON.stringify({action})}, "The review assignment response could not be recorded.", "Review assignment updated."
+  );
 
   if (loading)
     return (
@@ -961,6 +978,7 @@ export function PullRequestDetail({
             </div>
             {reviewPlanError ? <p role="alert" className="mt-4 rounded-lg bg-[var(--danger-soft)] p-3 text-sm text-[var(--danger)]">Review plan history is unavailable. Retained versions may exist; retry before treating this change as unplanned. {reviewPlanError}</p> : reviewPlans.length === 0 ? <p className="mt-4 rounded-lg bg-[var(--warning-soft)] p-3 text-sm text-[var(--warning)]">No review plan exists. Approvals alone do not describe which risks and evidence were reviewed.</p> : <div className="mt-4 space-y-4">{[...reviewPlans].reverse().map((plan,index)=><details key={plan.id} open={index===0} className="rounded-lg border p-4"><summary className="cursor-pointer font-semibold">Version {plan.version} · {short(plan.source_revision)} <Badge tone={plan.stale?"warning":"success"}>{plan.stale?"stale":"current"}</Badge></summary><p className="mt-3 text-sm">{plan.risk_summary}</p><div className="mt-3 flex flex-wrap gap-2">{plan.policy_requirements.map(x=><Badge key={x}>{x}</Badge>)}{plan.affected_commitments.map(x=><Badge key={x} tone="info">{x} commitment</Badge>)}</div>{plan.diagnostics.length>0&&<div className="mt-3 space-y-2">{plan.diagnostics.map((d,i)=><p key={`${d.code}-${i}`} className="rounded bg-[var(--warning-soft)] p-2 text-xs text-[var(--warning)]"><strong>{d.code.replaceAll("_"," ")}:</strong> {d.message}{d.attributed_to?` · attributed to ${short(d.attributed_to)}`:""}</p>)}</div>}<div className="mt-4 grid gap-3">{plan.areas.map(area=><div key={area.id} className="rounded-lg border p-3"><div className="flex flex-wrap gap-2"><h3 className="text-sm font-semibold">{area.title}</h3>{area.depends_on?.map(x=><Badge key={x}>after {x}</Badge>)}</div><p className="mt-1 text-xs text-[var(--muted)]">{area.rationale}</p><p className="mt-2 text-xs font-semibold">Acceptance questions</p><ul className="mt-1 list-disc pl-5 text-xs">{area.acceptance_questions.map(x=><li key={x}>{x}</li>)}</ul><p className="mt-2 text-xs font-semibold">Required evidence</p><ul className="mt-1 list-disc pl-5 text-xs">{area.required_evidence.map(x=><li key={x.kind}>{x.description}</li>)}</ul><details className="mt-2 text-xs"><summary className="cursor-pointer">{area.paths.length} exact changed paths</summary><div className="mt-1 font-mono">{area.paths.map(x=><p key={x}>{x}</p>)}</div></details><p className="mt-2 text-xs"><strong>Complete when:</strong> {area.completion_rule}</p></div>)}</div><p className="mt-4 text-xs"><strong>Whole-plan completion:</strong> {plan.completion_rule}</p><p className="mt-2 text-xs text-[var(--muted)]">{plan.authority}</p></details>)}</div>}
           </Card>
+          {reviewPlans.length > 0 && <Card className="p-5" id="review-assignments"><h2 className="font-semibold">Review responsibility</h2><p className="mt-1 text-sm text-[var(--muted)]">Suggestions explain permitted evidence; accepting covers one exact area and adds no operational authority.</p><div className="mt-4 grid gap-3">{reviewPlans.at(-1)?.areas.map(area=><div key={area.id} className="rounded-lg border p-3"><p className="text-sm font-semibold">{area.title}</p>{reviewAssignments.filter(a=>a.plan_id===reviewPlans.at(-1)?.id&&a.area_id===area.id).map(a=><div key={a.id} className="mt-2 rounded bg-[var(--surface)] p-2 text-xs"><p>{a.principal_type} {short(a.principal_id)} · <strong>{a.status}</strong>{a.action_required?` · ${a.action_required}`:""}</p><p className="mt-1 text-[var(--muted)]">{a.authority}</p>{a.principal_id===user?.id&&(a.status==="invited"||a.status==="accepted")&&<div className="mt-2 flex flex-wrap gap-2">{a.status==="invited"&&<Button type="button" onClick={()=>respondToAssignment(a,"accept")}>Accept</Button>}<Button type="button" onClick={()=>respondToAssignment(a,"decline")}>Decline</Button><Button type="button" onClick={()=>respondToAssignment(a,"recuse")}>Recuse</Button><Button type="button" onClick={()=>respondToAssignment(a,"unavailable")}>Unavailable</Button></div>}</div>)}{isOwner&&!reviewAssignments.some(a=>a.plan_id===reviewPlans.at(-1)?.id&&a.area_id===area.id&&(a.status==="invited"||a.status==="accepted"))&&<div className="mt-2 space-y-2">{reviewerSuggestions.filter(s=>s.area_ids.includes(area.id)).map(s=><div key={`${s.principal_type}-${s.principal_id}`} className="flex items-start justify-between gap-2 rounded border p-2 text-xs"><div><p>{s.principal_type} {short(s.principal_id)} · {s.availability} · load {s.active_load}</p><p className="text-[var(--muted)]">{s.evidence.map(e=>e.summary).join(" ")}{s.conflict?` ${s.conflict}`:""}</p></div><Button type="button" disabled={!s.eligible||pending} onClick={()=>inviteReviewer(reviewPlans.at(-1)!,area.id,s)}>Invite</Button></div>)}</div>}</div>)}</div></Card>}
           <PullPrivacyReview repositoryID={repositoryID} pullRequestID={pullRequestID} sourceRevision={pull.source_commit_id} targetRevision={pull.target_commit_id} participant={participant} />
           <PullLocalizationReview repositoryID={repositoryID} pullRequestID={pullRequestID} />
           <PullPerformanceEvaluations repositoryID={repositoryID} pullRequestID={pullRequestID} />
