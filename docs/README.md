@@ -2434,6 +2434,29 @@ defaults beneath `$LEARNING_ASSESSMENT_STORAGE_ROOT` (`learning-assessments`).
 Assessments and results grant no Git, workspace, check, review, repository, or
 contribution authority.
 
+Learning outcomes improve the curriculum only through explicit consent. An
+authenticated learner posts module completion, a recurring question, setup
+failure, assessment gap, mentor load, contribution outcome, reviewer
+correction, or retention signal to the exact pathway revision's `/outcomes`
+route and chooses `private`, `maintainers`, or `aggregate` visibility. The
+service does not infer outcomes from page views or inspect unshared workspace
+state. Private records remain visible only to their learner and can never cite
+support for a maintainer finding; aggregate-only reports expose each learner's
+latest state only after a cohort reaches three distinct consenting learners.
+
+Repository maintainers turn non-private outcome citations into immutable
+revision-bound findings and then into proposed documentation, exercise,
+workspace, or pathway updates. A separate attributed review accepts or rejects
+each proposal with rationale. Findings and proposals become visibly stale when
+the pathway moves rather than silently following the successor. Completion
+evidence stays attached to the archived version that awarded it; accepted
+material requirement changes project `revalidation_required` instead of
+revoking or rewriting prior achievement. The `/learning` workspace presents
+all eight aggregate categories, the privacy threshold, learner-controlled
+reporting, and stale historical completion notices. These improvement records
+grant no pathway publication, learner inspection, review, completion,
+repository, workspace, or Git authority.
+
 An authenticated learner can include up to twenty demonstrated assessment
 attempt IDs when requesting `POST
 /repositories/{id}/contribution-opportunity-matches`. The server admits only

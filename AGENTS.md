@@ -2775,6 +2775,20 @@ whenever dependencies change or the web job fails before it starts.
   (`learning-assessments`); assessment records grant no Git, workspace, check,
   review, repository, completion, or contribution authority.
 
+- **Consent-aware pathway improvement** — Authenticated learners explicitly
+  report module completion, recurring questions, setup failures, assessment
+  gaps, mentor load, contribution outcomes, reviewer corrections, and
+  retention against an exact archived pathway revision at its `/outcomes`
+  route. Reports choose private, maintainer, or aggregate visibility; private
+  reports never support findings, and aggregates remain suppressed below three
+  consented subjects. Maintainers retain cited revision-bound findings and
+  reviewed documentation, exercise, workspace, or pathway update proposals.
+  Reads project moved findings and completion evidence as stale without
+  rewriting history, while accepted material requirement changes explicitly
+  require revalidation. Records remain beneath `$LEARNING_PATHWAY_STORAGE_ROOT`
+  and grant no learner inspection, pathway publication, review, completion,
+  repository, workspace, or Git authority.
+
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
 
   Pull privacy review at `/repositories/{id}/pulls/{pull_id}/privacy-review` requires a candidate

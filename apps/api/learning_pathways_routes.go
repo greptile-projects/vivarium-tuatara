@@ -251,6 +251,178 @@ func registerLearningPathwayRoutes(mux *http.ServeMux, git *storage.Store, repos
 		w.Header().Set("Location", "/repositories/"+r.PathValue("id")+"/learning-pathways/"+r.PathValue("slug"))
 		writeJSON(w, status, present(r.PathValue("id"), actor.UserID, v))
 	})
+	// Outcomes are explicit, consented learner reports. Reads never expose a
+	// private subject through aggregation, and aggregate-only cohorts smaller
+	// than three remain suppressed.
+	mux.HandleFunc("POST /repositories/{id}/learning-pathways/{slug}/outcomes", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryRead(w, r, repos, credentials, r.PathValue("id"))
+		if !ok {
+			return
+		}
+		var in learningpathways.Outcome
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		in.ID, in.RepositoryID, in.PathwaySlug, in.ActorID = "", r.PathValue("id"), r.PathValue("slug"), actor.UserID
+		history, e := pathways.List(in.RepositoryID, in.PathwaySlug)
+		if e != nil || in.PathwayVersion < 1 || in.PathwayVersion > len(history) {
+			writeAPIError(w, 422, "learning_outcome_revision_invalid", "the exact archived pathway revision is required")
+			return
+		}
+		created, e := pathways.AddOutcome(in)
+		if errors.Is(e, learningpathways.ErrRequestChanged) {
+			writeAPIError(w, 409, "learning_outcome_request_changed", "request identity was already used with different outcome content")
+			return
+		}
+		if e != nil {
+			writeAPIError(w, 422, "learning_outcome_invalid", "consent, visibility, category, state, and a stable request identity are required")
+			return
+		}
+		writeJSON(w, 201, created)
+	})
+	mux.HandleFunc("GET /repositories/{id}/learning-pathways/{slug}/outcomes", func(w http.ResponseWriter, r *http.Request) {
+		actor, authenticated, ok := authorizeRepositoryRead(w, r, repos, credentials, r.PathValue("id"))
+		if !ok {
+			return
+		}
+		items, e := pathways.Outcomes(r.PathValue("id"), r.PathValue("slug"))
+		if e != nil {
+			writeAPIError(w, 500, "learning_outcomes_read_failed", "learning outcomes could not be read")
+			return
+		}
+		actorID := ""
+		maintainer := false
+		if authenticated {
+			actorID = actor.UserID
+			maintainer = isParticipant(r.PathValue("id"), actorID)
+		}
+		visible := []learningpathways.Outcome{}
+		counts := map[string]int{}
+		states := map[string]map[string]int{}
+		aggregateLatest := map[string]learningpathways.Outcome{}
+		for _, x := range items {
+			if x.Visibility == "aggregate" {
+				key := x.Kind + ":" + x.ActorID
+				if prior, exists := aggregateLatest[key]; !exists || x.OccurredAt.After(prior.OccurredAt) {
+					aggregateLatest[key] = x
+				}
+			}
+			if x.ActorID == actorID || maintainer && x.Visibility == "maintainers" {
+				visible = append(visible, x)
+			}
+		}
+		for _, x := range aggregateLatest {
+			counts[x.Kind]++
+			if states[x.Kind] == nil {
+				states[x.Kind] = map[string]int{}
+			}
+			states[x.Kind][x.State]++
+		}
+		for kind, n := range counts {
+			if n < 3 {
+				delete(counts, kind)
+				delete(states, kind)
+			}
+		}
+		current, _ := pathways.Current(r.PathValue("id"), r.PathValue("slug"))
+		stale := 0
+		for _, x := range visible {
+			if x.Kind == "module_completion" && x.PathwayVersion != current.Version {
+				stale++
+			}
+		}
+		writeJSON(w, 200, map[string]any{"outcomes": visible, "aggregates": counts, "aggregate_states": states, "suppression_threshold": 3, "stale_completion_evidence": stale, "current_pathway_version": current.Version})
+	})
+	mux.HandleFunc("POST /repositories/{id}/learning-pathways/{slug}/findings", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, repos, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var in learningpathways.Finding
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		in.ID, in.RepositoryID, in.PathwaySlug, in.CreatedBy = "", r.PathValue("id"), r.PathValue("slug"), actor.UserID
+		v, e := pathways.AddFinding(in)
+		if errors.Is(e, learningpathways.ErrRequestChanged) {
+			writeAPIError(w, 409, "learning_finding_request_changed", "request identity was already used with different finding content")
+			return
+		}
+		if e != nil {
+			writeAPIError(w, 422, "learning_finding_unsupported", "a finding must cite consented non-private outcomes at its exact pathway revision")
+			return
+		}
+		writeJSON(w, 201, v)
+	})
+	mux.HandleFunc("POST /repositories/{id}/learning-pathways/{slug}/update-proposals", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, repos, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var in learningpathways.UpdateProposal
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		in.ID, in.RepositoryID, in.PathwaySlug, in.ProposedBy = "", r.PathValue("id"), r.PathValue("slug"), actor.UserID
+		v, e := pathways.AddProposal(in)
+		if errors.Is(e, learningpathways.ErrRequestChanged) {
+			writeAPIError(w, 409, "learning_update_request_changed", "request identity was already used with different update content")
+			return
+		}
+		if e != nil {
+			writeAPIError(w, 422, "learning_update_unsupported", "the update must cite a supported finding and an exact base revision")
+			return
+		}
+		writeJSON(w, 201, v)
+	})
+	mux.HandleFunc("POST /repositories/{id}/learning-pathways/{slug}/update-proposals/{proposal_id}/review", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, repos, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		var in struct {
+			Decision  string `json:"decision"`
+			Rationale string `json:"rationale"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		v, e := pathways.ReviewProposal(r.PathValue("id"), r.PathValue("slug"), r.PathValue("proposal_id"), actor.UserID, in.Decision, in.Rationale)
+		if e != nil {
+			writeAPIError(w, 422, "learning_update_review_invalid", "a pending proposal, accepted or rejected decision, and rationale are required")
+			return
+		}
+		writeJSON(w, 200, v)
+	})
+	mux.HandleFunc("GET /repositories/{id}/learning-pathways/{slug}/improvements", func(w http.ResponseWriter, r *http.Request) {
+		_, _, ok := authorizeRepositoryRead(w, r, repos, credentials, r.PathValue("id"))
+		if !ok {
+			return
+		}
+		fs, e := pathways.Findings(r.PathValue("id"), r.PathValue("slug"))
+		if e != nil {
+			writeAPIError(w, 500, "learning_improvements_read_failed", "learning improvements could not be read")
+			return
+		}
+		ps, e := pathways.Proposals(r.PathValue("id"), r.PathValue("slug"))
+		if e != nil {
+			writeAPIError(w, 500, "learning_improvements_read_failed", "learning improvements could not be read")
+			return
+		}
+		current, _ := pathways.Current(r.PathValue("id"), r.PathValue("slug"))
+		for i := range fs {
+			fs[i].Stale = fs[i].PathwayVersion != current.Version
+		}
+		for i := range ps {
+			ps[i].Stale = ps[i].BaseVersion != current.Version
+			ps[i].RevalidationRequired = ps[i].Status == "accepted" && ps[i].MaterialRequirementChange
+		}
+		writeJSON(w, 200, map[string]any{"findings": fs, "update_proposals": ps, "current_pathway_version": current.Version, "history_preserved": true})
+	})
 	if workspaceStore == nil {
 		return
 	}
