@@ -2789,6 +2789,20 @@ whenever dependencies change or the web job fails before it starts.
   and grant no learner inspection, pathway publication, review, completion,
   repository, workspace, or Git authority.
 
+- **Connected project learning journey** —
+  `project-learning-journey.spec.ts` proves the complete browser, public-API,
+  stock-Git, and container-backed path from role selection through broken and
+  repaired exercises, cited mentor and learner-controlled agent guidance,
+  protected practical assessment, evidence-based opportunity matching,
+  fork-owned contribution, ordinary checks/review/merge, and a consented
+  reviewed pathway improvement. A learning-exercise creator with current
+  repository read access may edit and execute only inside that disposable
+  runtime; this does not require or create upstream participation, and all
+  authoritative Git mutations retain their ordinary gates. Missing
+  prerequisites, inaccessible material, unsupported environments, misleading
+  paused guidance, failed assessment, mentor departure, stale material, and an
+  abandoned reservation remain explicit in the retained trail.
+
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
 
   Pull privacy review at `/repositories/{id}/pulls/{pull_id}/privacy-review` requires a candidate

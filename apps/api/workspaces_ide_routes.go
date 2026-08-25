@@ -361,7 +361,14 @@ exec "$@"`
 		err = withConflictRuntimeAuthorization(catalog, item, workspacePrincipal(actor), actor.UserID, actor.RepositoryID, operation)
 		return output, err
 	}
-	if mutation {
+	// A learning exercise is deliberately available to repository readers and
+	// all mutations stay inside its disposable runtime. Requiring upstream
+	// participation here would let a reader launch an exercise but prevent them
+	// from doing the practice. Keep live read access and learner identity while
+	// leaving authoritative repository mutations behind their ordinary gate.
+	if mutation && item.Source.Kind == "learning_exercise" && item.CreatorID == actor.UserID {
+		err = catalog.WithCurrentReadAccess(actor.UserID, []string{item.RepositoryID}, operation)
+	} else if mutation {
 		err = catalog.WithCurrentParticipant(actor.UserID, item.RepositoryID, operation)
 	} else {
 		err = catalog.WithCurrentReadAccess(actor.UserID, []string{item.RepositoryID}, operation)
