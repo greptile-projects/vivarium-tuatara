@@ -60,9 +60,14 @@ type Plan struct {
 	Authority           string       `json:"authority"`
 }
 type Store struct {
-	root string
-	mu   sync.Mutex
-	now  func() time.Time
+	root       string
+	mu         sync.Mutex
+	now        func() time.Time
+	createTemp func(string, string) (*os.File, error)
+	rename     func(string, string) error
+	openDir    func(string) (*os.File, error)
+	syncFile   func(*os.File) error
+	syncDir    func(*os.File) error
 }
 
 func New(root string) (*Store, error) {
@@ -72,7 +77,15 @@ func New(root string) (*Store, error) {
 	if err := os.MkdirAll(root, 0700); err != nil {
 		return nil, err
 	}
-	return &Store{root: root, now: func() time.Time { return time.Now().UTC().Truncate(time.Microsecond) }}, nil
+	return &Store{
+		root:       root,
+		now:        func() time.Time { return time.Now().UTC().Truncate(time.Microsecond) },
+		createTemp: os.CreateTemp,
+		rename:     os.Rename,
+		openDir:    func(path string) (*os.File, error) { return os.Open(path) },
+		syncFile:   func(file *os.File) error { return file.Sync() },
+		syncDir:    func(directory *os.File) error { return directory.Sync() },
+	}, nil
 }
 func (s *Store) Create(plan Plan) (Plan, error) {
 	s.mu.Lock()
@@ -129,11 +142,40 @@ func (s *Store) write(repo, pull string, v []Plan) error {
 	if err != nil {
 		return err
 	}
-	tmp := s.path(repo, pull) + ".tmp"
-	if err = os.WriteFile(tmp, data, 0600); err != nil {
+	target := s.path(repo, pull)
+	directory := filepath.Dir(target)
+	tmp, err := s.createTemp(directory, ".review-plan-*.tmp")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, s.path(repo, pull))
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if err = tmp.Chmod(0600); err == nil {
+		_, err = tmp.Write(data)
+	}
+	if err == nil {
+		err = s.syncFile(tmp)
+	}
+	closeErr := tmp.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	if err = s.rename(tmpPath, target); err != nil {
+		return err
+	}
+	dir, err := s.openDir(directory)
+	if err != nil {
+		return err
+	}
+	err = s.syncDir(dir)
+	closeErr = dir.Close()
+	if err != nil {
+		return err
+	}
+	return closeErr
 }
 func (s *Store) path(repo, pull string) string { return filepath.Join(s.root, repo, pull+".json") }
 func newID() string                            { b := make([]byte, 12); _, _ = rand.Read(b); return hex.EncodeToString(b) }

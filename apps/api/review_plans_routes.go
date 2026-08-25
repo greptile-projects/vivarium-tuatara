@@ -66,9 +66,12 @@ func registerReviewPlanRoutes(mux *http.ServeMux, catalog *repositories.Store, c
 			paths = append(paths, c.Path)
 		}
 		plan := deriveReviewPlan(p, repo, actor.UserID, paths, in)
-		if checks, err := catalog.RequiredChecks(repo.ID, p.TargetBranch); err == nil {
-			plan.PolicyRequirements = append(plan.PolicyRequirements, checks...)
+		checks, err := catalog.RequiredChecks(repo.ID, p.TargetBranch)
+		if err != nil {
+			writeAPIError(w, 503, "required_checks_unavailable", "target branch review policy could not be resolved")
+			return
 		}
+		plan.PolicyRequirements = append(plan.PolicyRequirements, checks...)
 		plan.PolicyRequirements = reviewplans.Normalize(plan.PolicyRequirements)
 		out, e := plans.Create(plan)
 		if e != nil {

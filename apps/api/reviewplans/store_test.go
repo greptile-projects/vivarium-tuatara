@@ -1,6 +1,10 @@
 package reviewplans
 
-import "testing"
+import (
+	"errors"
+	"os"
+	"testing"
+)
 
 func TestPlansRetainVersionsAndProjectMovementAsAttributedGap(t *testing.T) {
 	s, err := New(t.TempDir())
@@ -33,4 +37,34 @@ func TestNormalizeMakesDerivedScopeStable(t *testing.T) {
 	if len(got) != 2 || got[0] != "a" || got[1] != "b" {
 		t.Fatalf("unexpected normalization: %#v", got)
 	}
+}
+
+func TestCreateDoesNotAcknowledgeFailedFileSync(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.syncFile = func(*os.File) error { return errors.New("disk unavailable") }
+	if _, err = s.Create(validTestPlan()); err == nil {
+		t.Fatal("create acknowledged an unsynced file")
+	}
+	values, err := s.List("repo", "pull", validTestPlan().SourceRevision, validTestPlan().TargetRevision)
+	if err != nil || len(values) != 0 {
+		t.Fatalf("failed publication became visible: %#v, %v", values, err)
+	}
+}
+
+func TestCreateDoesNotAcknowledgeFailedDirectorySync(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.syncDir = func(*os.File) error { return errors.New("directory unavailable") }
+	if _, err = s.Create(validTestPlan()); err == nil {
+		t.Fatal("create acknowledged an unsynced directory entry")
+	}
+}
+
+func validTestPlan() Plan {
+	return Plan{RepositoryID: "repo", PullRequestID: "pull", SourceRevision: "1111111111111111111111111111111111111111", TargetRevision: "2222222222222222222222222222222222222222", Intent: "preserve behavior", Areas: []Area{{ID: "code", Title: "Code", Questions: []string{"safe?"}, Evidence: []Evidence{{Kind: "test", Description: "proof", Required: true}}, CompletionRule: "answered"}}, CompletionRule: "complete", CreatedBy: "owner"}
 }
