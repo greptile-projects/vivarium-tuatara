@@ -171,7 +171,11 @@ func registerReviewAssignmentRoutes(mux *http.ServeMux, catalog *repositories.St
 		if replacement == nil && assignee && current.PrincipalType == "human" {
 			e = catalog.WithCurrentParticipant(current.PrincipalID, repo.ID, persist)
 		} else if replacement == nil && assignee && current.PrincipalType == "agent" && orgs != nil && repo.OrganizationID != "" {
-			e = orgs.WithCurrentAgentGrant(repo.OrganizationID, current.AgentGrantID, current.PrincipalID, repo.ID, persist)
+			if in.Action == "accept" {
+				e = orgs.WithCurrentReviewAgentGrant(repo.OrganizationID, current.AgentGrantID, current.PrincipalID, repo.ID, persist)
+			} else {
+				e = orgs.WithCurrentAgentGrant(repo.OrganizationID, current.AgentGrantID, current.PrincipalID, repo.ID, persist)
+			}
 		} else if replacement != nil && replacement.PrincipalType == "human" {
 			e = catalog.WithCurrentParticipant(replacement.PrincipalID, repo.ID, persist)
 		} else if replacement != nil && orgs != nil && repo.OrganizationID != "" {

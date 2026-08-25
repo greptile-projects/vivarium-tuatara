@@ -2,6 +2,8 @@ package reviewplans
 
 import (
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 )
@@ -31,6 +33,57 @@ func TestReviewAssignmentLifecycleIsAreaBoundedAndRetryStable(t *testing.T) {
 	recused, err := store.Transition("repo", "pull", created.ID, "reviewer", "recuse", "authored related design", nil)
 	if err != nil || recused.Status != "recused" || recused.ActionRequired == "" {
 		t.Fatalf("recuse = %#v, %v", recused, err)
+	}
+}
+
+func TestReviewAssignmentAreaConflictIsScopedToExactPlan(t *testing.T) {
+	store, _ := New(t.TempDir())
+	first := Assignment{RequestID: "request-plan-a", RepositoryID: "repo", PullRequestID: "pull", PlanID: "plan-a", PlanVersion: 1, AreaID: "security", PrincipalType: "human", PrincipalID: "one", AssignedBy: "owner"}
+	if _, err := store.CreateAssignment(first); err != nil {
+		t.Fatal(err)
+	}
+	second := first
+	second.RequestID, second.PlanID, second.PlanVersion, second.PrincipalID = "request-plan-b", "plan-b", 2, "two"
+	if _, err := store.CreateAssignment(second); err != nil {
+		t.Fatalf("new plan assignment = %v", err)
+	}
+}
+
+func TestIndependentStoresSerializeAssignmentMutations(t *testing.T) {
+	root := t.TempDir()
+	first, _ := New(root)
+	second, _ := New(root)
+	stores := []*Store{first, second}
+	var wg sync.WaitGroup
+	errorsSeen := make(chan error, 2)
+	for i, store := range stores {
+		wg.Add(1)
+		go func(index int, current *Store) {
+			defer wg.Done()
+			_, err := current.CreateAssignment(Assignment{RequestID: fmt.Sprintf("request-%d-stable", index), RepositoryID: "repo", PullRequestID: "pull", PlanID: "plan", PlanVersion: 1, AreaID: fmt.Sprintf("area-%d", index), PrincipalType: "human", PrincipalID: fmt.Sprintf("reviewer-%d", index), AssignedBy: "owner"})
+			errorsSeen <- err
+		}(i, store)
+	}
+	wg.Wait()
+	close(errorsSeen)
+	for err := range errorsSeen {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	values, err := first.ListAssignments("repo", "pull")
+	if err != nil || len(values) != 2 {
+		t.Fatalf("assignments = %#v, %v", values, err)
+	}
+}
+
+func TestAcceptedReviewerMayDeclineAndRequireReassignment(t *testing.T) {
+	store, _ := New(t.TempDir())
+	created, _ := store.CreateAssignment(Assignment{RequestID: "request-decline", RepositoryID: "repo", PullRequestID: "pull", PlanID: "plan", PlanVersion: 1, AreaID: "api", PrincipalType: "human", PrincipalID: "reviewer", AssignedBy: "owner"})
+	accepted, _ := store.Transition("repo", "pull", created.ID, "reviewer", "accept", "", nil)
+	declined, err := store.Transition("repo", "pull", accepted.ID, "reviewer", "decline", "cannot complete", nil)
+	if err != nil || declined.Status != "declined" || declined.ActionRequired == "" {
+		t.Fatalf("decline = %#v, %v", declined, err)
 	}
 }
 

@@ -692,6 +692,45 @@ func (s *Store) WithCurrentAgentGrant(organizationID, grantID, agentID, reposito
 	})
 }
 
+// WithCurrentReviewAgentGrant additionally holds the agent's current review
+// capability, availability, and conflict disclosure stable through acceptance.
+func (s *Store) WithCurrentReviewAgentGrant(organizationID, grantID, agentID, repositoryID string, fn func() error) error {
+	if !validID(organizationID) || !validID(grantID) || !validID(agentID) || !validID(repositoryID) || fn == nil {
+		return ErrInvalid
+	}
+	return s.locked(func() error {
+		organization, err := s.Get(organizationID)
+		if err != nil {
+			return err
+		}
+		now := s.now()
+		grantCurrent := false
+		for _, grant := range organization.AccessGrants {
+			if grant.ID == grantID && grant.PrincipalType == "agent" && grant.PrincipalID == agentID && grant.RevokedAt == nil && (grant.ExpiresAt == nil || grant.ExpiresAt.After(now)) && slices.Contains(grant.Resources, ResourceScope{Kind: "repository", ID: repositoryID}) && !resourceDenied(grant, ResourceScope{Kind: "repository", ID: repositoryID}) {
+				grantCurrent = true
+				break
+			}
+		}
+		for _, agent := range organization.Agents {
+			if agent.ID != agentID || !grantCurrent || len(agent.Profiles) == 0 {
+				continue
+			}
+			profile := agent.Profiles[len(agent.Profiles)-1]
+			capable := false
+			for _, capability := range append(append([]string{}, agent.Capabilities...), profile.SupportedTasks...) {
+				if strings.Contains(strings.ToLower(capability), "review") {
+					capable = true
+					break
+				}
+			}
+			if capable && !strings.Contains(strings.ToLower(profile.Availability), "unavailable") && len(profile.ConflictDisclosures) == 0 {
+				return fn()
+			}
+		}
+		return ErrNotFound
+	})
+}
+
 // WithCurrentMember holds membership stable while a dependent store commits.
 // Membership removal uses the same organization lock and therefore cannot
 // interleave between this admission check and the callback write.

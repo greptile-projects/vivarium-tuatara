@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -72,6 +73,11 @@ func (s *Store) CreateAssignment(value Assignment) (Assignment, error) {
 	if !validRequestID(value.RequestID) || value.RepositoryID == "" || value.PullRequestID == "" || value.PlanID == "" || value.PlanVersion < 1 || value.AreaID == "" || !slices.Contains([]string{"human", "agent"}, value.PrincipalType) || value.PrincipalID == "" || value.AssignedBy == "" || (value.PrincipalType == "agent" && value.AgentGrantID == "") {
 		return Assignment{}, ErrInvalid
 	}
+	unlock, err := s.lockAssignments(value.RepositoryID, value.PullRequestID)
+	if err != nil {
+		return Assignment{}, err
+	}
+	defer unlock()
 	values, err := s.readAssignments(value.RepositoryID, value.PullRequestID)
 	if err != nil {
 		return Assignment{}, err
@@ -83,7 +89,7 @@ func (s *Store) CreateAssignment(value Assignment) (Assignment, error) {
 			}
 			return Assignment{}, ErrConflict
 		}
-		if existing.AreaID == value.AreaID && (existing.Status == "invited" || existing.Status == "accepted") {
+		if existing.PlanID == value.PlanID && existing.AreaID == value.AreaID && (existing.Status == "invited" || existing.Status == "accepted") {
 			return Assignment{}, ErrConflict
 		}
 	}
@@ -98,6 +104,11 @@ func (s *Store) CreateAssignment(value Assignment) (Assignment, error) {
 func (s *Store) Transition(repo, pull, id, actor, action, reason string, replacement *Assignment) (Assignment, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	unlock, err := s.lockAssignments(repo, pull)
+	if err != nil {
+		return Assignment{}, err
+	}
+	defer unlock()
 	values, err := s.readAssignments(repo, pull)
 	if err != nil {
 		return Assignment{}, err
@@ -107,7 +118,7 @@ func (s *Store) Transition(repo, pull, id, actor, action, reason string, replace
 		return Assignment{}, ErrNotFound
 	}
 	v := &values[index]
-	allowed := map[string][]string{"invited": {"accept", "decline", "recuse", "unavailable", "release", "replace"}, "accepted": {"recuse", "unavailable", "release", "replace"}}
+	allowed := map[string][]string{"invited": {"accept", "decline", "recuse", "unavailable", "release", "replace"}, "accepted": {"decline", "recuse", "unavailable", "release", "replace"}}
 	if !slices.Contains(allowed[v.Status], action) {
 		return Assignment{}, ErrConflict
 	}
@@ -123,7 +134,7 @@ func (s *Store) Transition(repo, pull, id, actor, action, reason string, replace
 			return Assignment{}, ErrInvalid
 		}
 		for _, current := range values {
-			if current.AreaID == v.AreaID && current.ID != v.ID && (current.Status == "invited" || current.Status == "accepted") {
+			if current.PlanID == v.PlanID && current.AreaID == v.AreaID && current.ID != v.ID && (current.Status == "invited" || current.Status == "accepted") {
 				return Assignment{}, ErrConflict
 			}
 		}
@@ -144,6 +155,24 @@ func timesEqual(a, b *time.Time) bool {
 }
 func (s *Store) assignmentPath(repo, pull string) string {
 	return filepath.Join(s.root, repo, pull+"-assignments.json")
+}
+func (s *Store) lockAssignments(repo, pull string) (func(), error) {
+	directory := filepath.Dir(s.assignmentPath(repo, pull))
+	if err := os.MkdirAll(directory, 0700); err != nil {
+		return nil, err
+	}
+	lock, err := os.OpenFile(filepath.Join(directory, "."+pull+"-assignments.lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, err
+	}
+	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		_ = lock.Close()
+		return nil, err
+	}
+	return func() {
+		_ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+		_ = lock.Close()
+	}, nil
 }
 func (s *Store) readAssignments(repo, pull string) ([]Assignment, error) {
 	data, err := os.ReadFile(s.assignmentPath(repo, pull))
