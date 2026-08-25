@@ -2328,6 +2328,37 @@ supported setup and verification, communication, review, and work categories
 for humans, agents, or either. Public repositories expose the current pathway
 without authentication; private repositories retain their normal read boundary.
 
+### Project learning pathways
+
+Project collaborators can turn those participation expectations into a
+maintainable curriculum through `PUT
+/repositories/{id}/learning-pathways/{slug}`. Each publication appends an
+immutable version for one role or practical outcome, retaining prerequisites,
+objectives, exact supported commits, ordered modules, exercises, expected
+effort, mentors, accessibility and localization needs, learner-environment
+support, and the evidence that would demonstrate completion. Collection and
+detail reads are available through the public API under the repository's normal
+visibility boundary, and the `/repositories/{id}/learning` workspace presents
+the same pathway and health information.
+
+Publication requires a caller-stable `request_id`. Exact retries reconcile the
+already-visible revision and repeat its directory durability sync before a
+subsequent version is accepted; reusing the identity with changed content is a
+conflict. This makes a durability-uncertain `202` safely recoverable without
+duplicating immutable curriculum history.
+
+Module material links distinguish documentation, symbols, decisions, issues,
+APIs, package versions, and contributor-guidance revisions. Git-backed links
+bind a path and 40-character commit; symbol links additionally require the
+named symbol at that exact file revision. Reads re-evaluate exact object and
+linked-record availability, default-branch movement, current mentor and support
+ownership, contributor-guidance successors, and declared environment support.
+Missing owners, departed mentors, stale or inaccessible material, and
+unsupported environments remain visible and attributable instead of being
+removed from the curriculum. Records default beneath
+`$LEARNING_PATHWAY_STORAGE_ROOT` (`learning-pathways`) and grant no Git,
+repository, package, issue, mentor, workspace, review, or completion authority.
+
 References to documentation, current ownership, releases, issues, proposals,
 and workspace definitions are projected against live repository state on every
 read. Missing, moved, or private requirements remain in history and are marked

@@ -67,6 +67,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/interfacesystems"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/issues"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/knowledgeanswers"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/learningpathways"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/localeplans"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/localization"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
@@ -323,6 +324,14 @@ func main() {
 		contributorPathwayRoot = "contributor-pathways"
 	}
 	contributorPathwayStore, err := contributorpathways.New(contributorPathwayRoot)
+	if err != nil {
+		log.Fatal(err)
+	}
+	learningPathwayRoot := os.Getenv("LEARNING_PATHWAY_STORAGE_ROOT")
+	if learningPathwayRoot == "" {
+		learningPathwayRoot = "learning-pathways"
+	}
+	learningPathwayStore, err := learningpathways.New(learningPathwayRoot)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -905,7 +914,7 @@ func main() {
 		port = "8080"
 	}
 
-	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, charterStore, governanceStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, supportThreadStore, supportVerificationStore, supportSolutionStore, knowledgeAnswerStore, contributorPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore, performanceGoalStore, performanceEvidenceStore, productExperimentStore, feedbackStore, productOpportunityStore, roadmapStore, outcomeValidationStore, projectFundStore, incubatorStore, adoptionWorkspaceStore, accessibilityCommitmentStore, accessibilityReportStore, accessibilityAssessmentStore, accessibilityDeliveryStore, dataCommitmentStore, dataFlowStore, privacyReviewStore, privacyCheckStore, dataObservationStore, localePlanStore, localizationStore, serviceObjectiveStore, recoveryCommitmentStore, protectionPlanStore, recoveryExerciseStore, recoveryOperationStore, agentEvaluationStore, agentProjectStore, agentCandidateStore, apiContractStore, durableSchemaStore, infrastructureStore, debugWorkspaceStore, interfaceSystemStore, capabilityStore, designProposalStore, interfaceCheckStore, designGovernanceStore, qualityPlanStore, assuranceProgramStore, assuranceEvidenceStore, assuranceImpactStore, assuranceAssessmentStore, testScenarioStore, exploratorySessionStore, releaseConfidenceStore, securityExpectationStore, threatModelStore, securityScenarioStore, securityFindingStore, securityConfidenceStore, collaborationWorkflowStore, workflowComponentStore, regressionInvestigationStore, propagationCampaignStore, historyRemediationStore, restructuringPlanStore, changeStackStore)
+	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, charterStore, governanceStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, supportThreadStore, supportVerificationStore, supportSolutionStore, knowledgeAnswerStore, contributorPathwayStore, learningPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore, performanceGoalStore, performanceEvidenceStore, productExperimentStore, feedbackStore, productOpportunityStore, roadmapStore, outcomeValidationStore, projectFundStore, incubatorStore, adoptionWorkspaceStore, accessibilityCommitmentStore, accessibilityReportStore, accessibilityAssessmentStore, accessibilityDeliveryStore, dataCommitmentStore, dataFlowStore, privacyReviewStore, privacyCheckStore, dataObservationStore, localePlanStore, localizationStore, serviceObjectiveStore, recoveryCommitmentStore, protectionPlanStore, recoveryExerciseStore, recoveryOperationStore, agentEvaluationStore, agentProjectStore, agentCandidateStore, apiContractStore, durableSchemaStore, infrastructureStore, debugWorkspaceStore, interfaceSystemStore, capabilityStore, designProposalStore, interfaceCheckStore, designGovernanceStore, qualityPlanStore, assuranceProgramStore, assuranceEvidenceStore, assuranceImpactStore, assuranceAssessmentStore, testScenarioStore, exploratorySessionStore, releaseConfidenceStore, securityExpectationStore, threatModelStore, securityScenarioStore, securityFindingStore, securityConfidenceStore, collaborationWorkflowStore, workflowComponentStore, regressionInvestigationStore, propagationCampaignStore, historyRemediationStore, restructuringPlanStore, changeStackStore)
 	startCheckRunRecovery(store, checkRunStore)
 	startIntegrationQueueRecovery(pullRequestStore)
 	startDeploymentRecovery(deploymentStore, checkRunStore)
@@ -1039,6 +1048,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	var supportSolutionStore *supportsolutions.Store
 	var knowledgeAnswerStore *knowledgeanswers.Store
 	var contributorPathwayStore *contributorpathways.Store
+	var learningPathwayStore *learningpathways.Store
 	var contributorOpportunityStore *contributoropportunities.Store
 	var previewStore *previews.Store
 	var acceptanceStore *acceptance.Store
@@ -1159,6 +1169,8 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 			knowledgeAnswerStore = value
 		case *contributorpathways.Store:
 			contributorPathwayStore = value
+		case *learningpathways.Store:
+			learningPathwayStore = value
 		case *contributoropportunities.Store:
 			contributorOpportunityStore = value
 		case *previews.Store:
@@ -1396,6 +1408,9 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	}
 	if authStore != nil && repositoryCatalog != nil && contributorPathwayStore != nil {
 		registerContributorPathwayRoutes(mux, store, repositoryCatalog, contributorPathwayStore, releaseStore, issueStore, proposalStore, workspaceStore, authStore)
+	}
+	if authStore != nil && repositoryCatalog != nil && learningPathwayStore != nil {
+		registerLearningPathwayRoutes(mux, store, repositoryCatalog, learningPathwayStore, issueStore, proposalStore, packageStore, contributorPathwayStore, authStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && contributorOpportunityStore != nil {
 		registerContributorOpportunityRoutes(mux, store, repositoryCatalog, contributorOpportunityStore, issueStore, proposalStore, pullRequestStore, releaseStore, authStore)

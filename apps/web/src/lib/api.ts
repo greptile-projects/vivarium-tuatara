@@ -599,6 +599,17 @@ export type ContributorPathwayResponse = {
   }[];
   acknowledgement_count: number;
 };
+export type LearningPathway = {
+  id: string; request_id: string; repository_id: string; slug: string; version: number; role: string; outcome: string;
+  prerequisites: string[]; objectives: string[]; supported_revisions: string[]; expected_minutes: number;
+  accessibility_needs: string[]; locales: string[]; completion_evidence: string[];
+  mentors: { user_id: string; responsibility: string; status?: "current" | "inaccessible"; status_detail?: string }[];
+  environments: { name: string; requirements: string[]; supported: boolean; owner_id?: string; status?: "current" | "missing_owner" | "unsupported"; status_detail?: string }[];
+  modules: { id: string; title: string; why_it_matters: string; objectives: string[]; estimated_minutes: number;
+    exercises: { title: string; instructions: string; completion_evidence: string[] }[];
+    materials: { kind: "documentation" | "symbol" | "decision" | "issue" | "api" | "package" | "contributor_guidance"; label: string; resource_id?: string; path?: string; symbol?: string; revision?: string; package_version?: string; owner_id?: string; status?: "current" | "stale" | "inaccessible" | "missing_owner"; status_detail?: string }[];
+  }[]; published_by: string; published_at: string;
+};
 export type ContributionOpportunity = {
   id: string;
   repository_id: string;
