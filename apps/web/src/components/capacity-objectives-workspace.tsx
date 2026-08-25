@@ -1,0 +1,447 @@
+"use client";
+
+import Link from "next/link";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { api } from "@/lib/api";
+import { useAuth } from "./auth";
+import { Badge, Button, Card } from "./ui";
+
+type Diagnostic = {
+  kind: string;
+  severity: string;
+  message: string;
+  resource_id?: string;
+  attributed_to: string;
+};
+type Revision = {
+  request_id?: string;
+  version?: number;
+  title: string;
+  summary: string;
+  scope: { kind: string; resource_id?: string; name: string };
+  demand_forecasts: unknown[];
+  traffic_shapes: unknown[];
+  seasonality: unknown[];
+  service_levels: unknown[];
+  bottleneck_thresholds: unknown[];
+  dependency_limits: unknown[];
+  regions: unknown[];
+  owner_ids: string[];
+  budget: unknown;
+  lead_time: unknown;
+  success_criteria: unknown[];
+  rollback_criteria: unknown[];
+  links: unknown[];
+  assumptions: unknown[];
+  rationale: string;
+  created_by?: string;
+  created_at?: string;
+};
+type Objective = {
+  id: string;
+  current_version: number;
+  revisions: Revision[];
+  diagnostics: Diagnostic[];
+  updated_at: string;
+};
+
+function template(owner = ""): Revision {
+  const start = new Date(),
+    end = new Date(start.getTime() + 90 * 86400000),
+    expiry = new Date(start.getTime() + 60 * 86400000);
+  return {
+    title: "",
+    summary: "",
+    scope: { kind: "service", name: "" },
+    demand_forecasts: [
+      {
+        id: "forecast-1",
+        segment: "all users",
+        start: start.toISOString(),
+        end: end.toISOString(),
+        value: 1000,
+        unit: "requests/s",
+        confidence: "uncertain",
+        evidence: [],
+      },
+    ],
+    traffic_shapes: [
+      {
+        name: "peak",
+        pattern: "daily burst",
+        peak_multiplier: 2,
+        burst_duration: "15m",
+      },
+    ],
+    seasonality: [
+      {
+        name: "annual peak",
+        window: "Q4",
+        multiplier: 1.5,
+        rationale: "prior-year demand",
+      },
+    ],
+    service_levels: [
+      {
+        name: "availability",
+        indicator: "successful requests",
+        target: 99.9,
+        unit: "percent",
+        window: "30d",
+      },
+    ],
+    bottleneck_thresholds: [
+      {
+        resource: "CPU",
+        signal: "cpu_utilization",
+        warning: 70,
+        critical: 90,
+        unit: "percent",
+      },
+    ],
+    dependency_limits: [
+      {
+        name: "primary database",
+        limit: 5000,
+        unit: "connections",
+        signal: "database_connections",
+      },
+    ],
+    regions: [{ name: "primary", demand_share: 1 }],
+    owner_ids: owner ? [owner] : [],
+    budget: { amount: 10000, currency: "USD", period: "month" },
+    lead_time: { duration: "14d", trigger: "warning threshold forecast" },
+    success_criteria: [
+      {
+        name: "serve peak",
+        condition: "service levels hold at forecast peak",
+        evidence: "capacity verification",
+      },
+    ],
+    rollback_criteria: [
+      {
+        name: "protect users",
+        condition: "error or cost boundary exceeded",
+        evidence: "production signals",
+      },
+    ],
+    links: [],
+    assumptions: [
+      {
+        id: "assumption-1",
+        statement: "traffic mix remains stable",
+        evidence: [],
+        expires_at: expiry.toISOString(),
+      },
+    ],
+    rationale: "Initial shared capacity contract",
+  };
+}
+function editable(revision: Revision): Revision {
+  return {
+    ...revision,
+    request_id: undefined,
+    version: undefined,
+    created_by: undefined,
+    created_at: undefined,
+  };
+}
+
+export function CapacityObjectivesWorkspace({
+  repositoryID,
+}: {
+  repositoryID: string;
+}) {
+  const { token, user } = useAuth();
+  const [items, setItems] = useState<Objective[]>([]),
+    [selected, setSelected] = useState<Objective>(),
+    [draft, setDraft] = useState(""),
+    [requestID, setRequestID] = useState(""),
+    [error, setError] = useState(""),
+    [busy, setBusy] = useState(false);
+  const pendingCreateKey = `capacity-objective:${repositoryID}:${user?.id ?? "unauthenticated"}:pending-create`;
+  const legacyPendingCreateKey = `capacity-objective:${repositoryID}:pending-create`;
+  const current = selected?.revisions.at(-1);
+  const load = useCallback(async () => {
+    if (!token) return;
+    try {
+      const out = await api<{ capacity_objectives: Objective[] }>(
+        `/repositories/${repositoryID}/capacity-objectives`,
+        {},
+        token,
+      );
+      setItems(out.capacity_objectives);
+      window.localStorage.removeItem(legacyPendingCreateKey);
+      const retained = window.localStorage.getItem(pendingCreateKey);
+      if (retained) {
+        try {
+          const pending = JSON.parse(retained) as {
+            request_id: string;
+            draft: string;
+            owner_id: string;
+          };
+          if (
+            pending.owner_id === user?.id &&
+            pending.request_id &&
+            pending.draft
+          ) {
+            setSelected(undefined);
+            setRequestID(pending.request_id);
+            setDraft(pending.draft);
+            return;
+          }
+        } catch {
+          window.localStorage.removeItem(pendingCreateKey);
+        }
+      }
+      setSelected((value) => {
+        const next =
+          out.capacity_objectives.find((x) => x.id === value?.id) ??
+          out.capacity_objectives[0];
+        setDraft(
+          JSON.stringify(
+            next ? editable(next.revisions.at(-1)!) : template(user?.id),
+            null,
+            2,
+          ),
+        );
+        return next;
+      });
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "Capacity objectives could not be loaded.",
+      );
+    }
+  }, [legacyPendingCreateKey, pendingCreateKey, repositoryID, token, user?.id]);
+  useEffect(() => {
+    void Promise.resolve().then(load);
+  }, [load]);
+  async function publish(event: FormEvent) {
+    event.preventDefault();
+    if (!token) return;
+    setBusy(true);
+    setError("");
+    const stableRequestID = requestID || crypto.randomUUID();
+    setRequestID(stableRequestID);
+    if (!selected) {
+      window.localStorage.setItem(
+        pendingCreateKey,
+        JSON.stringify({
+          request_id: stableRequestID,
+          draft,
+          owner_id: user?.id,
+        }),
+      );
+    }
+    try {
+      const revision = JSON.parse(draft) as Revision;
+      const path = selected
+        ? `/repositories/${repositoryID}/capacity-objectives/${selected.id}/revisions`
+        : `/repositories/${repositoryID}/capacity-objectives`;
+      const out = await api<Objective>(
+        path,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            request_id: stableRequestID,
+            revision,
+            ...(selected ? { expected_version: selected.current_version } : {}),
+          }),
+        },
+        token,
+      );
+      setSelected(out);
+      setItems((values) => [out, ...values.filter((x) => x.id !== out.id)]);
+      setRequestID("");
+      if (!selected) window.localStorage.removeItem(pendingCreateKey);
+    } catch (reason) {
+      setError(
+        reason instanceof Error
+          ? reason.message
+          : "The capacity objective could not be published.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className="space-y-6">
+      <header>
+        <Link
+          href={`/repositories/${repositoryID}`}
+          className="text-sm text-[var(--muted)] hover:text-[var(--brand)]"
+        >
+          Repository
+        </Link>
+        <h1 className="mt-2 text-2xl font-semibold">Capacity objectives</h1>
+        <p className="mt-2 max-w-3xl text-sm text-[var(--muted)]">
+          Agree on demand, reliability, bottlenecks, dependencies, regions,
+          cost, lead time, and user-safe scaling outcomes before capacity
+          becomes an emergency.
+        </p>
+      </header>
+      <Card className="p-5">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h2 className="font-semibold">
+              {selected
+                ? `Publish successor v${selected.current_version + 1}`
+                : "Define a capacity objective"}
+            </h2>
+            <p className="mt-1 text-xs text-[var(--muted)]">
+              The complete JSON contract preserves every collection and supports
+              precise API handoff.
+            </p>
+          </div>
+          {selected ? (
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => {
+                setSelected(undefined);
+                setRequestID("");
+                setDraft(JSON.stringify(template(user?.id), null, 2));
+              }}
+            >
+              New objective
+            </Button>
+          ) : requestID ? (
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => {
+                window.localStorage.removeItem(pendingCreateKey);
+                setRequestID("");
+                setError("");
+                setDraft(JSON.stringify(template(user?.id), null, 2));
+              }}
+            >
+              Discard pending create
+            </Button>
+          ) : null}
+        </div>
+        <form onSubmit={publish} className="mt-4">
+          <label className="text-xs font-semibold">
+            Capacity contract JSON
+            <textarea
+              aria-label="Capacity contract JSON"
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              disabled={Boolean(requestID)}
+              rows={28}
+              spellCheck={false}
+              className="mt-1 w-full rounded-lg border bg-slate-950 p-4 font-mono text-xs leading-5 text-slate-100"
+            />
+          </label>
+          <Button className="mt-3" disabled={busy}>
+            {busy
+              ? "Publishing…"
+              : selected
+                ? "Publish immutable successor"
+                : "Create objective"}
+          </Button>
+          {requestID && (
+            <p className="mt-2 text-xs text-[var(--muted)]">
+              This exact request is retained for safe retry. Discard it before
+              changing the contract.
+            </p>
+          )}
+        </form>
+        {error && (
+          <p role="alert" className="mt-3 text-sm text-[var(--danger)]">
+            {error}
+          </p>
+        )}
+      </Card>
+      {selected && current && (
+        <Card className="p-5">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-lg font-semibold">{current.title}</h2>
+            <Badge>version {selected.current_version}</Badge>
+            <Badge
+              tone={
+                selected.diagnostics.some((x) => x.severity === "blocking")
+                  ? "danger"
+                  : "success"
+              }
+            >
+              {selected.diagnostics.length
+                ? `${selected.diagnostics.length} explicit gaps`
+                : "supported"}
+            </Badge>
+          </div>
+          <p className="mt-2 text-sm text-[var(--muted)]">
+            {current.scope.kind.replaceAll("_", " ")} · {current.scope.name} ·{" "}
+            {current.owner_ids.length} owner(s)
+          </p>
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            {selected.diagnostics.map((item, index) => (
+              <article
+                key={`${item.kind}-${index}`}
+                className="rounded-lg border p-3"
+              >
+                <Badge
+                  tone={item.severity === "blocking" ? "danger" : "warning"}
+                >
+                  {item.kind.replaceAll("_", " ")}
+                </Badge>
+                <p className="mt-2 text-sm">{item.message}</p>
+                <p className="mt-1 text-xs text-[var(--muted)]">
+                  {item.resource_id && `${item.resource_id} · `}attributed to{" "}
+                  {item.attributed_to}
+                </p>
+              </article>
+            ))}
+          </div>
+          <details className="mt-4">
+            <summary className="cursor-pointer text-sm font-semibold">
+              Immutable version history
+            </summary>
+            <div className="mt-2 space-y-2">
+              {selected.revisions.map((r) => (
+                <p key={r.version} className="rounded-lg border p-3 text-sm">
+                  <strong>v{r.version}</strong> · {r.rationale} · {r.created_by}{" "}
+                  · {r.created_at && new Date(r.created_at).toLocaleString()}
+                </p>
+              ))}
+            </div>
+          </details>
+        </Card>
+      )}
+      <section>
+        <h2 className="text-lg font-semibold">Repository capacity contracts</h2>
+        <div className="mt-3 space-y-2">
+          {items.length === 0 ? (
+            <p className="text-sm text-[var(--muted)]">
+              No objectives have been published.
+            </p>
+          ) : (
+            items.map((item) => {
+              const latest = item.revisions.at(-1)!;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => {
+                    setSelected(item);
+                    setRequestID("");
+                    setDraft(JSON.stringify(editable(latest), null, 2));
+                  }}
+                  className="w-full rounded-xl border bg-white p-4 text-left hover:border-[var(--brand)]"
+                >
+                  <span className="font-semibold">{latest.title}</span>
+                  <span className="mt-1 block text-xs text-[var(--muted)]">
+                    {latest.scope.name} · v{item.current_version} ·{" "}
+                    {item.diagnostics.length} explicit state(s)
+                  </span>
+                </button>
+              );
+            })
+          )}
+        </div>
+      </section>
+    </div>
+  );
+}

@@ -2,6 +2,26 @@
 
 Guidance for coding agents working in this repository.
 
+Collaborative capacity contracts at repository `/capacity-objectives` routes and the
+repository `/capacity` workspace retain immutable complete revisions beneath
+`$CAPACITY_OBJECTIVE_STORAGE_ROOT` (`capacity-objectives`). Current repository
+participants can define service, API, job, workspace, package-delivery, and user-journey
+demand forecasts together with traffic shapes, seasonality, service levels, bottleneck
+signals, dependency limits, regional allocation, human owners, budget, scaling lead time,
+success/rollback criteria, assumptions, and roadmap, experiment, performance-goal,
+service-objective, infrastructure, release, and funding links. Forecast and assumption
+evidence remains caller-declared: unsupported forecasts, missing signals, conflicting
+successor commitments, and expiring or expired assumptions are attributable diagnostics,
+not inferred proof. Publication requires repository-write scope and current participation
+for every named owner; caller-stable request identities reconcile ambiguous create and
+revision retries and reject changed reuse, even after a reader refreshes to the retained
+version. Pending web creates retain their exact identity and draft across reloads until
+success or explicit cancellation, scoped to and owner-checked against the authenticated
+participant as well as the repository. Repeated typed links pair by immutable link ID, so
+label edits and ordering do not hide or manufacture commitment conflicts. Optimistic versions reject
+concurrent successors, old revisions remain readable, and these contracts grant no infrastructure, funding, release, scaling,
+repository, or operational authority.
+
 Revision-exact review planning at pull request `/review-plans` routes and the pull web surface retains immutable plan versions beneath `$REVIEW_PLAN_STORAGE_ROOT` (`review-plans`). A pull author or current repository owner can derive areas, acceptance questions, required evidence, dependencies, completion rules, policy checks, risks, and affected security, privacy, accessibility, and interface commitments from the exact source/target diff and declared intent. Caller-stable request identities reconcile ambiguous post-publication retries and reject changed reuse. Reads preserve old versions and project source or target movement as an attributable stale-analysis gap; missing ownership and overlapping scope remain diagnostics. Plans coordinate review only and grant no repository, evidence, review, approval, merge, policy, commitment, or disclosure authority.
 Review responsibility at pull request `/review-assignments` routes and the same pull surface derives eligible current human participants and organization-approved agents for each exact review-plan area. Suggestions expose only permitted code-ownership, project-review, team-participation, availability/load, conflict, capability-profile, and live repository-grant evidence. Current repository owners invite, replace, release, set deadlines, and name escalation paths; assignees accept, decline, become unavailable, or recuse. Caller-stable invitations, immutable event history, one active accountable participant per area, and live membership/grant projection turn revoked or nonparticipating reviewers into explicit reassignment work. Acceptance grants only the named exact plan area and no repository, merge, secret, governance, policy, or operational authority.
 Shared specialist work at pull request `/review-work` routes and the same pull surface gives each accepted exact-area reviewer a revision-bound queue of the plan's files, acceptance questions, required evidence, dependencies, assignments, and public pull references. Retry-stable progress, cited findings, uncertainty, input requests, handoffs, and prior decisions remain attributable on the pull; reads aggregate coverage and expose conflicting conclusions without copying referenced check, preview, decision, private, or embargoed evidence. Organization-approved read-only agents can investigate their accepted area and propose findings under a live repository grant, but cannot publish a decision or satisfy a required human role. Work entries grant no repository, evidence, approval, merge, policy, disclosure, or operational authority.
