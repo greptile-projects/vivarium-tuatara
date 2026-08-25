@@ -216,7 +216,7 @@ func (s *Store) List(repositoryID, releaseID string) ([]Bundle, error) {
 	return out, e
 }
 func valid(v Bundle) bool {
-	return v.RequestID != "" && len(v.Claim.RepositoryID) == 32 && len(v.Claim.ReleaseID) == 32 && len(v.Claim.Revision) == 40 && v.Claim.GraphID != "" && v.Claim.GraphDigest != "" && v.Claim.AssessmentID != "" && v.Claim.AssessmentVersion > 0 && v.Claim.PolicyID != "" && v.Claim.PolicyVersion > 0 && v.Claim.PublishedBy != "" && one(v.Claim.Audience, "public", "repository", "restricted") && len(v.Claim.Artifacts) > 0 && len(v.Claim.Verification) > 0
+	return v.RequestID != "" && len(v.Claim.RepositoryID) == 32 && len(v.Claim.ReleaseID) == 32 && len(v.Claim.Revision) == 40 && v.Claim.GraphID != "" && v.Claim.GraphDigest != "" && v.Claim.AssessmentID != "" && v.Claim.AssessmentVersion > 0 && v.Claim.PolicyID != "" && v.Claim.PolicyVersion > 0 && v.Claim.PublishedBy != "" && one(v.Claim.Audience, "public", "repository", "restricted") && (v.Claim.Audience != "restricted" || len(v.Claim.AudienceIDs) > 0) && len(v.Claim.Artifacts) > 0 && len(v.Claim.Verification) > 0
 }
 func sameClaim(a, b Claim) bool {
 	a.PublishedAt = time.Time{}

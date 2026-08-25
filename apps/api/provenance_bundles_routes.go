@@ -33,7 +33,7 @@ func registerProvenanceBundleRoutes(mux *http.ServeMux, repos *repositories.Stor
 		if !ok {
 			return false
 		}
-		if b.Claim.Audience == "restricted" && !containsString(b.Claim.AudienceIDs, actor.UserID) {
+		if !bundleReadableBy(b, actor.UserID) {
 			writeAPIError(w, 403, "provenance_bundle_forbidden", "this bundle is restricted to its named audience")
 			return false
 		}
@@ -121,25 +121,8 @@ func registerProvenanceBundleRoutes(mux *http.ServeMux, repos *repositories.Stor
 			writeAPIError(w, 409, "release_artifacts_required", "publish at least one exact release package artifact before its provenance bundle")
 			return
 		}
-		visible := func(n provenancegraphs.Node) bool {
-			if in.Audience == "public" {
-				return n.Audience == "public" && !n.Restricted
-			}
-			if in.Audience == "repository" {
-				return n.Audience != "restricted" && !n.Restricted
-			}
-			if n.Audience != "restricted" && !n.Restricted {
-				return true
-			}
-			for _, audienceID := range in.AudienceIDs {
-				if containsString(n.AudienceIDs, audienceID) {
-					return true
-				}
-			}
-			return false
-		}
 		for _, n := range graph.Nodes {
-			if !visible(n) {
+			if !nodeVisibleToBundleAudience(n, in.Audience, in.AudienceIDs) {
 				continue
 			}
 			m := provenancebundles.Material{ID: n.ID, Kind: n.Kind, Name: n.Label, Revision: n.Revision, License: n.License, Obligations: n.Obligations}
@@ -190,7 +173,8 @@ func registerProvenanceBundleRoutes(mux *http.ServeMux, repos *repositories.Stor
 		writeJSON(w, 200, project(b))
 	})
 	mux.HandleFunc("GET /repositories/{id}/releases/{release_id}/provenance-bundles", func(w http.ResponseWriter, r *http.Request) {
-		if _, _, ok := authorizeRepositoryRead(w, r, repos, credentials, r.PathValue("id")); !ok {
+		actor, _, ok := authorizeRepositoryRead(w, r, repos, credentials, r.PathValue("id"))
+		if !ok {
 			return
 		}
 		xs, e := bundles.List(r.PathValue("id"), r.PathValue("release_id"))
@@ -200,6 +184,9 @@ func registerProvenanceBundleRoutes(mux *http.ServeMux, repos *repositories.Stor
 		}
 		out := []bundleProjection{}
 		for _, b := range xs {
+			if !bundleReadableBy(b, actor.UserID) {
+				continue
+			}
 			out = append(out, project(b))
 		}
 		writeJSON(w, 200, map[string]any{"bundles": out})
@@ -216,7 +203,7 @@ func registerProvenanceBundleRoutes(mux *http.ServeMux, repos *repositories.Stor
 			return
 		}
 		for _, b := range xs {
-			if b.Claim.Audience == "public" {
+			if b.Claim.Audience == "public" && bundleCoversPackage(b, v) {
 				writeJSON(w, 200, project(b))
 				return
 			}
@@ -312,6 +299,40 @@ func cleanStrings(xs []string) []string {
 		}
 	}
 	return out
+}
+
+func bundleReadableBy(b provenancebundles.Bundle, userID string) bool {
+	return b.Claim.Audience != "restricted" || containsString(b.Claim.AudienceIDs, userID)
+}
+
+func nodeVisibleToBundleAudience(n provenancegraphs.Node, audience string, audienceIDs []string) bool {
+	if audience == "public" {
+		return n.Audience == "public" && !n.Restricted
+	}
+	if audience == "repository" {
+		return n.Audience != "restricted" && !n.Restricted
+	}
+	if n.Audience != "restricted" && !n.Restricted {
+		return true
+	}
+	if len(audienceIDs) == 0 {
+		return false
+	}
+	for _, audienceID := range audienceIDs {
+		if !containsString(n.AudienceIDs, audienceID) {
+			return false
+		}
+	}
+	return true
+}
+
+func bundleCoversPackage(b provenancebundles.Bundle, v packages.Version) bool {
+	for _, artifact := range b.Claim.Artifacts {
+		if artifact.Name == v.Name && artifact.Version == v.Version && artifact.SHA256 == v.SHA256 {
+			return true
+		}
+	}
+	return false
 }
 func uniqueSorted(xs []string) []string {
 	m := map[string]bool{}
