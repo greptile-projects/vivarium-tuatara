@@ -675,6 +675,43 @@ export type LearningPathway = {
   published_by: string;
   published_at: string;
 };
+export type LearningAssessmentAttempt = {
+  id: string;
+  assessment_version: number;
+  workspace_id: string;
+  learner_id: string;
+  project_revision: string;
+  attempt_number: number;
+  accommodation?: string;
+  status: "submitted" | "demonstrated" | "not_yet_demonstrated" | "appealed";
+  blockers: string[];
+  evidence: {
+    checkpoint_ids: string[];
+    command_outcome_ids: string[];
+    check_run_ids: string[];
+    authorship_statement: string;
+    agent_assistance_declared: boolean;
+  };
+  reviews: { reviewer_id: string; feedback: string; uncertainty?: string; outcome: string; decisions: { criterion_id: string; decision: string; rationale: string; confidence: string }[] }[];
+  appeals: { body: string; actor_id: string; resolution?: string }[];
+};
+export type LearningAssessment = {
+  id: string;
+  slug: string;
+  version: number;
+  pathway_slug: string;
+  pathway_version: number;
+  project_revision: string;
+  title: string;
+  instructions: string;
+  criteria: { id: string; label: string; description: string; weight: number; required: boolean }[];
+  protected_cases?: { id: string; description: string; expected?: string }[];
+  required_checks: string[];
+  retry_policy: { maximum_attempts: number; cooldown_hours: number };
+  accommodation_options: string[];
+  published_by: string;
+  published_at: string;
+};
 export type ContributionOpportunity = {
   id: string;
   repository_id: string;
