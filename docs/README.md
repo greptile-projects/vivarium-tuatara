@@ -2434,6 +2434,13 @@ defaults beneath `$LEARNING_ASSESSMENT_STORAGE_ROOT` (`learning-assessments`).
 Assessments and results grant no Git, workspace, check, review, repository, or
 contribution authority.
 
+Learning exercise edits and commands are a disposable-workspace capability,
+not an upstream repository mutation. The authenticated learner who created the
+exercise may use them while retaining current repository read access and live
+workspace control even when they are not a repository collaborator. Publishing
+software still proceeds only through the independently owned fork and ordinary
+pull, check, review, and merge boundaries.
+
 Learning outcomes improve the curriculum only through explicit consent. An
 authenticated learner posts module completion, a recurring question, setup
 failure, assessment gap, mentor load, contribution outcome, reviewer
@@ -2478,6 +2485,15 @@ and frozen acceptance criteria. Contributor membership, review, checks,
 integration, merge, releases, recognized readiness, charter responsibilities,
 and every permission remain separately governed; educational completion never
 mints write, secret, merge, or governance access.
+
+The connected `project-learning-journey.spec.ts` browser/API/stock-Git/container
+journey proves this whole boundary from an unfamiliar role-based learner through
+broken and repaired setup, inaccessible material, grounded mentor assistance,
+learner-paused misleading agent guidance, redacted protected cases, a failed
+then demonstrated practical assessment, evidence-matched fork work, ordinary
+verification/review/merge, and a consented reviewed improvement for the next
+learner. Mentor departure, project movement, and an abandoned claim remain
+visible recovery evidence rather than being removed from the learning history.
 
 References to documentation, current ownership, releases, issues, proposals,
 and workspace definitions are projected against live repository state on every
