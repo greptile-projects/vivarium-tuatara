@@ -265,6 +265,10 @@ func registerLearningPathwayRoutes(mux *http.ServeMux, git *storage.Store, repos
 			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
 			return
 		}
+		if strings.TrimSpace(in.RequestID) == "" || len(in.RequestID) > 200 {
+			writeAPIError(w, 422, "learning_attempt_request_invalid", "a bounded caller-stable request_id is required")
+			return
+		}
 		history, err := pathways.List(r.PathValue("id"), r.PathValue("slug"))
 		if err != nil || in.PathwayVersion < 1 || in.PathwayVersion > len(history) {
 			writeAPIError(w, 404, "learning_pathway_not_found", "exact learning pathway revision not found")
