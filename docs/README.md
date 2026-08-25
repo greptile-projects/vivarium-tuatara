@@ -2379,7 +2379,8 @@ compute cost. Learners reveal hints and append checkpoints citing exact criteria
 and retained command outcomes through `/workspaces/{id}/learning/hints/{index}`
 and `/workspaces/{id}/learning/checkpoints`. Failed setup remains inspectable,
 and an exact launch retry reuses that attempt atomically; changed request reuse
-conflicts. Per-attempt provisioning serialization makes concurrent retries wait
+conflicts. Durable claims cover request lookup and creation across API workers
+sharing the workspace root. Per-attempt durable provisioning serialization makes concurrent retries wait
 for the active launch and lets a retry after interruption perform the missing
 setup and finalize the retained attempt. A new request identity gives a clean attempt against the immutable
 inputs. Organization-policy read failures create nothing, and checkpoints may

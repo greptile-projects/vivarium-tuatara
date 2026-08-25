@@ -1619,6 +1619,11 @@ func (s *Store) Create(w Workspace, definitionBytes []byte) (Workspace, error) {
 func (s *Store) CreateLearning(w Workspace, definitionBytes []byte) (Workspace, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	release, err := s.learningFileLock("launch")
+	if err != nil {
+		return Workspace{}, false, err
+	}
+	defer release()
 	if w.Source.LearningRequestID == "" || len(w.Source.LearningRequestID) > 200 {
 		return Workspace{}, false, ErrInvalid
 	}
@@ -1650,6 +1655,11 @@ func (s *Store) ReconcileLearningProvisioning(id string, operation func() ([]Set
 	control := s.controlLock(id)
 	control.Lock()
 	defer control.Unlock()
+	release, err := s.learningFileLock("provision-" + id)
+	if err != nil {
+		return Workspace{}, false, err
+	}
+	defer release()
 	s.mu.Lock()
 	w, err := s.read(id)
 	s.mu.Unlock()
@@ -1689,6 +1699,25 @@ func (s *Store) ReconcileLearningProvisioning(id string, operation func() ([]Set
 	w.UpdatedAt = s.now()
 	w.Events = append(w.Events, Event{Kind: "setup_completed", ActorID: w.CreatorID, CreatedAt: w.UpdatedAt})
 	return w, true, s.write(w)
+}
+
+func (s *Store) learningFileLock(name string) (func(), error) {
+	dir := filepath.Join(s.root, ".learning-locks")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return nil, err
+	}
+	file, err := os.OpenFile(filepath.Join(dir, name+".lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, err
+	}
+	if err = syscall.Flock(int(file.Fd()), syscall.LOCK_EX); err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	return func() {
+		_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+		_ = file.Close()
+	}, nil
 }
 
 func (s *Store) create(w Workspace, definitionBytes []byte) (Workspace, error) {

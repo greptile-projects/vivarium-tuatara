@@ -1,6 +1,8 @@
 package workspaces
 
 import (
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -32,6 +34,92 @@ func TestLearningAttemptRetainsHintsCheckpointsCostAndReproduction(t *testing.T)
 	}
 	if _, err = s.AddLearningCheckpoint(w.ID, "learner", "unsupported", []string{"Not a criterion"}, nil); err != ErrInvalid {
 		t.Fatalf("uncited criterion accepted: %v", err)
+	}
+}
+
+func TestLearningLaunchReconcilesAcrossStoreInstances(t *testing.T) {
+	root := t.TempDir()
+	firstStore, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondStore, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := Workspace{RepositoryID: "repo", CommitID: "revision", CreatorID: "learner", Source: Source{Kind: "learning_exercise", LearningRequestID: "shared-launch", LearningPathwaySlug: "api", LearningPathwayVersion: 1, LearningModuleID: "routing", LearningExerciseID: "trace"}, LearningContext: &LearningContext{ReproducibilitySHA256: "digest"}}
+	type result struct {
+		workspace Workspace
+		reused    bool
+		err       error
+	}
+	start := make(chan struct{})
+	results := make(chan result, 2)
+	var ready sync.WaitGroup
+	ready.Add(2)
+	launch := func(store *Store) {
+		ready.Done()
+		<-start
+		w, reused, err := store.CreateLearning(input, []byte("definition"))
+		results <- result{w, reused, err}
+	}
+	go launch(firstStore)
+	go launch(secondStore)
+	ready.Wait()
+	close(start)
+	a, b := <-results, <-results
+	if a.err != nil || b.err != nil || a.workspace.ID != b.workspace.ID || a.reused == b.reused {
+		t.Fatalf("cross-store launch was not reconciled: a=%#v b=%#v", a, b)
+	}
+	all, err := firstStore.ListAll()
+	if err != nil || len(all) != 1 {
+		t.Fatalf("cross-store launch retained %d attempts: %v", len(all), err)
+	}
+}
+
+func TestLearningProvisioningReconcilesAcrossStoreInstances(t *testing.T) {
+	root := t.TempDir()
+	firstStore, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondStore, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := Workspace{RepositoryID: "repo", CommitID: "revision", CreatorID: "learner", Source: Source{Kind: "learning_exercise", LearningRequestID: "shared-provision", LearningPathwaySlug: "api", LearningPathwayVersion: 1, LearningModuleID: "routing", LearningExerciseID: "trace"}, LearningContext: &LearningContext{ReproducibilitySHA256: "digest"}}
+	w, _, err := firstStore.CreateLearning(input, []byte("definition"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	var ready sync.WaitGroup
+	ready.Add(2)
+	var runs atomic.Int32
+	provision := func(store *Store) {
+		ready.Done()
+		<-start
+		_, _, err := store.ReconcileLearningProvisioning(w.ID, func() ([]SetupStep, bool) {
+			runs.Add(1)
+			time.Sleep(10 * time.Millisecond)
+			return []SetupStep{{Command: "setup", State: "passed"}}, false
+		})
+		results <- err
+	}
+	go provision(firstStore)
+	go provision(secondStore)
+	ready.Wait()
+	close(start)
+	if err = <-results; err != nil {
+		t.Fatal(err)
+	}
+	if err = <-results; err != nil {
+		t.Fatal(err)
+	}
+	got, err := firstStore.Get(w.ID)
+	if err != nil || runs.Load() != 1 || got.State != "running" || len(got.Setup) != 1 {
+		t.Fatalf("cross-store provisioning duplicated: runs=%d workspace=%#v err=%v", runs.Load(), got, err)
 	}
 }
 
