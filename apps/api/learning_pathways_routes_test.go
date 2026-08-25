@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/contributorpathways"
@@ -13,7 +14,33 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/workspaces"
 )
+
+func TestActiveLearningGuideRequiresSelectionStateAndLiveControl(t *testing.T) {
+	now := time.Date(2026, 8, 25, 11, 0, 0, 0, time.UTC)
+	item := workspaces.Workspace{LearningContext: &workspaces.LearningContext{Guidance: workspaces.LearningGuidance{AgentID: "selected", AgentState: "active"}}, Control: workspaces.Control{PrincipalKind: "approved_agent", PrincipalID: "selected", Mode: "guide", ExpiresAt: now.Add(time.Minute)}}
+	if !activeLearningGuide(item, "selected", now) {
+		t.Fatal("selected active guide was rejected")
+	}
+	for name, mutate := range map[string]func(*workspaces.Workspace){
+		"unselected": func(w *workspaces.Workspace) { w.Control.PrincipalID = "other" },
+		"paused":     func(w *workspaces.Workspace) { w.LearningContext.Guidance.AgentState = "paused" },
+		"revoked":    func(w *workspaces.Workspace) { w.LearningContext.Guidance.AgentState = "revoked" },
+		"expired":    func(w *workspaces.Workspace) { w.Control.ExpiresAt = now },
+		"wrong mode": func(w *workspaces.Workspace) { w.Control.Mode = "execute" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := item
+			context := *item.LearningContext
+			candidate.LearningContext = &context
+			mutate(&candidate)
+			if activeLearningGuide(candidate, "selected", now) {
+				t.Fatal("inactive guide was accepted")
+			}
+		})
+	}
+}
 
 func TestCollaboratorPublishesVersionedLearningPathwayWithExplicitHealth(t *testing.T) {
 	gitStore, _ := storage.New(t.TempDir())

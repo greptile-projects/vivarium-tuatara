@@ -1529,7 +1529,8 @@ export type DevelopmentWorkspace = {
       | "pull_request"
       | "incident_repair"
       | "decision_experiment"
-      | "conflict_reconciliation";
+      | "conflict_reconciliation"
+      | "learning_exercise";
     repository_id: string;
     proposal_id?: string;
     task_id?: string;
@@ -1543,6 +1544,10 @@ export type DevelopmentWorkspace = {
     upstream_repository_id?: string;
     opportunity_id?: string;
     conflict_launch_id?: string;
+    learning_pathway_slug?: string;
+    learning_pathway_version?: number;
+    learning_module_id?: string;
+    learning_exercise_id?: string;
   };
   conflict_context?: {
     version: number;
@@ -1689,6 +1694,36 @@ export type DevelopmentWorkspace = {
     mentor_ids: string[];
     agent_assistance: boolean;
     help: ContributionHelp;
+  };
+  learning_context?: {
+    pathway_slug: string;
+    pathway_version: number;
+    module_id: string;
+    exercise_id: string;
+    instructions: string;
+    acceptance_criteria: string[];
+    hints: string[];
+    hints_used: { index: number; hint: string; used_at: string }[];
+    checkpoints: { id: string; summary: string; command_outcome_ids: string[]; created_at: string }[];
+    guidance: {
+      version: number;
+      agent_id?: string;
+      agent_state?: "active" | "paused" | "revoked";
+      agent_guided_by?: string;
+      entries: {
+        id: string;
+        kind: "question" | "explanation" | "hint" | "demonstration" | "direct_action";
+        body: string;
+        actor_id: string;
+        actor_kind: "learner" | "mentor" | "agent";
+        agent_id?: string;
+        citations?: { path: string; revision: string }[];
+        checkpoint_ids?: string[];
+        command_outcome_ids?: string[];
+        learner_controlled: boolean;
+        created_at: string;
+      }[];
+    };
   };
   definition: {
     version: number;

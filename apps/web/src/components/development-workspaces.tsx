@@ -248,6 +248,12 @@ export function DevelopmentWorkspaces({
                   onWorkspace={(updated) => setItems([updated])}
                 />
               )}
+              {item.learning_context && (
+                <LearningGuidance
+                  workspace={item}
+                  onWorkspace={(updated) => setItems([updated])}
+                />
+              )}
               {item.conflict_context && (
                 <ConflictReconciliation
                   workspace={item}
@@ -348,6 +354,34 @@ export function DevelopmentWorkspaces({
       ))}
     </div>
   );
+}
+
+function LearningGuidance({ workspace, onWorkspace }: { workspace: DevelopmentWorkspace; onWorkspace: (workspace: DevelopmentWorkspace) => void }) {
+  const { token, user } = useAuth();
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState("");
+  const context = workspace.learning_context!;
+  const learner = user?.id === workspace.creator_id;
+  async function add(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); if (!token) return; setPending(true); setError("");
+    const form=event.currentTarget, data=new FormData(form), lines=(name:string)=>String(data.get(name)??"").split("\n").map(x=>x.trim()).filter(Boolean);
+    try {
+      const guidance=await api<typeof context.guidance>(`/workspaces/${workspace.id}/learning/guidance`,{method:"POST",body:JSON.stringify({expected_version:context.guidance.version,kind:String(data.get("kind")),body:String(data.get("body")),citations:lines("paths").map(path=>({path,revision:workspace.commit_id})),checkpoint_ids:learner?lines("checkpoints"):[],command_outcome_ids:learner?lines("commands"):[]})},token);
+      onWorkspace({...workspace,learning_context:{...context,guidance}}); form.reset();
+    } catch (reason) { setError(reason instanceof APIError?reason.message:"Guidance could not be retained."); } finally { setPending(false); }
+  }
+  async function agent(state:"active"|"paused"|"revoked", agentId=context.guidance.agent_id??"", boundary=context.guidance.agent_guided_by??"") {
+    if(!token)return; setPending(true);
+    try { const guidance=await api<typeof context.guidance>(`/workspaces/${workspace.id}/learning/agent`,{method:"PUT",body:JSON.stringify({expected_version:context.guidance.version,agent_id:agentId,state,guidance:boundary})},token); onWorkspace({...workspace,learning_context:{...context,guidance}}); setError(""); } catch(reason){setError(reason instanceof APIError?reason.message:"Agent control could not be updated.")} finally{setPending(false)}
+  }
+  return <section className="mt-5 rounded-xl border border-[var(--brand)] p-4">
+    <div className="flex flex-wrap items-center justify-between gap-2"><div><p className="text-xs font-semibold uppercase tracking-wide text-[var(--brand)]">Accountable learning help</p><h3 className="mt-1 font-semibold">Revision-grounded guidance timeline</h3></div><Badge>{context.guidance.entries.length} entries</Badge></div>
+    <p className="mt-2 text-sm text-[var(--muted)]">Only state IDs the learner selects are shared. Commands and checkpoints keep their original authorship.</p>
+    <div className="mt-4 space-y-3">{context.guidance.entries.map(entry=><article key={entry.id} className="rounded-lg bg-[var(--canvas)] p-3 text-sm"><div className="flex flex-wrap gap-2"><Badge tone={entry.actor_kind==="learner"?undefined:"info"}>{entry.kind.replace("_"," ")}</Badge><span className="font-semibold">{entry.actor_kind} · {short(entry.actor_id)}</span>{entry.learner_controlled&&<Badge tone="success">learner controlled</Badge>}</div><p className="mt-2 whitespace-pre-wrap">{entry.body}</p>{entry.citations?.map(c=><p key={c.path} className="mt-1 font-mono text-xs text-[var(--muted)]">{c.path} @ {short(c.revision)}</p>)}</article>)}</div>
+    <form onSubmit={add} className="mt-4 grid gap-2 sm:grid-cols-2"><label className="text-xs font-semibold">Help type<select name="kind" className="mt-1 w-full rounded-lg border p-2 font-normal">{(learner?["question"]:["explanation","hint","demonstration","direct_action"]).map(x=><option key={x}>{x}</option>)}</select></label><label className="text-xs font-semibold">Exact evidence paths<textarea name="paths" className="mt-1 w-full rounded-lg border p-2 font-normal" placeholder="src/router.go" /></label><label className="text-xs font-semibold sm:col-span-2">Message<textarea required name="body" className="mt-1 w-full rounded-lg border p-2 font-normal" /></label>{learner&&<><label className="text-xs font-semibold">Shared checkpoint IDs<textarea name="checkpoints" className="mt-1 w-full rounded-lg border p-2 font-normal" /></label><label className="text-xs font-semibold">Shared command IDs<textarea name="commands" className="mt-1 w-full rounded-lg border p-2 font-normal" /></label></>}<Button disabled={pending}>Retain help</Button></form>
+    {learner&&<form onSubmit={e=>{e.preventDefault();const data=new FormData(e.currentTarget);void agent("active",String(data.get("agent_id")),String(data.get("guidance")))}} className="mt-4 grid gap-2 sm:grid-cols-2"><label className="text-xs font-semibold">Approved agent ID<input name="agent_id" defaultValue={context.guidance.agent_id} className="mt-1 w-full rounded-lg border p-2 font-normal" /></label><label className="text-xs font-semibold">Guidance boundary<input name="guidance" defaultValue={context.guidance.agent_guided_by} className="mt-1 w-full rounded-lg border p-2 font-normal" /></label><div className="flex gap-2"><Button disabled={pending}>Guide agent</Button><Button type="button" variant="secondary" disabled={pending||!context.guidance.agent_id} onClick={()=>void agent("paused")}>Pause</Button><Button type="button" variant="secondary" disabled={pending||!context.guidance.agent_id} onClick={()=>void agent("revoked")}>Revoke</Button></div></form>}
+    {error&&<p role="alert" className="mt-2 text-sm text-[var(--danger)]">{error}</p>}
+  </section>
 }
 
 function ConflictReconciliation({

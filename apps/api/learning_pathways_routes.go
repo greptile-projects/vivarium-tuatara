@@ -9,13 +9,16 @@ import (
 	"errors"
 	"net/http"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/contributorpathways"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/issues"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/learningpathways"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
 	packages "github.com/greptile-projects/vivarium-tuatara/apps/api/packages"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
@@ -23,7 +26,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/workspaces"
 )
 
-func registerLearningPathwayRoutes(mux *http.ServeMux, git *storage.Store, repos *repositories.Store, pathways *learningpathways.Store, issueStore *issues.Store, proposalStore *proposals.Store, packageStore *packages.Store, contributorStore *contributorpathways.Store, workspaceStore *workspaces.Store, credentials *auth.Store) {
+func registerLearningPathwayRoutes(mux *http.ServeMux, git *storage.Store, repos *repositories.Store, pathways *learningpathways.Store, issueStore *issues.Store, proposalStore *proposals.Store, packageStore *packages.Store, contributorStore *contributorpathways.Store, workspaceStore *workspaces.Store, orgs *organizations.Store, credentials *auth.Store) {
 	isParticipant := func(repositoryID, userID string) bool {
 		repo, e := repos.GetByID(repositoryID)
 		if e != nil {
@@ -338,7 +341,7 @@ func registerLearningPathwayRoutes(mux *http.ServeMux, git *storage.Store, repos
 			Instructions   string
 			Criteria, Data []string
 		}{exercise.Revision, hex.EncodeToString(learningDigest(definitionBytes)), exercise.Instructions, exercise.AcceptanceCriteria, dataPaths})
-		ctx := &workspaces.LearningContext{PathwaySlug: pathway.Slug, PathwayVersion: pathway.Version, ModuleID: r.PathValue("module_id"), ExerciseID: exercise.ID, Kind: exercise.Kind, Instructions: exercise.Instructions, StarterCommands: exercise.StarterCommands, AcceptanceCriteria: exercise.AcceptanceCriteria, Data: dataPaths, Hints: exercise.Hints, ReproducibilitySHA256: hex.EncodeToString(learningDigest(repro))}
+		ctx := &workspaces.LearningContext{PathwaySlug: pathway.Slug, PathwayVersion: pathway.Version, ModuleID: r.PathValue("module_id"), ExerciseID: exercise.ID, Kind: exercise.Kind, Instructions: exercise.Instructions, StarterCommands: exercise.StarterCommands, AcceptanceCriteria: exercise.AcceptanceCriteria, Data: dataPaths, Hints: exercise.Hints, ReproducibilitySHA256: hex.EncodeToString(learningDigest(repro)), Guidance: workspaces.LearningGuidance{Version: 1}}
 		created, reused, err := workspaceStore.CreateLearning(workspaces.Workspace{RepositoryID: repo.ID, OrganizationID: repo.OrganizationID, CommitID: exercise.Revision, Definition: definition, Source: workspaces.Source{Kind: "learning_exercise", RepositoryID: repo.ID, LearningPathwaySlug: pathway.Slug, LearningPathwayVersion: pathway.Version, LearningModuleID: r.PathValue("module_id"), LearningExerciseID: exercise.ID, LearningRequestID: in.RequestID}, CreatorID: actor.UserID, Access: workspaces.Access{Role: "learner", Scopes: []string{"repositories:read"}}, Policy: policy, PolicyScope: scope, PolicyVersion: policy.Version, LearningContext: ctx}, definitionBytes)
 		if errors.Is(err, workspaces.ErrRequestChanged) {
 			writeAPIError(w, 409, "learning_attempt_request_changed", "request identity was already used with different launch inputs")
@@ -411,6 +414,192 @@ func registerLearningPathwayRoutes(mux *http.ServeMux, git *storage.Store, repos
 		}
 		writeJSON(w, 201, updated)
 	})
+	loadHelp := func(w http.ResponseWriter, r *http.Request) (workspaces.Workspace, auth.Credential, learningpathways.Revision, bool, bool) {
+		item, actor, ok := authorizeWorkspace(w, r, workspaceStore, repos, credentials, "repositories:read")
+		if !ok || item.LearningContext == nil {
+			if ok {
+				writeAPIError(w, 404, "learning_attempt_not_found", "learning attempt not found")
+			}
+			return workspaces.Workspace{}, auth.Credential{}, learningpathways.Revision{}, false, false
+		}
+		history, err := pathways.List(item.RepositoryID, item.LearningContext.PathwaySlug)
+		if err != nil || item.LearningContext.PathwayVersion < 1 || item.LearningContext.PathwayVersion > len(history) {
+			writeAPIError(w, 409, "learning_context_stale", "the exact learning pathway is unavailable")
+			return workspaces.Workspace{}, auth.Credential{}, learningpathways.Revision{}, false, false
+		}
+		pathway := history[item.LearningContext.PathwayVersion-1]
+		mentor := false
+		for _, m := range pathway.Mentors {
+			if m.UserID == actor.UserID && isParticipant(item.RepositoryID, actor.UserID) {
+				mentor = true
+			}
+		}
+		if actor.UserID != item.CreatorID && !mentor && actor.AgentID == "" {
+			writeAPIError(w, 403, "learning_guidance_forbidden", "only the learner, designated mentors, or the learner's active approved agent can use this timeline")
+			return workspaces.Workspace{}, auth.Credential{}, learningpathways.Revision{}, false, false
+		}
+		if actor.AgentID != "" && !activeLearningGuide(item, actor.AgentID, time.Now()) {
+			writeAPIError(w, 403, "learning_agent_access_inactive", "only the learner-selected active agent with live guide control can use this timeline")
+			return workspaces.Workspace{}, auth.Credential{}, learningpathways.Revision{}, false, false
+		}
+		return item, actor, pathway, mentor, true
+	}
+	mux.HandleFunc("GET /workspaces/{workspace_id}/learning/guidance", func(w http.ResponseWriter, r *http.Request) {
+		item, actor, _, mentor, ok := loadHelp(w, r)
+		if !ok {
+			return
+		}
+		publish := func() error { writeJSON(w, 200, item.LearningContext.Guidance); return nil }
+		if actor.AgentID != "" {
+			err := workspaceStore.PublishLearningGuidanceToAgent(item.ID, actor.AgentID, func(guidance workspaces.LearningGuidance) error { writeJSON(w, 200, guidance); return nil })
+			if errors.Is(err, workspaces.ErrControl) {
+				writeAPIError(w, 403, "learning_agent_access_inactive", "only the learner-selected active agent with live guide control can use this timeline")
+			} else if err != nil {
+				writeAPIError(w, 503, "learning_guidance_unavailable", "learning guidance could not be read")
+			}
+			return
+		}
+		if mentor {
+			if err := repos.WithCurrentParticipant(actor.UserID, item.RepositoryID, publish); err != nil {
+				writeAPIError(w, 403, "learning_mentor_access_revoked", "designated mentor access was revoked")
+			}
+			return
+		}
+		_ = publish()
+	})
+	mux.HandleFunc("POST /workspaces/{workspace_id}/learning/guidance", func(w http.ResponseWriter, r *http.Request) {
+		item, actor, _, mentor, ok := loadHelp(w, r)
+		if !ok {
+			return
+		}
+		var in struct {
+			ExpectedVersion   int                                   `json:"expected_version"`
+			Kind              string                                `json:"kind"`
+			Body              string                                `json:"body"`
+			Citations         []workspaces.LearningEvidenceCitation `json:"citations"`
+			CheckpointIDs     []string                              `json:"checkpoint_ids"`
+			CommandOutcomeIDs []string                              `json:"command_outcome_ids"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		in.Kind, in.Body = strings.TrimSpace(in.Kind), strings.TrimSpace(in.Body)
+		actorKind, agentID := "learner", ""
+		if mentor {
+			actorKind = "mentor"
+		}
+		if actor.AgentID != "" {
+			actorKind, agentID = "agent", actor.AgentID
+		}
+		allowed := (actorKind == "learner" && in.Kind == "question") || (actorKind == "mentor" && slices.Contains([]string{"explanation", "hint", "demonstration", "direct_action"}, in.Kind)) || (actorKind == "agent" && in.Kind == "hint")
+		if !allowed {
+			writeAPIError(w, 403, "learning_guidance_kind_forbidden", "the selected help kind is not available to this role")
+			return
+		}
+		if actorKind != "learner" && len(in.Citations) == 0 {
+			writeAPIError(w, 422, "learning_guidance_citation_required", "guidance must cite exact project evidence")
+			return
+		}
+		if actorKind != "learner" && (len(in.CheckpointIDs) > 0 || len(in.CommandOutcomeIDs) > 0) {
+			writeAPIError(w, 422, "learning_state_learner_controlled", "only the learner can select exercise state to share")
+			return
+		}
+		if reproductionSecretLike("guidance", stringToBase64([]byte(in.Body))) {
+			writeAPIError(w, 422, "learning_guidance_sensitive", "guidance cannot contain credential-shaped material")
+			return
+		}
+		gr, err := git.Open(item.RepositoryID)
+		if err != nil {
+			writeAPIError(w, 409, "learning_evidence_unavailable", "project evidence is unavailable")
+			return
+		}
+		for _, c := range in.Citations {
+			if c.Revision != item.CommitID || c.Path == "" {
+				writeAPIError(w, 422, "learning_evidence_invalid", "citations must name a path at the exercise revision")
+				return
+			}
+			if _, err := exec.Command("git", "--git-dir="+gr.Path(), "show", c.Revision+":"+c.Path).Output(); err != nil {
+				writeAPIError(w, 422, "learning_evidence_invalid", "cited project evidence is unavailable")
+				return
+			}
+		}
+		if actorKind == "agent" {
+			if !activeLearningGuide(item, agentID, time.Now()) {
+				writeAPIError(w, 409, "learning_agent_paused", "agent guidance requires active learner approval and live guide control")
+				return
+			}
+		}
+		if in.Kind == "direct_action" && (item.Control.PrincipalKind != "human" || item.Control.PrincipalID != actor.UserID || !slices.Contains([]string{"edit", "execute"}, item.Control.Mode)) {
+			writeAPIError(w, 409, "learning_mentor_control_required", "direct action requires explicit bounded mentor workspace control")
+			return
+		}
+		var updated workspaces.Workspace
+		mutation := func() (mutationErr error) {
+			updated, mutationErr = workspaceStore.AddLearningGuidance(item.ID, actor.UserID, actorKind, agentID, in.Kind, in.Body, in.Citations, in.CheckpointIDs, in.CommandOutcomeIDs, in.ExpectedVersion)
+			return mutationErr
+		}
+		if mentor {
+			err = repos.WithCurrentParticipant(actor.UserID, item.RepositoryID, mutation)
+		} else {
+			err = mutation()
+		}
+		if errors.Is(err, workspaces.ErrConflict) {
+			writeAPIError(w, 409, "learning_guidance_changed", "learning guidance changed since it was observed")
+			return
+		}
+		if errors.Is(err, repositories.ErrInvalidCollaborator) || errors.Is(err, repositories.ErrNotFound) {
+			writeAPIError(w, 403, "learning_mentor_access_revoked", "designated mentor access was revoked")
+			return
+		}
+		if errors.Is(err, workspaces.ErrControl) {
+			writeAPIError(w, 409, "learning_agent_paused", "agent guidance requires active learner approval and live guide control")
+			return
+		}
+		if err != nil {
+			writeAPIError(w, 422, "learning_guidance_invalid", "guidance could not be retained")
+			return
+		}
+		writeJSON(w, 201, updated.LearningContext.Guidance)
+	})
+	mux.HandleFunc("PUT /workspaces/{workspace_id}/learning/agent", func(w http.ResponseWriter, r *http.Request) {
+		item, actor, _, _, ok := loadHelp(w, r)
+		if !ok {
+			return
+		}
+		if actor.UserID != item.CreatorID || actor.AgentID != "" {
+			writeAPIError(w, 403, "learning_learner_control_required", "only the learner can guide, pause, or revoke an agent")
+			return
+		}
+		var in struct {
+			ExpectedVersion int    `json:"expected_version"`
+			AgentID         string `json:"agent_id"`
+			State           string `json:"state"`
+			Guidance        string `json:"guidance"`
+		}
+		if decodeJSON(r, &in) != nil || !slices.Contains([]string{"active", "paused", "revoked"}, in.State) {
+			writeAPIError(w, 422, "learning_agent_control_invalid", "agent state must be active, paused, or revoked")
+			return
+		}
+		if in.State == "active" && (strings.TrimSpace(in.Guidance) == "" || !workspaceApprovedAgent(orgs, repos, item.RepositoryID, in.AgentID)) {
+			writeAPIError(w, 422, "learning_agent_not_approved", "agent must be approved for the repository organization")
+			return
+		}
+		updated, err := workspaceStore.SetLearningAgent(item.ID, actor.UserID, in.AgentID, in.State, strings.TrimSpace(in.Guidance), in.ExpectedVersion)
+		if errors.Is(err, workspaces.ErrConflict) {
+			writeAPIError(w, 409, "learning_guidance_changed", "learning guidance changed since it was observed")
+			return
+		}
+		if err != nil {
+			writeAPIError(w, 422, "learning_agent_control_invalid", "agent control could not be retained")
+			return
+		}
+		writeJSON(w, 200, updated.LearningContext.Guidance)
+	})
+}
+
+func activeLearningGuide(item workspaces.Workspace, agentID string, now time.Time) bool {
+	return item.LearningContext != nil && agentID != "" && item.LearningContext.Guidance.AgentID == agentID && item.LearningContext.Guidance.AgentState == "active" && item.Control.PrincipalKind == "approved_agent" && item.Control.PrincipalID == agentID && item.Control.Mode == "guide" && item.Control.ExpiresAt.After(now)
 }
 
 func learningDigest(body []byte) []byte { sum := sha256.Sum256(body); return sum[:] }

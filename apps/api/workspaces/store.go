@@ -93,6 +93,30 @@ type LearningHintUse struct {
 	Hint   string    `json:"hint"`
 	UsedAt time.Time `json:"used_at"`
 }
+type LearningEvidenceCitation struct {
+	Path     string `json:"path"`
+	Revision string `json:"revision"`
+}
+type LearningGuidanceEntry struct {
+	ID                string                     `json:"id"`
+	Kind              string                     `json:"kind"`
+	Body              string                     `json:"body"`
+	ActorID           string                     `json:"actor_id"`
+	ActorKind         string                     `json:"actor_kind"`
+	AgentID           string                     `json:"agent_id,omitempty"`
+	Citations         []LearningEvidenceCitation `json:"citations,omitempty"`
+	CheckpointIDs     []string                   `json:"checkpoint_ids,omitempty"`
+	CommandOutcomeIDs []string                   `json:"command_outcome_ids,omitempty"`
+	LearnerControlled bool                       `json:"learner_controlled"`
+	CreatedAt         time.Time                  `json:"created_at"`
+}
+type LearningGuidance struct {
+	Version       int                     `json:"version"`
+	Entries       []LearningGuidanceEntry `json:"entries"`
+	AgentID       string                  `json:"agent_id,omitempty"`
+	AgentState    string                  `json:"agent_state,omitempty"`
+	AgentGuidedBy string                  `json:"agent_guided_by,omitempty"`
+}
 type LearningContext struct {
 	PathwaySlug           string               `json:"pathway_slug"`
 	PathwayVersion        int                  `json:"pathway_version"`
@@ -108,6 +132,7 @@ type LearningContext struct {
 	Checkpoints           []LearningCheckpoint `json:"checkpoints"`
 	ReproducibilitySHA256 string               `json:"reproducibility_sha256"`
 	Cost                  float64              `json:"cost"`
+	Guidance              LearningGuidance     `json:"guidance"`
 }
 
 // ConflictContext freezes the two histories and the evidence that was visible
@@ -504,6 +529,104 @@ func (s *Store) AddLearningCheckpoint(id, actor, summary string, criteria, outco
 	w.UpdatedAt = now
 	w.Events = append(w.Events, Event{ID: idv, Kind: "learning.checkpoint.created", ActorID: actor, Role: "verification", Detail: summary, CreatedAt: now})
 	return w, s.write(w)
+}
+
+func (s *Store) AddLearningGuidance(id, actor, actorKind, agentID, kind, body string, citations []LearningEvidenceCitation, checkpoints, outcomes []string, expected int) (Workspace, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w, err := s.read(id)
+	if err != nil {
+		return Workspace{}, err
+	}
+	if w.LearningContext == nil || w.LearningContext.Guidance.Version != expected {
+		return Workspace{}, ErrConflict
+	}
+	validRole := (actorKind == "learner" && actor == w.CreatorID && agentID == "" && kind == "question") || (actorKind == "mentor" && agentID == "" && (kind == "explanation" || kind == "hint" || kind == "demonstration" || kind == "direct_action")) || (actorKind == "agent" && agentID != "" && kind == "hint")
+	if !validRole || strings.TrimSpace(body) == "" || len(body) > 4000 || (actorKind != "learner" && len(citations) == 0) || (actorKind != "learner" && (len(checkpoints) > 0 || len(outcomes) > 0)) {
+		return Workspace{}, ErrInvalid
+	}
+	if actorKind == "agent" && (w.LearningContext.Guidance.AgentID != agentID || w.LearningContext.Guidance.AgentState != "active" || w.Control.PrincipalKind != "approved_agent" || w.Control.PrincipalID != agentID || w.Control.Mode != "guide" || !w.Control.ExpiresAt.After(s.now())) {
+		return Workspace{}, ErrControl
+	}
+	validCP := map[string]bool{}
+	for _, cp := range w.LearningContext.Checkpoints {
+		validCP[cp.ID] = true
+	}
+	provenance, err := s.readOrSeedProvenance(id, w)
+	if err != nil {
+		return Workspace{}, err
+	}
+	validOutcome := map[string]bool{}
+	for _, o := range provenance.Commands {
+		validOutcome[o.ID] = true
+	}
+	for _, x := range checkpoints {
+		if !validCP[x] {
+			return Workspace{}, ErrInvalid
+		}
+	}
+	for _, x := range outcomes {
+		if !validOutcome[x] {
+			return Workspace{}, ErrInvalid
+		}
+	}
+	entryID, err := randomID(12)
+	if err != nil {
+		return Workspace{}, err
+	}
+	now := s.now()
+	e := LearningGuidanceEntry{ID: entryID, Kind: kind, Body: strings.TrimSpace(body), ActorID: actor, ActorKind: actorKind, AgentID: agentID, Citations: append([]LearningEvidenceCitation(nil), citations...), CheckpointIDs: append([]string(nil), checkpoints...), CommandOutcomeIDs: append([]string(nil), outcomes...), LearnerControlled: actor == w.CreatorID, CreatedAt: now}
+	w.LearningContext.Guidance.Version++
+	w.LearningContext.Guidance.Entries = append(w.LearningContext.Guidance.Entries, e)
+	w.UpdatedAt = now
+	w.Events = append(w.Events, Event{ID: entryID, Kind: "learning.guidance." + kind, ActorID: actor, Role: actorKind, Detail: entryID, CreatedAt: now})
+	return w, s.write(w)
+}
+
+func (s *Store) SetLearningAgent(id, learner, agentID, state, guidedBy string, expected int) (Workspace, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w, err := s.read(id)
+	if err != nil {
+		return Workspace{}, err
+	}
+	if w.LearningContext == nil || learner != w.CreatorID || w.LearningContext.Guidance.Version != expected {
+		return Workspace{}, ErrConflict
+	}
+	if state == "active" && agentID == "" {
+		return Workspace{}, ErrInvalid
+	}
+	if state != "active" && state != "paused" && state != "revoked" {
+		return Workspace{}, ErrInvalid
+	}
+	if state != "active" && (w.LearningContext.Guidance.AgentID == "" || agentID != w.LearningContext.Guidance.AgentID) {
+		return Workspace{}, ErrInvalid
+	}
+	now := s.now()
+	w.LearningContext.Guidance.Version++
+	w.LearningContext.Guidance.AgentID = agentID
+	w.LearningContext.Guidance.AgentState = state
+	w.LearningContext.Guidance.AgentGuidedBy = guidedBy
+	w.UpdatedAt = now
+	w.Events = append(w.Events, Event{Kind: "learning.agent." + state, ActorID: learner, Role: "learner", Detail: agentID, CreatedAt: now})
+	return w, s.write(w)
+}
+
+// PublishLearningGuidanceToAgent makes authorization and response publication
+// one linearizable read operation. A concurrent pause, revoke, or control
+// change either completes first and denies this read, or waits until the
+// already-authorized response has been published.
+func (s *Store) PublishLearningGuidanceToAgent(id, agentID string, publish func(LearningGuidance) error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w, err := s.read(id)
+	if err != nil {
+		return err
+	}
+	if w.LearningContext == nil || w.LearningContext.Guidance.AgentID != agentID || w.LearningContext.Guidance.AgentState != "active" || w.Control.PrincipalKind != "approved_agent" || w.Control.PrincipalID != agentID || w.Control.Mode != "guide" || !w.Control.ExpiresAt.After(s.now()) {
+		return ErrControl
+	}
+	return publish(w.LearningContext.Guidance)
 }
 
 type ReasoningContext struct {

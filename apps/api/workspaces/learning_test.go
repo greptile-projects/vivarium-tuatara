@@ -195,3 +195,114 @@ func TestLearningCheckpointCitesDurableCommandBeyondProjection(t *testing.T) {
 		t.Fatalf("durable outcome rejected: %v", err)
 	}
 }
+
+func TestLearningGuidanceRetainsSharedStateAndLearnerAgentControl(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := s.Create(Workspace{RepositoryID: "repo", CommitID: "revision", CreatorID: "learner", LearningContext: &LearningContext{AcceptanceCriteria: []string{"understands routing"}, Guidance: LearningGuidance{Version: 1}}}, []byte("definition"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err = s.RecordCommand(w.ID, CommandOutcome{ActorID: "learner"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err = s.AddLearningCheckpoint(w.ID, "learner", "I traced the route", []string{"understands routing"}, []string{w.Commands[0].ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err = s.AddLearningGuidance(w.ID, "learner", "learner", "", "question", "Why does this branch win?", nil, []string{w.LearningContext.Checkpoints[0].ID}, []string{w.Commands[0].ID}, 1)
+	if err != nil || !w.LearningContext.Guidance.Entries[0].LearnerControlled {
+		t.Fatalf("question = %#v, %v", w.LearningContext.Guidance, err)
+	}
+	w, err = s.AddLearningGuidance(w.ID, "mentor", "mentor", "", "hint", "Inspect registration order.", []LearningEvidenceCitation{{Path: "routes.go", Revision: "revision"}}, nil, nil, 2)
+	if err != nil || w.LearningContext.Guidance.Entries[1].ActorKind != "mentor" {
+		t.Fatalf("mentor help = %#v, %v", w.LearningContext.Guidance, err)
+	}
+	w, err = s.SetLearningAgent(w.ID, "learner", "approved-agent", "active", "Only ask questions about dispatch.", 3)
+	if err != nil || w.LearningContext.Guidance.AgentState != "active" {
+		t.Fatalf("agent activation = %#v, %v", w.LearningContext.Guidance, err)
+	}
+	w, err = s.SetLearningAgent(w.ID, "learner", "approved-agent", "paused", "", 4)
+	if err != nil || w.LearningContext.Guidance.AgentState != "paused" {
+		t.Fatalf("agent pause = %#v, %v", w.LearningContext.Guidance, err)
+	}
+	if _, err = s.SetLearningAgent(w.ID, "mentor", "approved-agent", "revoked", "", 5); err != ErrConflict {
+		t.Fatalf("mentor controlled learner agent: %v", err)
+	}
+}
+
+func TestLearningGuidanceRejectsUnsharedExerciseState(t *testing.T) {
+	s, _ := New(t.TempDir())
+	w, _ := s.Create(Workspace{RepositoryID: "repo", CommitID: "revision", CreatorID: "learner", LearningContext: &LearningContext{Guidance: LearningGuidance{Version: 1}}}, []byte("definition"))
+	if _, err := s.AddLearningGuidance(w.ID, "learner", "learner", "", "question", "Here is unrelated state", nil, []string{"unknown"}, nil, 1); err != ErrInvalid {
+		t.Fatalf("unknown checkpoint accepted: %v", err)
+	}
+}
+
+func TestLearningAgentGuidanceRechecksGuideLeaseUnderMutationLock(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 25, 11, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return now }
+	w, err := s.Create(Workspace{RepositoryID: "repo", CommitID: "revision", CreatorID: "learner", LearningContext: &LearningContext{Guidance: LearningGuidance{Version: 1}}}, []byte("definition"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err = s.SetLearningAgent(w.ID, "learner", "agent", "active", "Only provide routing hints.", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err = s.SetControl(w.ID, "learner", "approved_agent", "agent", "guide", []string{"files"}, w.Control.Version, 60)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The route may have authorized this request against the live snapshot above;
+	// expiry does not advance the guidance version, so persistence must recheck it.
+	now = now.Add(time.Minute)
+	_, err = s.AddLearningGuidance(w.ID, "operator", "agent", "agent", "hint", "Inspect the router.", []LearningEvidenceCitation{{Path: "routes.go", Revision: "revision"}}, nil, nil, 2)
+	if err != ErrControl {
+		t.Fatalf("expired guide write = %v", err)
+	}
+	retained, err := s.Get(w.ID)
+	if err != nil || len(retained.LearningContext.Guidance.Entries) != 0 {
+		t.Fatalf("expired hint persisted: %#v, %v", retained.LearningContext.Guidance, err)
+	}
+}
+
+func TestLearningAgentGuidanceReadPublishesInsideAuthorizationBoundary(t *testing.T) {
+	s, _ := New(t.TempDir())
+	now := time.Date(2026, 8, 25, 11, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return now }
+	w, _ := s.Create(Workspace{RepositoryID: "repo", CommitID: "revision", CreatorID: "learner", LearningContext: &LearningContext{Guidance: LearningGuidance{Version: 1}}}, []byte("definition"))
+	w, _ = s.SetLearningAgent(w.ID, "learner", "agent", "active", "routing hints", 1)
+	w, _ = s.SetControl(w.ID, "learner", "approved_agent", "agent", "guide", []string{"files"}, w.Control.Version, 60)
+
+	publishing, release := make(chan struct{}), make(chan struct{})
+	readDone := make(chan error, 1)
+	go func() {
+		readDone <- s.PublishLearningGuidanceToAgent(w.ID, "agent", func(LearningGuidance) error { close(publishing); <-release; return nil })
+	}()
+	<-publishing
+	pauseDone := make(chan error, 1)
+	go func() { _, err := s.SetLearningAgent(w.ID, "learner", "agent", "paused", "", 2); pauseDone <- err }()
+	select {
+	case err := <-pauseDone:
+		t.Fatalf("pause crossed publication boundary: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	if err := <-readDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-pauseDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PublishLearningGuidanceToAgent(w.ID, "agent", func(LearningGuidance) error { return nil }); err != ErrControl {
+		t.Fatalf("paused agent read = %v", err)
+	}
+}

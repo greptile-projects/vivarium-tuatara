@@ -2387,6 +2387,29 @@ inputs. Organization-policy read failures create nothing, and checkpoints may
 cite any command in the uncapped provenance ledger even after it leaves the
 bounded recent-command projection.
 
+Each attempt also carries a versioned learning-help timeline at
+`/workspaces/{id}/learning/guidance`. A learner asks a revision-grounded
+question and explicitly selects which retained checkpoint and command IDs to
+share; unselected exercise state is not inferred into the thread. Current
+designated pathway mentors can answer with an explanation, hint,
+demonstration, or direct action, and every answer cites an existing project path
+at the exact exercise commit. Direct action additionally requires live bounded
+mentor workspace control, so observing an attempt and changing it remain
+distinct. Entries retain human or agent authorship, category, citations,
+selected state, and learner-control attribution without rewriting command or
+checkpoint authorship.
+
+Learners select organization-approved agents through
+`PUT /workspaces/{id}/learning/agent`, record the guidance boundary, and can
+pause or revoke access. An agent may append only a cited hint while it is the
+active learner-selected agent and holds live `guide` control; it cannot publish
+an explanation, demonstration, direct action, hidden assessment context,
+uncited project context, or credential-shaped prose. Agent pause and revocation
+are durable timeline events and are rechecked before every subsequent entry.
+The workspace UI presents the help and control trail beside the exercise,
+preserving the distinction between what the learner did and what help they
+received.
+
 References to documentation, current ownership, releases, issues, proposals,
 and workspace definitions are projected against live repository state on every
 read. Missing, moved, or private requirements remain in history and are marked
