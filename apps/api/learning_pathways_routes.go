@@ -450,6 +450,15 @@ func registerLearningPathwayRoutes(mux *http.ServeMux, git *storage.Store, repos
 			return
 		}
 		publish := func() error { writeJSON(w, 200, item.LearningContext.Guidance); return nil }
+		if actor.AgentID != "" {
+			err := workspaceStore.PublishLearningGuidanceToAgent(item.ID, actor.AgentID, func(guidance workspaces.LearningGuidance) error { writeJSON(w, 200, guidance); return nil })
+			if errors.Is(err, workspaces.ErrControl) {
+				writeAPIError(w, 403, "learning_agent_access_inactive", "only the learner-selected active agent with live guide control can use this timeline")
+			} else if err != nil {
+				writeAPIError(w, 503, "learning_guidance_unavailable", "learning guidance could not be read")
+			}
+			return
+		}
 		if mentor {
 			if err := repos.WithCurrentParticipant(actor.UserID, item.RepositoryID, publish); err != nil {
 				writeAPIError(w, 403, "learning_mentor_access_revoked", "designated mentor access was revoked")

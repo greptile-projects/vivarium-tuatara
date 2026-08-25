@@ -612,6 +612,23 @@ func (s *Store) SetLearningAgent(id, learner, agentID, state, guidedBy string, e
 	return w, s.write(w)
 }
 
+// PublishLearningGuidanceToAgent makes authorization and response publication
+// one linearizable read operation. A concurrent pause, revoke, or control
+// change either completes first and denies this read, or waits until the
+// already-authorized response has been published.
+func (s *Store) PublishLearningGuidanceToAgent(id, agentID string, publish func(LearningGuidance) error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w, err := s.read(id)
+	if err != nil {
+		return err
+	}
+	if w.LearningContext == nil || w.LearningContext.Guidance.AgentID != agentID || w.LearningContext.Guidance.AgentState != "active" || w.Control.PrincipalKind != "approved_agent" || w.Control.PrincipalID != agentID || w.Control.Mode != "guide" || !w.Control.ExpiresAt.After(s.now()) {
+		return ErrControl
+	}
+	return publish(w.LearningContext.Guidance)
+}
+
 type ReasoningContext struct {
 	AssessmentID      string                     `json:"assessment_id"`
 	AssessmentVersion int                        `json:"assessment_version"`

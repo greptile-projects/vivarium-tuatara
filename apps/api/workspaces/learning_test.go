@@ -273,3 +273,36 @@ func TestLearningAgentGuidanceRechecksGuideLeaseUnderMutationLock(t *testing.T) 
 		t.Fatalf("expired hint persisted: %#v, %v", retained.LearningContext.Guidance, err)
 	}
 }
+
+func TestLearningAgentGuidanceReadPublishesInsideAuthorizationBoundary(t *testing.T) {
+	s, _ := New(t.TempDir())
+	now := time.Date(2026, 8, 25, 11, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return now }
+	w, _ := s.Create(Workspace{RepositoryID: "repo", CommitID: "revision", CreatorID: "learner", LearningContext: &LearningContext{Guidance: LearningGuidance{Version: 1}}}, []byte("definition"))
+	w, _ = s.SetLearningAgent(w.ID, "learner", "agent", "active", "routing hints", 1)
+	w, _ = s.SetControl(w.ID, "learner", "approved_agent", "agent", "guide", []string{"files"}, w.Control.Version, 60)
+
+	publishing, release := make(chan struct{}), make(chan struct{})
+	readDone := make(chan error, 1)
+	go func() {
+		readDone <- s.PublishLearningGuidanceToAgent(w.ID, "agent", func(LearningGuidance) error { close(publishing); <-release; return nil })
+	}()
+	<-publishing
+	pauseDone := make(chan error, 1)
+	go func() { _, err := s.SetLearningAgent(w.ID, "learner", "agent", "paused", "", 2); pauseDone <- err }()
+	select {
+	case err := <-pauseDone:
+		t.Fatalf("pause crossed publication boundary: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	if err := <-readDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-pauseDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PublishLearningGuidanceToAgent(w.ID, "agent", func(LearningGuidance) error { return nil }); err != ErrControl {
+		t.Fatalf("paused agent read = %v", err)
+	}
+}
