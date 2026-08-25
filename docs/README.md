@@ -2341,6 +2341,12 @@ detail reads are available through the public API under the repository's normal
 visibility boundary, and the `/repositories/{id}/learning` workspace presents
 the same pathway and health information.
 
+Publication requires a caller-stable `request_id`. Exact retries reconcile the
+already-visible revision and repeat its directory durability sync before a
+subsequent version is accepted; reusing the identity with changed content is a
+conflict. This makes a durability-uncertain `202` safely recoverable without
+duplicating immutable curriculum history.
+
 Module material links distinguish documentation, symbols, decisions, issues,
 APIs, package versions, and contributor-guidance revisions. Git-backed links
 bind a path and 40-character commit; symbol links additionally require the

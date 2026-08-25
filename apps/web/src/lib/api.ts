@@ -600,7 +600,7 @@ export type ContributorPathwayResponse = {
   acknowledgement_count: number;
 };
 export type LearningPathway = {
-  id: string; repository_id: string; slug: string; version: number; role: string; outcome: string;
+  id: string; request_id: string; repository_id: string; slug: string; version: number; role: string; outcome: string;
   prerequisites: string[]; objectives: string[]; supported_revisions: string[]; expected_minutes: number;
   accessibility_needs: string[]; locales: string[]; completion_evidence: string[];
   mentors: { user_id: string; responsibility: string; status?: "current" | "inaccessible"; status_detail?: string }[];

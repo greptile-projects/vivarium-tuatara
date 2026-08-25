@@ -109,6 +109,7 @@ func registerLearningPathwayRoutes(mux *http.ServeMux, git *storage.Store, repos
 						l.Status, l.StatusDetail = "stale", "The linked issue is unavailable."
 					} else if linked.Visibility != "public" && !canReadRestricted {
 						l.Status, l.StatusDetail = "inaccessible", "The linked issue is not accessible."
+						l.ResourceID, l.Label = "", "Restricted issue"
 					}
 				case "package":
 					if packageStore == nil {
@@ -178,7 +179,11 @@ func registerLearningPathwayRoutes(mux *http.ServeMux, git *storage.Store, repos
 		if authenticated {
 			actorID = actor.UserID
 		}
-		writeJSON(w, 200, map[string]any{"pathway": present(r.PathValue("id"), actorID, v), "history": history})
+		projectedHistory := make([]learningpathways.Revision, 0, len(history))
+		for _, historical := range history {
+			projectedHistory = append(projectedHistory, present(r.PathValue("id"), actorID, historical))
+		}
+		writeJSON(w, 200, map[string]any{"pathway": present(r.PathValue("id"), actorID, v), "history": projectedHistory})
 	})
 	mux.HandleFunc("PUT /repositories/{id}/learning-pathways/{slug}", func(w http.ResponseWriter, r *http.Request) {
 		actor, _, ok := authorizeRepositoryParticipant(w, r, repos, credentials, r.PathValue("id"), "repositories:write")
@@ -187,6 +192,7 @@ func registerLearningPathwayRoutes(mux *http.ServeMux, git *storage.Store, repos
 		}
 		var in struct {
 			ExpectedVersion int                       `json:"expected_version"`
+			RequestID       string                    `json:"request_id"`
 			Pathway         learningpathways.Revision `json:"pathway"`
 		}
 		if decodeJSON(r, &in) != nil {
@@ -198,20 +204,25 @@ func registerLearningPathwayRoutes(mux *http.ServeMux, git *storage.Store, repos
 		in.Pathway.RepositoryID = r.PathValue("id")
 		in.Pathway.Slug = r.PathValue("slug")
 		in.Pathway.PublishedBy = actor.UserID
+		in.Pathway.RequestID = in.RequestID
 		for i := range in.Pathway.Mentors {
-			in.Pathway.Mentors[i].Status = ""
+			in.Pathway.Mentors[i].Status, in.Pathway.Mentors[i].StatusDetail = "", ""
 		}
 		for i := range in.Pathway.Environments {
-			in.Pathway.Environments[i].Status = ""
+			in.Pathway.Environments[i].Status, in.Pathway.Environments[i].StatusDetail = "", ""
 		}
 		for i := range in.Pathway.Modules {
 			for j := range in.Pathway.Modules[i].Materials {
-				in.Pathway.Modules[i].Materials[j].Status = ""
+				in.Pathway.Modules[i].Materials[j].Status, in.Pathway.Modules[i].Materials[j].StatusDetail = "", ""
 			}
 		}
 		v, e := pathways.Publish(in.Pathway, in.ExpectedVersion)
 		if errors.Is(e, learningpathways.ErrConflict) {
 			writeAPIError(w, 409, "learning_pathway_changed", "learning pathway version changed")
+			return
+		}
+		if errors.Is(e, learningpathways.ErrRequestChanged) {
+			writeAPIError(w, 409, "learning_pathway_request_changed", "request identity was already used with different pathway content")
 			return
 		}
 		if errors.Is(e, learningpathways.ErrInvalid) {

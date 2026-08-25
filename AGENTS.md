@@ -2705,7 +2705,9 @@ whenever dependencies change or the web job fails before it starts.
 - **Project learning pathways** — Authorized repository collaborators publish
   immutable role- or outcome-specific curricula at
   `/repositories/{id}/learning-pathways/{slug}` and readers discover current
-  pathways from the collection route. Revisions retain prerequisites,
+  pathways from the collection route. Caller-stable request identities
+  reconcile visible durability-uncertain publications before any successor is
+  accepted, and changed reuse conflicts. Revisions retain prerequisites,
   objectives, supported commits, ordered modules, exercises, completion
   evidence, effort, mentors, accessibility needs, locales, and supported or
   unsupported learner environments. Module materials cite exact documentation,

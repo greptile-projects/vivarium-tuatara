@@ -19,6 +19,7 @@ var (
 	ErrNotFound            = errors.New("learning pathway not found")
 	ErrInvalid             = errors.New("invalid learning pathway")
 	ErrConflict            = errors.New("learning pathway version changed")
+	ErrRequestChanged      = errors.New("learning pathway request identity was reused with different content")
 	ErrDurabilityUncertain = errors.New("learning pathway is visible but durability is uncertain")
 )
 
@@ -64,6 +65,7 @@ type Module struct {
 }
 type Revision struct {
 	ID                 string        `json:"id"`
+	RequestID          string        `json:"request_id"`
 	RepositoryID       string        `json:"repository_id"`
 	Slug               string        `json:"slug"`
 	Version            int           `json:"version"`
@@ -108,6 +110,19 @@ func (s *Store) Publish(v Revision, expected int) (Revision, error) {
 	items, err := s.list(v.RepositoryID, v.Slug)
 	if err != nil {
 		return Revision{}, err
+	}
+	for _, item := range items {
+		if item.RequestID != v.RequestID {
+			continue
+		}
+		if !sameRequest(item, v) {
+			return Revision{}, ErrRequestChanged
+		}
+		dir := filepath.Join(s.root, v.RepositoryID, v.Slug)
+		if err = s.syncDir(dir); err != nil {
+			return item, errors.Join(ErrDurabilityUncertain, err)
+		}
+		return item, nil
 	}
 	if len(items) != expected {
 		return Revision{}, ErrConflict
@@ -186,7 +201,7 @@ func (s *Store) Slugs(repositoryID string) ([]string, error) {
 }
 
 func validate(v Revision) error {
-	if !validID(v.RepositoryID) || !validID(v.PublishedBy) || !validSlug(v.Slug) || len(strings.TrimSpace(v.Role)) < 2 || len(strings.TrimSpace(v.Outcome)) < 3 || v.ExpectedMinutes < 1 || v.ExpectedMinutes > 100000 || len(v.Prerequisites) > 50 || len(v.Objectives) == 0 || len(v.Objectives) > 50 || len(v.SupportedRevisions) == 0 || len(v.Modules) == 0 || len(v.Modules) > 100 || len(v.CompletionEvidence) == 0 || len(v.Locales) == 0 {
+	if !validID(v.RepositoryID) || !validID(v.PublishedBy) || !validRequestID(v.RequestID) || !validSlug(v.Slug) || len(strings.TrimSpace(v.Role)) < 2 || len(strings.TrimSpace(v.Outcome)) < 3 || v.ExpectedMinutes < 1 || v.ExpectedMinutes > 100000 || len(v.Prerequisites) > 50 || len(v.Objectives) == 0 || len(v.Objectives) > 50 || len(v.SupportedRevisions) == 0 || len(v.Modules) == 0 || len(v.Modules) > 100 || len(v.CompletionEvidence) == 0 || len(v.Locales) == 0 {
 		return ErrInvalid
 	}
 	seen := map[string]bool{}
@@ -282,7 +297,18 @@ func validID(v string) bool {
 	_, e := hex.DecodeString(v)
 	return e == nil && v == strings.ToLower(v)
 }
+func validRequestID(v string) bool {
+	return len(v) >= 8 && len(v) <= 100 && !strings.ContainsAny(v, "/\\\x00")
+}
 func randomID() string { b := make([]byte, 16); _, _ = rand.Read(b); return hex.EncodeToString(b) }
+func sameRequest(stored, input Revision) bool {
+	stored.ID, input.ID = "", ""
+	stored.Version, input.Version = 0, 0
+	stored.PublishedAt, input.PublishedAt = time.Time{}, time.Time{}
+	a, aErr := json.Marshal(stored)
+	b, bErr := json.Marshal(input)
+	return aErr == nil && bErr == nil && string(a) == string(b)
+}
 func readJSON(p string, v any) error {
 	b, e := os.ReadFile(p)
 	if e != nil {
