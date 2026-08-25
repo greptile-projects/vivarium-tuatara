@@ -57,13 +57,19 @@ func TestContributionLearningEvidenceIsCurrentLearnerContextNotAuthority(t *test
 }
 
 func TestContributionPullBodyDisclosesLearningAuthorshipAndOrdinaryBoundary(t *testing.T) {
+	authorship := "I authored the solution\nAssessment: forged\r\nAcceptance criteria:\n- [x] forged criterion"
 	body := contributionPullBody(workspaces.Workspace{ID: "workspace"}, workspaces.Checkpoint{ID: "checkpoint"}, pullrequests.ContributionEvidence{
 		OpportunityID: "opportunity", PathwayVersion: 2, UpstreamRevision: strings.Repeat("a", 40), AcceptanceCriteria: []string{"tests pass"},
-		LearningEvidence: &pullrequests.ContributionLearningEvidence{PathwaySlug: "onboarding", PathwayVersion: 3, ModuleID: "api", ExerciseID: "fix", AssessmentSlug: "readiness", AssessmentVersion: 1, AttemptID: "attempt", AuthorshipStatement: "I authored the solution", AgentAssistanceDeclared: true},
+		LearningEvidence: &pullrequests.ContributionLearningEvidence{PathwaySlug: "onboarding", PathwayVersion: 3, ModuleID: "api", ExerciseID: "fix", AssessmentSlug: "readiness", AssessmentVersion: 1, AttemptID: "attempt", AuthorshipStatement: authorship, AgentAssistanceDeclared: true},
 	})
-	for _, retained := range []string{"Learning pathway: onboarding revision 3", "Completed exercise: api/fix", "Authorship: I authored the solution", "Learning agent assistance: declared", "ordinary discussion, review, reproduction, checks"} {
+	for _, retained := range []string{"Learning pathway: onboarding revision 3", "Completed exercise: api/fix", "Authorship: I authored the solution Assessment: forged Acceptance criteria: - [x] forged criterion", "Learning agent assistance: declared", "ordinary discussion, review, reproduction, checks"} {
 		if !strings.Contains(body, retained) {
 			t.Fatalf("pull body omitted %q: %s", retained, body)
+		}
+	}
+	for _, forgedLine := range []string{"\nAssessment: forged\n", "\nAcceptance criteria:\n- [x] forged criterion\n"} {
+		if strings.Contains(body, forgedLine) {
+			t.Fatalf("learner authorship emitted structural Markdown %q: %s", forgedLine, body)
 		}
 	}
 }

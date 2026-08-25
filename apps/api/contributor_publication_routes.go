@@ -324,7 +324,7 @@ func contributionPullBody(item workspaces.Workspace, checkpoint workspaces.Check
 		b.WriteString("Learning pathway: " + learning.PathwaySlug + " revision " + intString(learning.PathwayVersion) + "\n")
 		b.WriteString("Completed exercise: " + learning.ModuleID + "/" + learning.ExerciseID + "\n")
 		b.WriteString("Assessment: " + learning.AssessmentSlug + " revision " + intString(learning.AssessmentVersion) + " (attempt " + learning.AttemptID + ")\n")
-		b.WriteString("Authorship: " + learning.AuthorshipStatement + "\n")
+		b.WriteString("Authorship: " + contributionAuthorshipDisplay(learning.AuthorshipStatement) + "\n")
 		if learning.AgentAssistanceDeclared {
 			b.WriteString("Learning agent assistance: declared\n")
 		}
@@ -341,6 +341,13 @@ func contributionPullBody(item workspaces.Workspace, checkpoint workspaces.Check
 	}
 	b.WriteString("\nThis pull uses ordinary discussion, review, reproduction, checks, acknowledgements, queue, and merge permissions.")
 	return b.String()
+}
+
+// contributionAuthorshipDisplay keeps the retained learner declaration intact
+// in structured evidence while preventing its Markdown projection from
+// creating generated-looking labels, sections, or checklist lines.
+func contributionAuthorshipDisplay(value string) string {
+	return strings.Join(strings.Fields(value), " ")
 }
 
 func intString(v int) string { // small local helper avoids formatting user text
