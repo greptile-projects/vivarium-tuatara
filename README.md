@@ -24,6 +24,12 @@ to agree on forecast demand, traffic shape, reliability, dependency, regional,
 budget, lead-time, success, and rollback boundaries. Unsupported inputs and changing
 commitments remain explicit rather than being treated as settled planning facts.
 
+Repository participants and scoped read-only agents can turn an exact objective into
+an immutable, permission-aware capacity model at `/repositories/{id}/capacity-models`.
+The Capacity workspace exposes release-bound sanitized evidence, observation windows,
+assumptions, workload segments, saturation uncertainty, costs, alternative scenarios,
+and append-only challenges without treating restricted observations as absent proof.
+
 ## Getting started
 
 ```sh

@@ -38,6 +38,28 @@ repeated entry is silently discarded when publishing a successor. Contracts coor
 planning and grant no repository, infrastructure, funding, release, scaling, or operating
 authority.
 
+## Revision-exact demand and capacity models
+
+Repository participants, including repository-bound read-only agents, publish models
+through `POST /repositories/{id}/capacity-models`; readers inspect the collection,
+detail, immutable revision history, and collaboration ledger through the matching
+routes and repository `/capacity` workspace. A model binds one exact capacity-objective
+revision to sanitized usage, performance, reliability, deployment, infrastructure,
+dependency, experiment, and roadmap observations. Every observation names an exact
+release identity and revision, a closed observation window, sanitization treatment,
+instrumentation version, anomaly state, and optional audience.
+
+Revisions retain attributable assumptions and confidence, workload segments, explained
+resource or dependency saturation dates with lower/expected/upper uncertainty, cost
+curves, alternative demand scenarios, and the declared method. Projection redacts
+restricted evidence details while preserving an `inaccessible_evidence` gap; mixed
+instrumentation, anomalous observations, unsupported references, and challenges remain
+visible diagnostics. `challenge`, `support`, and `supersede` events append with stable
+request identities and never rewrite a prediction. Storage defaults beneath
+`$CAPACITY_MODEL_STORAGE_ROOT` (`capacity-models`). Models are forecasts and coordination
+evidence only; they grant no repository, production-data, deployment, infrastructure,
+funding, scaling, or operational authority.
+
 ## Revision-exact review plans
 
 Pull authors and current repository owners can publish a review plan before approvals accumulate through `POST /repositories/{id}/pulls/{pull_id}/review-plans`; all repository readers can inspect its immutable history through the matching `GET` route and the pull page. Caller-stable `request_id` values reconcile ambiguous post-publication retries to the already-retained version and reject changed reuse. Each version freezes the exact source and target commits, declared pull intent, changed paths, target-branch required checks, inferred risks and affected security, privacy, accessibility, or interface commitments, then breaks that context into review areas with acceptance questions, required evidence, dependencies, accountable current ownership, and explicit completion rules.
