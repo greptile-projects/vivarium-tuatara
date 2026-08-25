@@ -122,6 +122,17 @@ func (s *Store) Transition(repo, pull, id, actor, action, reason string, replace
 	if !slices.Contains(allowed[v.Status], action) {
 		return Assignment{}, ErrConflict
 	}
+	if action == "accept" {
+		activeLoad := 0
+		for _, current := range values {
+			if current.PrincipalID == v.PrincipalID && (current.Status == "invited" || current.Status == "accepted") {
+				activeLoad++
+			}
+		}
+		if activeLoad >= 3 {
+			return Assignment{}, ErrConflict
+		}
+	}
 	statuses := map[string]string{"accept": "accepted", "decline": "declined", "recuse": "recused", "unavailable": "unavailable", "release": "released", "replace": "replaced"}
 	v.Status = statuses[action]
 	v.UpdatedAt = s.now()

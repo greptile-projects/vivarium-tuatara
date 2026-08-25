@@ -87,6 +87,27 @@ func TestAcceptedReviewerMayDeclineAndRequireReassignment(t *testing.T) {
 	}
 }
 
+func TestAcceptanceRejectsCurrentOverloadInsideMutationLock(t *testing.T) {
+	store, _ := New(t.TempDir())
+	var first Assignment
+	for index, area := range []string{"api", "security", "privacy"} {
+		created, err := store.CreateAssignment(Assignment{RequestID: fmt.Sprintf("overload-%d", index), RepositoryID: "repo", PullRequestID: "pull", PlanID: "plan", PlanVersion: 1, AreaID: area, PrincipalType: "agent", PrincipalID: "agent", AgentGrantID: "grant", AssignedBy: "owner"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if index == 0 {
+			first = created
+		}
+	}
+	if _, err := store.Transition("repo", "pull", first.ID, "agent", "accept", "", nil); !errors.Is(err, ErrConflict) {
+		t.Fatalf("overloaded acceptance error = %v", err)
+	}
+	values, _ := store.ListAssignments("repo", "pull")
+	if values[0].Status != "invited" {
+		t.Fatalf("overloaded assignment mutated: %#v", values[0])
+	}
+}
+
 func TestReviewAssignmentRejectsChangedRetryAndOverlappingAccountability(t *testing.T) {
 	store, _ := New(t.TempDir())
 	base := Assignment{RequestID: "request-123", RepositoryID: "repo", PullRequestID: "pull", PlanID: "plan", PlanVersion: 1, AreaID: "api", PrincipalType: "human", PrincipalID: "one", AssignedBy: "owner"}
