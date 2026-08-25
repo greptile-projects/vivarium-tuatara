@@ -560,6 +560,7 @@ export function PullRequestDetail({
   const [refreshRequired, setRefreshRequired] = useState(false);
   const [branchCredential, setBranchCredential] = useState<Credential | null>(null);
   const generation = useRef(0);
+  const reviewPlanRequestID = useRef<string | null>(null);
 
   const load = useCallback(async () => {
     if (authLoading) return false;
@@ -735,7 +736,7 @@ export function PullRequestDetail({
     } catch (reason) {
       setPending(false);
       setError(errorMessage(reason, failure));
-      return;
+      return false;
     }
     setNotice(success);
     const refreshed = await load();
@@ -747,6 +748,7 @@ export function PullRequestDetail({
       );
     }
     setPending(false);
+    return true;
   }
 
   const submitReview = (decision: "approved" | "changes_requested") =>
@@ -817,15 +819,17 @@ export function PullRequestDetail({
       setError(errorMessage(reason, "A branch credential could not be issued."));
     } finally { setPending(false); }
   };
-  const createReviewPlan = (event: FormEvent<HTMLFormElement>) => {
+  const createReviewPlan = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
-    void mutate(
+    reviewPlanRequestID.current ??= crypto.randomUUID();
+    const created = await mutate(
       `/repositories/${repositoryID}/pulls/${pullRequestID}/review-plans`,
-      { method: "POST", body: JSON.stringify({ risk_summary: data.get("risk_summary"), completion_rule: data.get("completion_rule") }) },
+      { method: "POST", body: JSON.stringify({ request_id: reviewPlanRequestID.current, risk_summary: data.get("risk_summary"), completion_rule: data.get("completion_rule") }) },
       "The review plan could not be derived.",
       "A revision-exact review plan was published.",
     );
+    if (created) reviewPlanRequestID.current = null;
   };
 
   if (loading)

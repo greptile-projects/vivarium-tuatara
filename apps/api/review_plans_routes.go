@@ -11,6 +11,7 @@ import (
 )
 
 type reviewPlanInput struct {
+	RequestID      string `json:"request_id"`
 	RiskSummary    string `json:"risk_summary"`
 	CompletionRule string `json:"completion_rule"`
 }
@@ -66,6 +67,7 @@ func registerReviewPlanRoutes(mux *http.ServeMux, catalog *repositories.Store, c
 			paths = append(paths, c.Path)
 		}
 		plan := deriveReviewPlan(p, repo, actor.UserID, paths, in)
+		plan.RequestID = in.RequestID
 		checks, err := catalog.RequiredChecks(repo.ID, p.TargetBranch)
 		if err != nil {
 			writeAPIError(w, 503, "required_checks_unavailable", "target branch review policy could not be resolved")

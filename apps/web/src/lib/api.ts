@@ -3928,6 +3928,7 @@ export type PullRequestReview = {
 };
 export type ReviewPlan = {
   id: string;
+  request_id: string;
   repository_id: string;
   pull_request_id: string;
   version: number;

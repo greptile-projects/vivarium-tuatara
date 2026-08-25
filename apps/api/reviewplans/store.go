@@ -41,6 +41,7 @@ type Diagnostic struct {
 }
 type Plan struct {
 	ID                  string       `json:"id"`
+	RequestID           string       `json:"request_id"`
 	RepositoryID        string       `json:"repository_id"`
 	PullRequestID       string       `json:"pull_request_id"`
 	Version             int          `json:"version"`
@@ -90,12 +91,20 @@ func New(root string) (*Store, error) {
 func (s *Store) Create(plan Plan) (Plan, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if plan.RepositoryID == "" || plan.PullRequestID == "" || len(plan.SourceRevision) != 40 || len(plan.TargetRevision) != 40 || plan.CreatedBy == "" || strings.TrimSpace(plan.Intent) == "" || len(plan.Areas) == 0 {
+	if plan.RepositoryID == "" || plan.PullRequestID == "" || !validRequestID(plan.RequestID) || len(plan.SourceRevision) != 40 || len(plan.TargetRevision) != 40 || plan.CreatedBy == "" || strings.TrimSpace(plan.Intent) == "" || len(plan.Areas) == 0 {
 		return Plan{}, ErrInvalid
 	}
 	values, err := s.read(plan.RepositoryID, plan.PullRequestID)
 	if err != nil {
 		return Plan{}, err
+	}
+	for _, existing := range values {
+		if existing.RequestID == plan.RequestID {
+			if sameRequest(existing, plan) {
+				return existing, nil
+			}
+			return Plan{}, ErrInvalid
+		}
 	}
 	plan.ID = newID()
 	plan.Version = len(values) + 1
@@ -179,6 +188,25 @@ func (s *Store) write(repo, pull string, v []Plan) error {
 }
 func (s *Store) path(repo, pull string) string { return filepath.Join(s.root, repo, pull+".json") }
 func newID() string                            { b := make([]byte, 12); _, _ = rand.Read(b); return hex.EncodeToString(b) }
+func validRequestID(value string) bool {
+	value = strings.TrimSpace(value)
+	if len(value) < 8 || len(value) > 128 {
+		return false
+	}
+	for _, character := range value {
+		if !(character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' || character >= '0' && character <= '9' || strings.ContainsRune("._:-", character)) {
+			return false
+		}
+	}
+	return true
+}
+func sameRequest(existing, requested Plan) bool {
+	existing.ID, existing.Version, existing.CreatedAt, existing.Authority, existing.Stale = "", 0, time.Time{}, "", false
+	requested.ID, requested.Version, requested.CreatedAt, requested.Authority, requested.Stale = "", 0, time.Time{}, "", false
+	left, leftErr := json.Marshal(existing)
+	right, rightErr := json.Marshal(requested)
+	return leftErr == nil && rightErr == nil && string(left) == string(right)
+}
 func Normalize(values []string) []string {
 	seen := map[string]bool{}
 	out := []string{}
