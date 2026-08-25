@@ -23,6 +23,7 @@ import {
   type PullRequestComment,
   type PullRequestCommit,
   type PullRequestReview,
+  type ReviewPlan,
   type Repository,
   type User,
 } from "@/lib/api";
@@ -540,6 +541,7 @@ export function PullRequestDetail({
   const [files, setFiles] = useState<FileChange[]>([]);
   const [comments, setComments] = useState<PullRequestComment[]>([]);
   const [reviews, setReviews] = useState<PullRequestReview[]>([]);
+  const [reviewPlans, setReviewPlans] = useState<ReviewPlan[]>([]);
   const [federationEvents, setFederationEvents] = useState<FederationEvent[]>([]);
   const [stackContexts, setStackContexts] = useState<StackContext[]>([]);
   const [readiness, setReadiness] = useState<MergeReadiness | null>(null);
@@ -585,6 +587,8 @@ export function PullRequestDetail({
       setFiles(filePage.files);
       setComments(discussion);
       setReviews(reviewList);
+	  const planPage=await api<{review_plans:ReviewPlan[]}>(`${base}/review-plans`,{},token).catch(()=>({review_plans:[]}));
+	  if(active()) setReviewPlans(planPage.review_plans);
 	  const stackPage=await api<{stack_contexts:StackContext[]}>(`${base}/stack-context`,{},token).catch(()=>({stack_contexts:[]}));
 	  if(active()) setStackContexts(stackPage.stack_contexts);
 	  if (item.federated_contribution_id) {
@@ -807,6 +811,16 @@ export function PullRequestDetail({
       setError(errorMessage(reason, "A branch credential could not be issued."));
     } finally { setPending(false); }
   };
+  const createReviewPlan = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    void mutate(
+      `/repositories/${repositoryID}/pulls/${pullRequestID}/review-plans`,
+      { method: "POST", body: JSON.stringify({ risk_summary: data.get("risk_summary"), completion_rule: data.get("completion_rule") }) },
+      "The review plan could not be derived.",
+      "A revision-exact review plan was published.",
+    );
+  };
 
   if (loading)
     return (
@@ -930,6 +944,13 @@ export function PullRequestDetail({
       </nav>
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_19rem]">
         <main className="min-w-0 space-y-6">
+          <Card className="p-5" id="review-plan">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div><h2 className="font-semibold">Review plan</h2><p className="mt-1 text-sm text-[var(--muted)]">Expertise, questions, and evidence derived before approval.</p></div>
+              {(isAuthor || isOwner) && pull.status === "open" && <form className="flex flex-wrap gap-2" onSubmit={createReviewPlan}><input name="risk_summary" maxLength={2000} className="rounded-lg border px-3 py-2 text-sm" placeholder="Optional risk context"/><input name="completion_rule" maxLength={2000} className="rounded-lg border px-3 py-2 text-sm" placeholder="Optional completion rule"/><Button disabled={pending||refreshRequired}>Derive new version</Button></form>}
+            </div>
+            {reviewPlans.length === 0 ? <p className="mt-4 rounded-lg bg-[var(--warning-soft)] p-3 text-sm text-[var(--warning)]">No review plan exists. Approvals alone do not describe which risks and evidence were reviewed.</p> : <div className="mt-4 space-y-4">{[...reviewPlans].reverse().map((plan,index)=><details key={plan.id} open={index===0} className="rounded-lg border p-4"><summary className="cursor-pointer font-semibold">Version {plan.version} · {short(plan.source_revision)} <Badge tone={plan.stale?"warning":"success"}>{plan.stale?"stale":"current"}</Badge></summary><p className="mt-3 text-sm">{plan.risk_summary}</p><div className="mt-3 flex flex-wrap gap-2">{plan.policy_requirements.map(x=><Badge key={x}>{x}</Badge>)}{plan.affected_commitments.map(x=><Badge key={x} tone="info">{x} commitment</Badge>)}</div>{plan.diagnostics.length>0&&<div className="mt-3 space-y-2">{plan.diagnostics.map((d,i)=><p key={`${d.code}-${i}`} className="rounded bg-[var(--warning-soft)] p-2 text-xs text-[var(--warning)]"><strong>{d.code.replaceAll("_"," ")}:</strong> {d.message}{d.attributed_to?` · attributed to ${short(d.attributed_to)}`:""}</p>)}</div>}<div className="mt-4 grid gap-3">{plan.areas.map(area=><div key={area.id} className="rounded-lg border p-3"><div className="flex flex-wrap gap-2"><h3 className="text-sm font-semibold">{area.title}</h3>{area.depends_on?.map(x=><Badge key={x}>after {x}</Badge>)}</div><p className="mt-1 text-xs text-[var(--muted)]">{area.rationale}</p><p className="mt-2 text-xs font-semibold">Acceptance questions</p><ul className="mt-1 list-disc pl-5 text-xs">{area.acceptance_questions.map(x=><li key={x}>{x}</li>)}</ul><p className="mt-2 text-xs font-semibold">Required evidence</p><ul className="mt-1 list-disc pl-5 text-xs">{area.required_evidence.map(x=><li key={x.kind}>{x.description}</li>)}</ul><details className="mt-2 text-xs"><summary className="cursor-pointer">{area.paths.length} exact changed paths</summary><div className="mt-1 font-mono">{area.paths.map(x=><p key={x}>{x}</p>)}</div></details><p className="mt-2 text-xs"><strong>Complete when:</strong> {area.completion_rule}</p></div>)}</div><p className="mt-4 text-xs"><strong>Whole-plan completion:</strong> {plan.completion_rule}</p><p className="mt-2 text-xs text-[var(--muted)]">{plan.authority}</p></details>)}</div>}
+          </Card>
           <PullPrivacyReview repositoryID={repositoryID} pullRequestID={pullRequestID} sourceRevision={pull.source_commit_id} targetRevision={pull.target_commit_id} participant={participant} />
           <PullLocalizationReview repositoryID={repositoryID} pullRequestID={pullRequestID} />
           <PullPerformanceEvaluations repositoryID={repositoryID} pullRequestID={pullRequestID} />

@@ -3,6 +3,12 @@
 Notes on how this project fits together. Mostly empty for now — things get
 written down here as they're decided, not before.
 
+## Revision-exact review plans
+
+Pull authors and current repository owners can publish a review plan before approvals accumulate through `POST /repositories/{id}/pulls/{pull_id}/review-plans`; all repository readers can inspect its immutable history through the matching `GET` route and the pull page. Each version freezes the exact source and target commits, declared pull intent, changed paths, target-branch required checks, inferred risks and affected security, privacy, accessibility, or interface commitments, then breaks that context into review areas with acceptance questions, required evidence, dependencies, accountable current ownership, and explicit completion rules.
+
+The server derives changed-code scope and policy rather than trusting caller projections. Paths that cross specialist areas stay visible as overlapping scope, absent accountability remains missing ownership, and a later source or target movement marks every affected historical plan stale with creator attribution instead of silently carrying it forward as reviewed. The plan is coordination context only: it grants no repository, evidence, review, approval, merge, policy, commitment, or disclosure authority, and generic approvals do not complete its areas.
+
 ## Versioned software provenance policy
 
 Repository and organization owners publish acceptable-origin and licensing rules through `/repositories/{id}/provenance-policies` and `/organizations/{id}/provenance-policies`; collaborators use the matching `/provenance` workspace before accepting source, generated code, assets, models, datasets, packages, or build inputs. Immutable revisions retain permitted and prohibited licenses, origins, required attribution and attestations, review owners, distribution contexts, contributor/agent/package/release and private or federated boundary links, and narrow owner-attributed exceptions with follow-up work and expiry. Projection reports unknown licenses, conflicting terms, missing owners, and exceptions approaching expiry instead of treating gaps as approval. The record grants no Git, contribution, package, release, agent, federation, or distribution authority. Storage defaults beneath `$PROVENANCE_POLICY_STORAGE_ROOT` (`provenance-policies`).
