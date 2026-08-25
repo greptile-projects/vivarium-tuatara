@@ -1,6 +1,7 @@
 package provenanceassessments
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -53,5 +54,44 @@ func TestCandidateOrGraphStalenessAlwaysClearsReadiness(t *testing.T) {
 		if getErr != nil || projected.Ready || !projected.Stale {
 			t.Fatalf("%s stale assessment = %#v, %v", name, projected, getErr)
 		}
+	}
+}
+
+func TestOwnerLinksCleanRoomRepairWithFrozenContext(t *testing.T) {
+	s, _ := New(t.TempDir())
+	revision := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	a, err := s.Create(Assessment{RequestID: "assessment", RepositoryID: "repo", Candidate: Candidate{Kind: "pull_request", ID: "pull", Revision: revision}, GraphID: "graph", GraphDigest: "digest", PolicyID: "policy", PolicyVersion: 3, CreatedBy: "author", Findings: []Finding{{ID: "origin", Kind: "unattributed_material", Severity: "blocking", MaterialKind: "source", Summary: "origin missing", Obligations: []string{"preserve notice"}, PolicyRuleDigest: "rule"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := Current{CandidateRevision: revision, GraphDigest: "digest", PolicyVersion: 3, OwnerIDs: map[string]bool{"owner": true}, DependencyRevisions: map[string]string{}, ToolRevisions: map[string]string{}, PolicyRuleDigests: map[string]string{"source": "rule"}}
+	repair := Repair{RequestID: "repair", WorkDigest: strings.Repeat("d", 64), FindingID: "origin", AffectedRevision: revision, Strategy: "reimplement", PermittedEvidence: []EvidenceReference{{Kind: "specification", ResourceID: "public-api", Revision: revision, Access: "repository"}}, AcceptanceCriteria: []string{"replacement has independently attributable origin"}, CleanRoom: true, ProposalID: "proposal", TaskIDs: []string{"task"}}
+	out, err := s.LinkRepair("repo", a.ID, "owner", a.Version, repair, current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := out.Repairs[0]
+	if got.PolicyID != "policy" || got.PolicyVersion != 3 || got.PolicyRuleDigest != "rule" || got.AuthorizedBy != "owner" || len(got.Obligations) != 1 || got.CreatedAt.IsZero() {
+		t.Fatalf("repair did not freeze context: %#v", got)
+	}
+	if replay, replayErr := s.LinkRepair("repo", a.ID, "owner", a.Version, repair, current); replayErr != nil || replay.Version != out.Version {
+		t.Fatalf("exact stale-version retry did not reconcile: %#v, %v", replay, replayErr)
+	}
+	changed := repair
+	changed.WorkDigest = strings.Repeat("c", 64)
+	if _, changedErr := s.LinkRepair("repo", a.ID, "owner", out.Version, changed, current); changedErr != ErrConflict {
+		t.Fatalf("changed request identity reuse = %v", changedErr)
+	}
+	_, err = s.LinkRepair("repo", a.ID, "owner", out.Version, Repair{RequestID: "restricted", WorkDigest: strings.Repeat("e", 64), FindingID: "origin", AffectedRevision: revision, Strategy: "reimplement", PermittedEvidence: []EvidenceReference{{Kind: "source", ResourceID: "restricted-origin", Revision: revision, Access: "restricted"}}, AcceptanceCriteria: []string{"clean"}, CleanRoom: true, ProposalID: "proposal-2", TaskIDs: []string{"task-2"}}, current)
+	if err != ErrInvalid {
+		t.Fatalf("clean room admitted restricted evidence: %v", err)
+	}
+	restricted, err := s.LinkRepair("repo", a.ID, "owner", out.Version, Repair{RequestID: "governed", WorkDigest: strings.Repeat("f", 64), FindingID: "origin", AffectedRevision: revision, Strategy: "obtain_permission", PermittedEvidence: []EvidenceReference{{Kind: "legal_record", ResourceID: "confidential-case-123", Revision: revision, Access: "restricted"}}, AcceptanceCriteria: []string{"permission retained"}, ProposalID: "proposal-4", TaskIDs: []string{"task-4"}}, current)
+	if err != nil || restricted.Repairs[1].PermittedEvidence[0].ResourceID == "confidential-case-123" || !strings.HasPrefix(restricted.Repairs[1].PermittedEvidence[0].ResourceID, "restricted:") {
+		t.Fatalf("restricted evidence identity was disclosed: %#v, %v", restricted.Repairs, err)
+	}
+	_, err = s.LinkRepair("repo", a.ID, "reviewer", restricted.Version, Repair{RequestID: "unauthorized", WorkDigest: strings.Repeat("a", 64), FindingID: "origin", AffectedRevision: revision, Strategy: "remove", AcceptanceCriteria: []string{"removed"}, ProposalID: "proposal-3", TaskIDs: []string{"task-3"}}, current)
+	if err != ErrForbidden {
+		t.Fatalf("reviewer gained repair authority: %v", err)
 	}
 }

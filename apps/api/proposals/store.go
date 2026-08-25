@@ -106,6 +106,9 @@ type ReasoningOrigin struct {
 	PropagationCampaignID          string                     `json:"propagation_campaign_id,omitempty"`
 	PropagationTargetID            string                     `json:"propagation_target_id,omitempty"`
 	PropagationAssessmentID        string                     `json:"propagation_assessment_id,omitempty"`
+	ProvenanceAssessmentID         string                     `json:"provenance_assessment_id,omitempty"`
+	ProvenanceFindingID            string                     `json:"provenance_finding_id,omitempty"`
+	ProvenanceRepairRequestID      string                     `json:"provenance_repair_request_id,omitempty"`
 }
 
 type ReasoningItem struct {
@@ -417,8 +420,9 @@ func (s *Store) CreateImplementation(input ImplementationInput) (Proposal, []Tas
 	isSecurityFinding := validID(input.Origin.SecurityFindingID) && input.Origin.SecurityFindingVersion > 0 && validThreatModelReference(input.Origin.ThreatModelID) && input.Origin.ThreatModelVersion > 0
 	isRegression := validID(input.Origin.RegressionInvestigationID) && validID(input.Origin.RegressionResponseID)
 	isPropagation := validReliabilityReference(input.Origin.PropagationCampaignID) && strings.TrimSpace(input.Origin.PropagationTargetID) != "" && validReliabilityReference(input.Origin.PropagationAssessmentID) && input.Origin.AssessmentVersion > 0
+	isProvenance := validID(input.Origin.ProvenanceAssessmentID) && input.Origin.AssessmentVersion > 0 && strings.TrimSpace(input.Origin.ProvenanceFindingID) != "" && validID(input.Origin.ProvenanceRepairRequestID)
 	originCount := 0
-	for _, present := range []bool{isAssessment, isAccessibility, isDecision, isIssue, isGovernance, isRoadmap, isDataObservation, isReliability, isRecovery, isSupport, isDebugging, isDesign, isExploratory, isSecurityFinding, isRegression, isPropagation} {
+	for _, present := range []bool{isAssessment, isAccessibility, isDecision, isIssue, isGovernance, isRoadmap, isDataObservation, isReliability, isRecovery, isSupport, isDebugging, isDesign, isExploratory, isSecurityFinding, isRegression, isPropagation, isProvenance} {
 		if present {
 			originCount++
 		}
@@ -493,6 +497,18 @@ func (s *Store) CreateImplementation(input ImplementationInput) (Proposal, []Tas
 			for i, task := range r.Tasks {
 				value := input.Tasks[i]
 				if task.Title != strings.TrimSpace(value.Title) || task.Outcome != strings.TrimSpace(value.Outcome) || task.Risk != strings.TrimSpace(value.Risk) || task.VerificationPlan != strings.TrimSpace(value.VerificationPlan) || task.Assignment == nil || task.Assignment.AssigneeType != value.AssigneeType || task.Assignment.AssigneeID != value.AssigneeID || (i > 0 && value.DependsOnPrevious != (len(task.DependencyIDs) == 1 && task.DependencyIDs[0] == r.Tasks[i-1].ID)) {
+					return Proposal{}, nil, ErrImplementationConflict
+				}
+			}
+			return r.Proposal, append([]Task(nil), r.Tasks...), nil
+		}
+		if isProvenance && r.Proposal.RepositoryID == input.RepositoryID && r.Proposal.Reasoning != nil && r.Proposal.Reasoning.ProvenanceAssessmentID == input.Origin.ProvenanceAssessmentID && r.Proposal.Reasoning.ProvenanceRepairRequestID == input.Origin.ProvenanceRepairRequestID {
+			if !reflect.DeepEqual(*r.Proposal.Reasoning, input.Origin) || r.Proposal.Title != title || r.Proposal.Body != body || len(r.Tasks) != len(input.Tasks) {
+				return Proposal{}, nil, ErrImplementationConflict
+			}
+			for i, task := range r.Tasks {
+				value := input.Tasks[i]
+				if task.Title != strings.TrimSpace(value.Title) || task.Outcome != strings.TrimSpace(value.Outcome) || task.Risk != strings.TrimSpace(value.Risk) || task.VerificationPlan != strings.TrimSpace(value.VerificationPlan) || task.Assignment == nil || task.Assignment.AssigneeType != value.AssigneeType || (value.AssigneeID != "" && task.Assignment.AssigneeID != value.AssigneeID) || (i > 0 && value.DependsOnPrevious != (len(task.DependencyIDs) == 1 && task.DependencyIDs[0] == r.Tasks[i-1].ID)) {
 					return Proposal{}, nil, ErrImplementationConflict
 				}
 			}

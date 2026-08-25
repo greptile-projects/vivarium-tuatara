@@ -13,6 +13,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/changestacks"
 	packages "github.com/greptile-projects/vivarium-tuatara/apps/api/packages"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/provenanceassessments"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/provenancegraphs"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/provenancepolicies"
@@ -33,8 +34,19 @@ type provenanceAssessmentEventInput struct {
 	ExpectedVersion int                         `json:"expected_version"`
 	Event           provenanceassessments.Event `json:"event"`
 }
+type provenanceRepairInput struct {
+	ExpectedVersion    int                                                `json:"expected_version"`
+	RequestID          string                                             `json:"request_id"`
+	FindingID          string                                             `json:"finding_id"`
+	Strategy           string                                             `json:"strategy"`
+	PermittedEvidence  []provenanceassessments.EvidenceReference          `json:"permitted_evidence"`
+	AcceptanceCriteria []string                                           `json:"acceptance_criteria"`
+	CleanRoom          bool                                               `json:"clean_room"`
+	Title              string                                             `json:"title"`
+	Tasks              []struct{ Title, AssigneeType, AssigneeID string } `json:"tasks"`
+}
 
-func registerProvenanceAssessmentRoutes(mux *http.ServeMux, repos *repositories.Store, credentials *auth.Store, store *provenanceassessments.Store, graphs *provenancegraphs.Store, policies *provenancepolicies.Store, pulls *pullrequests.Store, stackStore *changestacks.Store, releaseStore *releases.Store, packageStore *packages.Store) {
+func registerProvenanceAssessmentRoutes(mux *http.ServeMux, repos *repositories.Store, credentials *auth.Store, store *provenanceassessments.Store, graphs *provenancegraphs.Store, policies *provenancepolicies.Store, pulls *pullrequests.Store, stackStore *changestacks.Store, releaseStore *releases.Store, packageStore *packages.Store, proposalStore *proposals.Store) {
 	current := func(a provenanceassessments.Assessment) provenanceassessments.Current {
 		return provenanceAssessmentCurrent(a, repos, graphs, policies, pulls, stackStore, releaseStore, packageStore)
 	}
@@ -105,6 +117,129 @@ func registerProvenanceAssessmentRoutes(mux *http.ServeMux, repos *repositories.
 		out, e := store.AddEvent(r.PathValue("id"), a.ID, actor.UserID, typ, in.ExpectedVersion, in.Event, current(a))
 		writeProvenanceAssessment(w, out, e, 200)
 	})
+	if proposalStore != nil {
+		mux.HandleFunc("POST /repositories/{id}/provenance-assessments/{assessment_id}/repairs", func(w http.ResponseWriter, r *http.Request) {
+			actor, _, ok := authorizeRepositoryParticipant(w, r, repos, credentials, r.PathValue("id"), "repositories:write")
+			if !ok {
+				return
+			}
+			if actor.AgentID != "" {
+				writeAPIError(w, 403, "human_provenance_owner_required", "only a current human provenance owner may authorize repair work")
+				return
+			}
+			var in provenanceRepairInput
+			if decodeJSON(r, &in) != nil || len(in.Tasks) == 0 {
+				writeAPIError(w, 400, "invalid_provenance_repair", "a strategy, permitted evidence, acceptance criteria, and owned tasks are required")
+				return
+			}
+			if strings.TrimSpace(in.RequestID) == "" || strings.TrimSpace(in.Title) == "" || len(in.AcceptanceCriteria) == 0 || !containsFold([]string{"replace", "reimplement", "remove", "obtain_permission", "isolate"}, in.Strategy) {
+				writeAPIError(w, 400, "invalid_provenance_repair", "a supported repair strategy and complete work definition are required")
+				return
+			}
+			for _, evidence := range in.PermittedEvidence {
+				if evidence.Kind == "" || evidence.ResourceID == "" || evidence.Revision == "" || (evidence.Access != "repository" && evidence.Access != "restricted") || (in.CleanRoom && evidence.Access == "restricted") {
+					writeAPIError(w, 400, "invalid_provenance_repair_evidence", "clean-room work may not receive restricted evidence")
+					return
+				}
+			}
+			a, err := store.Get(r.PathValue("id"), r.PathValue("assessment_id"), provenanceassessments.Current{})
+			if err != nil {
+				writeProvenanceAssessment(w, a, err, 200)
+				return
+			}
+			live := current(a)
+			if !live.OwnerIDs[actor.UserID] {
+				writeAPIError(w, 403, "provenance_owner_required", "only a current human provenance owner may authorize repair work")
+				return
+			}
+			projected, err := store.Get(a.RepositoryID, a.ID, live)
+			if err != nil {
+				writeAPIError(w, 409, "provenance_assessment_conflict", "the assessment changed; reload before authorizing work")
+				return
+			}
+			workBytes, _ := json.Marshal(struct {
+				FindingID string                                    `json:"finding_id"`
+				Strategy  string                                    `json:"strategy"`
+				Evidence  []provenanceassessments.EvidenceReference `json:"evidence"`
+				Criteria  []string                                  `json:"criteria"`
+				CleanRoom bool                                      `json:"clean_room"`
+				Title     string                                    `json:"title"`
+				Tasks     any                                       `json:"tasks"`
+			}{in.FindingID, in.Strategy, in.PermittedEvidence, in.AcceptanceCriteria, in.CleanRoom, in.Title, in.Tasks})
+			workSum := sha256.Sum256(workBytes)
+			workDigest := hex.EncodeToString(workSum[:])
+			for _, prior := range projected.Repairs {
+				if prior.RequestID != in.RequestID {
+					continue
+				}
+				retry := provenanceassessments.Repair{RequestID: in.RequestID, WorkDigest: workDigest, FindingID: in.FindingID, AffectedRevision: a.Candidate.Revision, Strategy: in.Strategy, PermittedEvidence: in.PermittedEvidence, AcceptanceCriteria: in.AcceptanceCriteria, CleanRoom: in.CleanRoom, ProposalID: prior.ProposalID, TaskIDs: prior.TaskIDs}
+				updated, linkErr := store.LinkRepair(a.RepositoryID, a.ID, actor.UserID, in.ExpectedVersion, retry, live)
+				if linkErr != nil {
+					writeProvenanceAssessment(w, updated, linkErr, 200)
+					return
+				}
+				proposal, proposalErr := proposalStore.Get(a.RepositoryID, prior.ProposalID)
+				tasks, tasksErr := proposalStore.ListTasks(a.RepositoryID, prior.ProposalID)
+				if proposalErr != nil || tasksErr != nil {
+					writeAPIError(w, 500, "provenance_repair_unavailable", "retained ordinary repair work could not be read")
+					return
+				}
+				writeJSON(w, 200, map[string]any{"assessment": updated, "repair": prior, "proposal": proposal, "tasks": tasks, "authority_note": "contributors continue through ordinary branches, forks, sessions, workspaces, reviews, checks, and release controls"})
+				return
+			}
+			var finding *provenanceassessments.Finding
+			for i := range projected.Findings {
+				if projected.Findings[i].ID == in.FindingID {
+					finding = &projected.Findings[i]
+					break
+				}
+			}
+			if finding == nil || !finding.Current {
+				writeAPIError(w, 409, "provenance_finding_stale", "repair work must bind a current provenance finding")
+				return
+			}
+			criteria := strings.Join(in.AcceptanceCriteria, "; ")
+			evidenceIDs := make([]string, len(in.PermittedEvidence))
+			for i, evidence := range in.PermittedEvidence {
+				if evidence.Access == "restricted" {
+					evidenceIDs[i] = "restricted evidence (identity withheld; separately governed access required)"
+				} else {
+					evidenceIDs[i] = evidence.Kind + ":" + evidence.ResourceID + "@" + evidence.Revision + " (repository)"
+				}
+			}
+			boundary := "Only the listed evidence may be used."
+			if in.CleanRoom {
+				boundary = "Clean-room boundary: restricted evidence is excluded; implementers may use only the listed repository evidence."
+			}
+			tasks := make([]proposals.ImplementationTaskInput, len(in.Tasks))
+			for i, task := range in.Tasks {
+				assignee := task.AssigneeID
+				if task.AssigneeType == "human" && assignee == "" {
+					assignee = actor.UserID
+				}
+				tasks[i] = proposals.ImplementationTaskInput{Title: task.Title, Outcome: criteria, Risk: "Unresolved " + finding.Kind + " at " + a.Candidate.Revision + ". " + boundary, VerificationPlan: "Prove the acceptance criteria without rewriting original authorship: " + criteria, AssigneeType: task.AssigneeType, AssigneeID: assignee, DependsOnPrevious: i > 0}
+			}
+			digest := sha256.Sum256([]byte(a.ID + "\x00" + in.RequestID))
+			origin := proposals.ReasoningOrigin{ProvenanceAssessmentID: a.ID, ProvenanceFindingID: finding.ID, ProvenanceRepairRequestID: hex.EncodeToString(digest[:16]), AssessmentVersion: a.Version, Revision: a.Candidate.Revision, SelectedItemIDs: []string{finding.ID}, Items: []proposals.ReasoningItem{{ID: finding.ID, Kind: "provenance_finding", Summary: finding.Summary, Status: finding.Severity}}, AnalysisStatus: "authorized_provenance_repair"}
+			body := "Repair provenance finding " + finding.ID + " using strategy " + in.Strategy + ".\n\nAffected revision: " + a.Candidate.Revision + "\nPolicy: " + a.PolicyID + " revision " + fmt.Sprint(a.PolicyVersion) + "\nObligations: " + strings.Join(finding.Obligations, "; ") + "\nPermitted evidence: " + strings.Join(evidenceIDs, "; ") + "\nAcceptance criteria: " + criteria + "\n" + boundary + "\n\nThis handoff grants no Git, fork, session, workspace, review, merge, disclosure, permission, release, or distribution authority."
+			p, createdTasks, err := proposalStore.CreateImplementation(proposals.ImplementationInput{RepositoryID: a.RepositoryID, ActorID: actor.UserID, Title: in.Title, Body: body, Origin: origin, Tasks: tasks})
+			if err != nil {
+				writeAPIError(w, 409, "provenance_repair_publication_failed", "repair work could not be published")
+				return
+			}
+			ids := make([]string, len(createdTasks))
+			for i := range createdTasks {
+				ids[i] = createdTasks[i].ID
+			}
+			repair := provenanceassessments.Repair{RequestID: in.RequestID, WorkDigest: workDigest, FindingID: finding.ID, AffectedRevision: a.Candidate.Revision, Strategy: in.Strategy, PermittedEvidence: in.PermittedEvidence, AcceptanceCriteria: in.AcceptanceCriteria, CleanRoom: in.CleanRoom, ProposalID: p.ID, TaskIDs: ids}
+			updated, err := store.LinkRepair(a.RepositoryID, a.ID, actor.UserID, in.ExpectedVersion, repair, live)
+			if err != nil {
+				writeProvenanceAssessment(w, updated, err, 201)
+				return
+			}
+			writeJSON(w, 201, map[string]any{"assessment": updated, "repair": updated.Repairs[len(updated.Repairs)-1], "proposal": p, "tasks": createdTasks, "authority_note": "contributors continue through ordinary branches, forks, sessions, workspaces, reviews, checks, and release controls"})
+		})
+	}
 }
 
 func provenanceAssessmentCurrent(a provenanceassessments.Assessment, repos *repositories.Store, graphs *provenancegraphs.Store, policies *provenancepolicies.Store, pulls *pullrequests.Store, stackStore *changestacks.Store, releaseStore *releases.Store, packageStore *packages.Store) provenanceassessments.Current {

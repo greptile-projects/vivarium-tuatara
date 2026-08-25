@@ -1515,7 +1515,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		provenanceAssessmentStore, _ = provenanceassessments.New(root)
 	}
 	if authStore != nil && repositoryCatalog != nil && provenanceAssessmentStore != nil && provenanceGraphStore != nil && provenancePolicyStore != nil {
-		registerProvenanceAssessmentRoutes(mux, repositoryCatalog, authStore, provenanceAssessmentStore, provenanceGraphStore, provenancePolicyStore, pullRequestStore, changeStackStore, releaseStore, packageStore)
+		registerProvenanceAssessmentRoutes(mux, repositoryCatalog, authStore, provenanceAssessmentStore, provenanceGraphStore, provenancePolicyStore, pullRequestStore, changeStackStore, releaseStore, packageStore, proposalStore)
 		if pullRequestStore != nil {
 			pullRequestStore.ConfigureProvenanceReadiness(func(p pullrequests.PullRequest, _ []pullrequests.FileChange) (any, []pullrequests.ReadinessBlocker, error) {
 				values, err := provenanceAssessmentStore.List(p.RepositoryID, func(a provenanceassessments.Assessment) provenanceassessments.Current {

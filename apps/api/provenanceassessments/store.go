@@ -3,6 +3,7 @@ package provenanceassessments
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -62,6 +63,31 @@ type Event struct {
 	ActorType          string     `json:"actor_type"`
 	CreatedAt          time.Time  `json:"created_at"`
 }
+type EvidenceReference struct {
+	Kind       string `json:"kind"`
+	ResourceID string `json:"resource_id"`
+	Revision   string `json:"revision"`
+	Access     string `json:"access"`
+}
+type Repair struct {
+	ID                 string              `json:"id"`
+	RequestID          string              `json:"request_id"`
+	WorkDigest         string              `json:"work_digest"`
+	FindingID          string              `json:"finding_id"`
+	AffectedRevision   string              `json:"affected_revision"`
+	Strategy           string              `json:"strategy"`
+	PermittedEvidence  []EvidenceReference `json:"permitted_evidence"`
+	PolicyID           string              `json:"policy_id"`
+	PolicyVersion      int                 `json:"policy_version"`
+	PolicyRuleDigest   string              `json:"policy_rule_digest,omitempty"`
+	Obligations        []string            `json:"obligations,omitempty"`
+	AcceptanceCriteria []string            `json:"acceptance_criteria"`
+	CleanRoom          bool                `json:"clean_room"`
+	ProposalID         string              `json:"proposal_id"`
+	TaskIDs            []string            `json:"task_ids"`
+	AuthorizedBy       string              `json:"authorized_by"`
+	CreatedAt          time.Time           `json:"created_at"`
+}
 type Assessment struct {
 	ID            string    `json:"id"`
 	RequestID     string    `json:"request_id"`
@@ -74,6 +100,7 @@ type Assessment struct {
 	Version       int       `json:"version"`
 	Findings      []Finding `json:"findings"`
 	Events        []Event   `json:"events"`
+	Repairs       []Repair  `json:"repairs"`
 	Ready         bool      `json:"ready"`
 	Stale         bool      `json:"stale"`
 	CreatedBy     string    `json:"created_by"`
@@ -194,6 +221,71 @@ func (s *Store) AddEvent(repo, id, actor, actorType string, expected int, ev Eve
 	})
 	return project(out, current), e
 }
+func (s *Store) LinkRepair(repo, id, actor string, expected int, repair Repair, current Current) (Assessment, error) {
+	var out Assessment
+	e := s.lock(func() error {
+		for i := range repair.PermittedEvidence {
+			if repair.PermittedEvidence[i].Access == "restricted" && !strings.HasPrefix(repair.PermittedEvidence[i].ResourceID, "restricted:") {
+				sum := sha256.Sum256([]byte(repair.PermittedEvidence[i].Kind + "\x00" + repair.PermittedEvidence[i].ResourceID + "\x00" + repair.PermittedEvidence[i].Revision))
+				repair.PermittedEvidence[i].ResourceID = "restricted:" + hex.EncodeToString(sum[:])
+			}
+		}
+		a, x := s.read(id)
+		if x != nil || a.RepositoryID != repo {
+			if x != nil {
+				return x
+			}
+			return ErrNotFound
+		}
+		for _, prior := range a.Repairs {
+			if prior.RequestID == repair.RequestID {
+				if repairEqual(prior, repair, actor) {
+					out = a
+					return nil
+				}
+				return ErrConflict
+			}
+		}
+		if a.Version != expected || !current.OwnerIDs[actor] || current.CandidateRevision != a.Candidate.Revision {
+			if a.Version != expected {
+				return ErrConflict
+			}
+			return ErrForbidden
+		}
+		var finding *Finding
+		for i := range a.Findings {
+			if a.Findings[i].ID == repair.FindingID {
+				finding = &a.Findings[i]
+				break
+			}
+		}
+		if finding == nil || repair.RequestID == "" || len(repair.WorkDigest) != 64 || repair.AffectedRevision != a.Candidate.Revision || !one(repair.Strategy, "replace", "reimplement", "remove", "obtain_permission", "isolate") || len(repair.AcceptanceCriteria) == 0 || repair.ProposalID == "" || len(repair.TaskIDs) == 0 {
+			return ErrInvalid
+		}
+		for _, criterion := range repair.AcceptanceCriteria {
+			if strings.TrimSpace(criterion) == "" || len(criterion) > 1000 {
+				return ErrInvalid
+			}
+		}
+		for _, evidence := range repair.PermittedEvidence {
+			if evidence.Kind == "" || evidence.ResourceID == "" || evidence.Revision == "" || !one(evidence.Access, "repository", "restricted") {
+				return ErrInvalid
+			}
+			if repair.CleanRoom && evidence.Access == "restricted" {
+				return ErrInvalid
+			}
+		}
+		repair.ID, repair.PolicyID, repair.PolicyVersion, repair.PolicyRuleDigest = newID(), a.PolicyID, a.PolicyVersion, finding.PolicyRuleDigest
+		repair.Obligations = append([]string{}, finding.Obligations...)
+		repair.AuthorizedBy, repair.CreatedAt = actor, s.now()
+		a.Repairs = append(a.Repairs, repair)
+		a.Version++
+		a.UpdatedAt = repair.CreatedAt
+		out = a
+		return s.write(a)
+	})
+	return project(out, current), e
+}
 func (s *Store) Get(repo, id string, current Current) (Assessment, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -276,6 +368,13 @@ func eventEqual(v, e Event, actor, actorType string) bool {
 	e.ActorID = actor
 	e.ActorType = actorType
 	e.CreatedAt = v.CreatedAt
+	b, _ := json.Marshal(e)
+	c, _ := json.Marshal(v)
+	return string(b) == string(c)
+}
+func repairEqual(v, e Repair, actor string) bool {
+	e.ID, e.PolicyID, e.PolicyVersion, e.PolicyRuleDigest = v.ID, v.PolicyID, v.PolicyVersion, v.PolicyRuleDigest
+	e.Obligations, e.AuthorizedBy, e.CreatedAt = append([]string{}, v.Obligations...), actor, v.CreatedAt
 	b, _ := json.Marshal(e)
 	c, _ := json.Marshal(v)
 	return string(b) == string(c)
