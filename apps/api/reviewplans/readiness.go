@@ -102,7 +102,8 @@ func ProjectReadiness(plan *Plan, assignments []Assignment, work []WorkEntry, re
 		for _, finding := range row.Findings {
 			var latest *FindingResolution
 			for _, resolution := range resolutions {
-				if resolution.FindingID == finding.ID && resolution.CandidateRevision == source && slices.Contains([]string{"resolved", "supersede", "accepted_risk", "exception"}, resolution.Action) && (latest == nil || resolution.CreatedAt.After(latest.CreatedAt)) {
+				stateAction := slices.Contains([]string{"accept", "defer", "supersede", "resolved", "accepted_risk", "exception", "remains_applicable"}, resolution.Action)
+				if resolution.FindingID == finding.ID && resolution.CandidateRevision == source && stateAction && (latest == nil || resolution.CreatedAt.After(latest.CreatedAt)) {
 					copy := resolution
 					latest = &copy
 				}
