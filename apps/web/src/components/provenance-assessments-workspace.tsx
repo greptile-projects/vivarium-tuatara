@@ -24,6 +24,7 @@ type Repair = {
   strategy: string;
   clean_room: boolean;
   proposal_id: string;
+  state: "reserved" | "published";
   acceptance_criteria: string[];
 };
 type Assessment = {
@@ -334,12 +335,18 @@ export function ProvenanceAssessmentsWorkspace({
               <Badge tone="success">{r.strategy.replaceAll("_", " ")}</Badge>{" "}
               {r.clean_room && <Badge>clean room</Badge>}
               <p className="mt-2">{r.acceptance_criteria.join(" · ")}</p>
-              <Link
-                className="text-[var(--brand)]"
-                href={`/proposals/${repositoryID}/${r.proposal_id}`}
-              >
-                Open ordinary repair work
-              </Link>
+              {r.state === "published" ? (
+                <Link
+                  className="text-[var(--brand)]"
+                  href={`/proposals/${repositoryID}/${r.proposal_id}`}
+                >
+                  Open ordinary repair work
+                </Link>
+              ) : (
+                <p className="text-[var(--muted)]">
+                  Work publication is reserved and can be retried safely.
+                </p>
+              )}
             </div>
           ))}
           <form

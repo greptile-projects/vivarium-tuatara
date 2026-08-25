@@ -85,6 +85,8 @@ type Repair struct {
 	CleanRoom          bool                `json:"clean_room"`
 	ProposalID         string              `json:"proposal_id"`
 	TaskIDs            []string            `json:"task_ids"`
+	State              string              `json:"state"`
+	AssessmentVersion  int                 `json:"assessment_version"`
 	AuthorizedBy       string              `json:"authorized_by"`
 	CreatedAt          time.Time           `json:"created_at"`
 }
@@ -221,8 +223,9 @@ func (s *Store) AddEvent(repo, id, actor, actorType string, expected int, ev Eve
 	})
 	return project(out, current), e
 }
-func (s *Store) LinkRepair(repo, id, actor string, expected int, repair Repair, current Current) (Assessment, error) {
+func (s *Store) LinkRepair(repo, id, actor string, expected int, repair Repair, resolveCurrent func() Current) (Assessment, error) {
 	var out Assessment
+	var resolved Current
 	e := s.lock(func() error {
 		for i := range repair.PermittedEvidence {
 			if repair.PermittedEvidence[i].Access == "restricted" && !strings.HasPrefix(repair.PermittedEvidence[i].ResourceID, "restricted:") {
@@ -237,13 +240,31 @@ func (s *Store) LinkRepair(repo, id, actor string, expected int, repair Repair, 
 			}
 			return ErrNotFound
 		}
+		if resolveCurrent == nil {
+			return ErrInvalid
+		}
+		current := resolveCurrent()
+		resolved = current
 		for _, prior := range a.Repairs {
 			if prior.RequestID == repair.RequestID {
-				if repairEqual(prior, repair, actor) {
+				if !repairBaseEqual(prior, repair, actor) {
+					return ErrConflict
+				}
+				if repair.ProposalID == "" || prior.State == "published" {
 					out = a
 					return nil
 				}
-				return ErrConflict
+				for i := range a.Repairs {
+					if a.Repairs[i].RequestID == repair.RequestID {
+						a.Repairs[i].ProposalID = repair.ProposalID
+						a.Repairs[i].TaskIDs = append([]string{}, repair.TaskIDs...)
+						a.Repairs[i].State = "published"
+					}
+				}
+				a.Version++
+				a.UpdatedAt = s.now()
+				out = a
+				return s.write(a)
 			}
 		}
 		if a.Version != expected || !current.OwnerIDs[actor] || current.CandidateRevision != a.Candidate.Revision {
@@ -259,7 +280,8 @@ func (s *Store) LinkRepair(repo, id, actor string, expected int, repair Repair, 
 				break
 			}
 		}
-		if finding == nil || repair.RequestID == "" || len(repair.WorkDigest) != 64 || repair.AffectedRevision != a.Candidate.Revision || !one(repair.Strategy, "replace", "reimplement", "remove", "obtain_permission", "isolate") || len(repair.AcceptanceCriteria) == 0 || repair.ProposalID == "" || len(repair.TaskIDs) == 0 {
+		projected := project(a, current)
+		if finding == nil || !currentFinding(projected, repair.FindingID) || repair.RequestID == "" || len(repair.WorkDigest) != 64 || repair.AffectedRevision != a.Candidate.Revision || !one(repair.Strategy, "replace", "reimplement", "remove", "obtain_permission", "isolate") || len(repair.AcceptanceCriteria) == 0 || repair.ProposalID != "" || len(repair.TaskIDs) != 0 {
 			return ErrInvalid
 		}
 		for _, criterion := range repair.AcceptanceCriteria {
@@ -277,14 +299,14 @@ func (s *Store) LinkRepair(repo, id, actor string, expected int, repair Repair, 
 		}
 		repair.ID, repair.PolicyID, repair.PolicyVersion, repair.PolicyRuleDigest = newID(), a.PolicyID, a.PolicyVersion, finding.PolicyRuleDigest
 		repair.Obligations = append([]string{}, finding.Obligations...)
-		repair.AuthorizedBy, repair.CreatedAt = actor, s.now()
+		repair.AuthorizedBy, repair.CreatedAt, repair.State, repair.AssessmentVersion = actor, s.now(), "reserved", a.Version
 		a.Repairs = append(a.Repairs, repair)
 		a.Version++
 		a.UpdatedAt = repair.CreatedAt
 		out = a
 		return s.write(a)
 	})
-	return project(out, current), e
+	return project(out, resolved), e
 }
 func (s *Store) Get(repo, id string, current Current) (Assessment, error) {
 	s.mu.Lock()
@@ -372,12 +394,21 @@ func eventEqual(v, e Event, actor, actorType string) bool {
 	c, _ := json.Marshal(v)
 	return string(b) == string(c)
 }
-func repairEqual(v, e Repair, actor string) bool {
+func repairBaseEqual(v, e Repair, actor string) bool {
 	e.ID, e.PolicyID, e.PolicyVersion, e.PolicyRuleDigest = v.ID, v.PolicyID, v.PolicyVersion, v.PolicyRuleDigest
 	e.Obligations, e.AuthorizedBy, e.CreatedAt = append([]string{}, v.Obligations...), actor, v.CreatedAt
+	e.ProposalID, e.TaskIDs, e.State, e.AssessmentVersion = v.ProposalID, append([]string(nil), v.TaskIDs...), v.State, v.AssessmentVersion
 	b, _ := json.Marshal(e)
 	c, _ := json.Marshal(v)
 	return string(b) == string(c)
+}
+func currentFinding(a Assessment, id string) bool {
+	for _, finding := range a.Findings {
+		if finding.ID == id {
+			return finding.Current
+		}
+	}
+	return false
 }
 func one(v string, xs ...string) bool {
 	for _, x := range xs {

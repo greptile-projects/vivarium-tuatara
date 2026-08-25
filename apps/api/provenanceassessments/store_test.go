@@ -65,8 +65,17 @@ func TestOwnerLinksCleanRoomRepairWithFrozenContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	current := Current{CandidateRevision: revision, GraphDigest: "digest", PolicyVersion: 3, OwnerIDs: map[string]bool{"owner": true}, DependencyRevisions: map[string]string{}, ToolRevisions: map[string]string{}, PolicyRuleDigests: map[string]string{"source": "rule"}}
-	repair := Repair{RequestID: "repair", WorkDigest: strings.Repeat("d", 64), FindingID: "origin", AffectedRevision: revision, Strategy: "reimplement", PermittedEvidence: []EvidenceReference{{Kind: "specification", ResourceID: "public-api", Revision: revision, Access: "repository"}}, AcceptanceCriteria: []string{"replacement has independently attributable origin"}, CleanRoom: true, ProposalID: "proposal", TaskIDs: []string{"task"}}
-	out, err := s.LinkRepair("repo", a.ID, "owner", a.Version, repair, current)
+	repair := Repair{RequestID: "repair", WorkDigest: strings.Repeat("d", 64), FindingID: "origin", AffectedRevision: revision, Strategy: "reimplement", PermittedEvidence: []EvidenceReference{{Kind: "specification", ResourceID: "public-api", Revision: revision, Access: "repository"}}, AcceptanceCriteria: []string{"replacement has independently attributable origin"}, CleanRoom: true}
+	out, err := s.LinkRepair("repo", a.ID, "owner", a.Version, repair, func() Current { return current })
+	if err != nil {
+		t.Fatal(err)
+	}
+	published := repair
+	published.ProposalID, published.TaskIDs = "proposal", []string{"task"}
+	if _, eventErr := s.AddEvent("repo", a.ID, "owner", "human", out.Version, Event{RequestID: "concurrent-event", Kind: "challenge", FindingID: "origin", Body: "assessment changed after the durable work reservation"}, current); eventErr != nil {
+		t.Fatal(eventErr)
+	}
+	out, err = s.LinkRepair("repo", a.ID, "owner", out.Version, published, func() Current { return current })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,23 +83,23 @@ func TestOwnerLinksCleanRoomRepairWithFrozenContext(t *testing.T) {
 	if got.PolicyID != "policy" || got.PolicyVersion != 3 || got.PolicyRuleDigest != "rule" || got.AuthorizedBy != "owner" || len(got.Obligations) != 1 || got.CreatedAt.IsZero() {
 		t.Fatalf("repair did not freeze context: %#v", got)
 	}
-	if replay, replayErr := s.LinkRepair("repo", a.ID, "owner", a.Version, repair, current); replayErr != nil || replay.Version != out.Version {
+	if replay, replayErr := s.LinkRepair("repo", a.ID, "owner", a.Version, repair, func() Current { return current }); replayErr != nil || replay.Version != out.Version {
 		t.Fatalf("exact stale-version retry did not reconcile: %#v, %v", replay, replayErr)
 	}
 	changed := repair
 	changed.WorkDigest = strings.Repeat("c", 64)
-	if _, changedErr := s.LinkRepair("repo", a.ID, "owner", out.Version, changed, current); changedErr != ErrConflict {
+	if _, changedErr := s.LinkRepair("repo", a.ID, "owner", out.Version, changed, func() Current { return current }); changedErr != ErrConflict {
 		t.Fatalf("changed request identity reuse = %v", changedErr)
 	}
-	_, err = s.LinkRepair("repo", a.ID, "owner", out.Version, Repair{RequestID: "restricted", WorkDigest: strings.Repeat("e", 64), FindingID: "origin", AffectedRevision: revision, Strategy: "reimplement", PermittedEvidence: []EvidenceReference{{Kind: "source", ResourceID: "restricted-origin", Revision: revision, Access: "restricted"}}, AcceptanceCriteria: []string{"clean"}, CleanRoom: true, ProposalID: "proposal-2", TaskIDs: []string{"task-2"}}, current)
+	_, err = s.LinkRepair("repo", a.ID, "owner", out.Version, Repair{RequestID: "restricted", WorkDigest: strings.Repeat("e", 64), FindingID: "origin", AffectedRevision: revision, Strategy: "reimplement", PermittedEvidence: []EvidenceReference{{Kind: "source", ResourceID: "restricted-origin", Revision: revision, Access: "restricted"}}, AcceptanceCriteria: []string{"clean"}, CleanRoom: true}, func() Current { return current })
 	if err != ErrInvalid {
 		t.Fatalf("clean room admitted restricted evidence: %v", err)
 	}
-	restricted, err := s.LinkRepair("repo", a.ID, "owner", out.Version, Repair{RequestID: "governed", WorkDigest: strings.Repeat("f", 64), FindingID: "origin", AffectedRevision: revision, Strategy: "obtain_permission", PermittedEvidence: []EvidenceReference{{Kind: "legal_record", ResourceID: "confidential-case-123", Revision: revision, Access: "restricted"}}, AcceptanceCriteria: []string{"permission retained"}, ProposalID: "proposal-4", TaskIDs: []string{"task-4"}}, current)
+	restricted, err := s.LinkRepair("repo", a.ID, "owner", out.Version, Repair{RequestID: "governed", WorkDigest: strings.Repeat("f", 64), FindingID: "origin", AffectedRevision: revision, Strategy: "obtain_permission", PermittedEvidence: []EvidenceReference{{Kind: "legal_record", ResourceID: "confidential-case-123", Revision: revision, Access: "restricted"}}, AcceptanceCriteria: []string{"permission retained"}}, func() Current { return current })
 	if err != nil || restricted.Repairs[1].PermittedEvidence[0].ResourceID == "confidential-case-123" || !strings.HasPrefix(restricted.Repairs[1].PermittedEvidence[0].ResourceID, "restricted:") {
 		t.Fatalf("restricted evidence identity was disclosed: %#v, %v", restricted.Repairs, err)
 	}
-	_, err = s.LinkRepair("repo", a.ID, "reviewer", restricted.Version, Repair{RequestID: "unauthorized", WorkDigest: strings.Repeat("a", 64), FindingID: "origin", AffectedRevision: revision, Strategy: "remove", AcceptanceCriteria: []string{"removed"}, ProposalID: "proposal-3", TaskIDs: []string{"task-3"}}, current)
+	_, err = s.LinkRepair("repo", a.ID, "reviewer", restricted.Version, Repair{RequestID: "unauthorized", WorkDigest: strings.Repeat("a", 64), FindingID: "origin", AffectedRevision: revision, Strategy: "remove", AcceptanceCriteria: []string{"removed"}}, func() Current { return current })
 	if err != ErrForbidden {
 		t.Fatalf("reviewer gained repair authority: %v", err)
 	}
