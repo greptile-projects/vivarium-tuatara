@@ -65,7 +65,7 @@ func ProjectReadiness(plan *Plan, assignments []Assignment, work []WorkEntry, re
 		if !accepted {
 			row.UnresolvedGaps = append(row.UnresolvedGaps, "An accountable reviewer has not accepted this area.")
 		}
-		evidenceKinds := map[string]bool{}
+		inspected := []WorkCitation{}
 		acknowledged := map[string]bool{}
 		for _, entry := range work {
 			if entry.PlanID != plan.ID || entry.AreaID != area.ID || entry.SourceRevision != source || entry.TargetRevision != target {
@@ -73,7 +73,7 @@ func ProjectReadiness(plan *Plan, assignments []Assignment, work []WorkEntry, re
 			}
 			for _, citation := range entry.Citations {
 				row.EvidenceInspected = append(row.EvidenceInspected, citation)
-				evidenceKinds[citation.Kind] = true
+				inspected = append(inspected, citation)
 			}
 			if entry.Kind == "finding" {
 				row.Findings = append(row.Findings, entry)
@@ -84,7 +84,7 @@ func ProjectReadiness(plan *Plan, assignments []Assignment, work []WorkEntry, re
 			}
 		}
 		for _, required := range area.Evidence {
-			if required.Required && !inspectedEvidenceKind(required.Kind, evidenceKinds) {
+			if required.Required && !inspectedEvidenceKind(required.Kind, area, inspected) {
 				row.UnresolvedGaps = append(row.UnresolvedGaps, "Required "+required.Kind+" evidence has not been inspected.")
 			}
 		}
@@ -102,7 +102,7 @@ func ProjectReadiness(plan *Plan, assignments []Assignment, work []WorkEntry, re
 		for _, finding := range row.Findings {
 			var latest *FindingResolution
 			for _, resolution := range resolutions {
-				if resolution.FindingID == finding.ID && resolution.CandidateRevision == source && (latest == nil || resolution.CreatedAt.After(latest.CreatedAt)) {
+				if resolution.FindingID == finding.ID && resolution.CandidateRevision == source && slices.Contains([]string{"resolved", "supersede", "accepted_risk", "exception"}, resolution.Action) && (latest == nil || resolution.CreatedAt.After(latest.CreatedAt)) {
 					copy := resolution
 					latest = &copy
 				}
@@ -125,12 +125,20 @@ func ProjectReadiness(plan *Plan, assignments []Assignment, work []WorkEntry, re
 	return out
 }
 
-func inspectedEvidenceKind(required string, inspected map[string]bool) bool {
-	if inspected[required] || required == "checks" && inspected["check"] {
-		return true
-	}
-	if strings.HasSuffix(required, "_evidence") {
-		return inspected["check"] || inspected["preview"] || inspected["decision"] || inspected["requirement"]
+func inspectedEvidenceKind(required string, area Area, inspected []WorkCitation) bool {
+	for _, citation := range inspected {
+		if citation.Kind == required || required == "checks" && citation.Kind == "check" {
+			return true
+		}
+		if strings.HasSuffix(required, "_evidence") && citation.Domain == strings.TrimSuffix(required, "_evidence") && citation.Domain == area.ID {
+			covered := true
+			for _, path := range area.Paths {
+				covered = covered && slices.Contains(citation.CoveredPaths, path)
+			}
+			if covered && len(area.Paths) > 0 {
+				return true
+			}
+		}
 	}
 	return false
 }

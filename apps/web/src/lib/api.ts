@@ -3973,7 +3973,7 @@ export type ReviewWorkEntry = {
   source_revision: string; target_revision: string; actor_type: "human" | "agent"; actor_id: string;
   kind: "progress" | "finding" | "uncertainty" | "question" | "handoff" | "decision";
   conclusion?: string; body: string; uncertainty?: string;
-  citations: { kind: "file" | "symbol" | "requirement" | "diff" | "check" | "preview" | "decision"; value: string; label?: string }[];
+  citations: { kind: "file" | "symbol" | "requirement" | "diff" | "check" | "preview" | "decision"; value: string; label?: string; domain?: string; covered_paths?: string[] }[];
   recipient_type?: "human" | "agent"; recipient_id?: string; created_at: string; authority: string;
 };
 export type ReviewWorkPage = {
@@ -4199,7 +4199,7 @@ export type ReviewReadiness = {
     required: boolean;
     owners: string[];
     assignments: { id: string; principal_id: string; principal_type: string; status: string }[];
-    evidence_inspected: { kind: string; value: string; label?: string }[];
+    evidence_inspected: { kind: string; value: string; label?: string; domain?: string; covered_paths?: string[] }[];
     findings: { id: string; body: string; actor_id: string }[];
     decisions: { id: string; body: string; actor_id: string; conclusion?: string }[];
     required_acknowledgements: string[];

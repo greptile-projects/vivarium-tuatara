@@ -421,6 +421,16 @@ func validResolutionLinks(git *storage.Store, repoID string, pull pullrequests.P
 func validWorkCitations(repoID, pullID, revision string, area reviewplans.Area, plan reviewplans.Plan, citations []reviewplans.WorkCitation, checks *checkruns.Store, previewStore *previews.Store, decisionStore *decisions.Store) bool {
 	for _, citation := range citations {
 		value := strings.TrimSpace(citation.Value)
+		if citation.Domain != "" {
+			if citation.Domain != area.ID || len(citation.CoveredPaths) == 0 {
+				return false
+			}
+			for _, path := range citation.CoveredPaths {
+				if !slices.Contains(area.Paths, path) {
+					return false
+				}
+			}
+		}
 		switch citation.Kind {
 		case "file", "diff":
 			if !slices.Contains(area.Paths, value) {
@@ -462,6 +472,13 @@ func validWorkCitations(repoID, pullID, revision string, area reviewplans.Area, 
 			}
 		default:
 			return false
+		}
+		if citation.Domain != "" {
+			for _, path := range area.Paths {
+				if !slices.Contains(citation.CoveredPaths, path) {
+					return false
+				}
+			}
 		}
 	}
 	return true

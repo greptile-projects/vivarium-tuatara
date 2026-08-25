@@ -13,9 +13,11 @@ import (
 var ErrWorkConflict = errors.New("review work conflict")
 
 type WorkCitation struct {
-	Kind  string `json:"kind"`
-	Value string `json:"value"`
-	Label string `json:"label,omitempty"`
+	Kind         string   `json:"kind"`
+	Value        string   `json:"value"`
+	Label        string   `json:"label,omitempty"`
+	Domain       string   `json:"domain,omitempty"`
+	CoveredPaths []string `json:"covered_paths,omitempty"`
 }
 
 type WorkEntry struct {
@@ -93,8 +95,13 @@ func (s *Store) createWorkLocked(value WorkEntry) (WorkEntry, error) {
 		return WorkEntry{}, ErrInvalid
 	}
 	for _, citation := range value.Citations {
-		if !slices.Contains([]string{"file", "symbol", "requirement", "diff", "check", "preview", "decision"}, citation.Kind) || strings.TrimSpace(citation.Value) == "" || len(citation.Value) > 500 || len(citation.Label) > 500 {
+		if !slices.Contains([]string{"file", "symbol", "requirement", "diff", "check", "preview", "decision"}, citation.Kind) || strings.TrimSpace(citation.Value) == "" || len(citation.Value) > 500 || len(citation.Label) > 500 || len(citation.Domain) > 100 || len(citation.CoveredPaths) > 200 {
 			return WorkEntry{}, ErrInvalid
+		}
+		for _, path := range citation.CoveredPaths {
+			if strings.TrimSpace(path) == "" || len(path) > 500 {
+				return WorkEntry{}, ErrInvalid
+			}
 		}
 	}
 	values, err := s.readWork(value.RepositoryID, value.PullRequestID)
