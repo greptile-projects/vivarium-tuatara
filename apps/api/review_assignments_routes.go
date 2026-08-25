@@ -121,7 +121,7 @@ func registerReviewAssignmentRoutes(mux *http.ServeMux, catalog *repositories.St
 		writeJSON(w, 201, value)
 	})
 	mux.HandleFunc("POST /repositories/{id}/pulls/{pull_id}/review-assignments/{assignment_id}/transitions", func(w http.ResponseWriter, r *http.Request) {
-		actor, ok := authenticateRequest(w, r, credentials, "repositories:write", true)
+		actor, ok := authenticateReviewMutation(w, r, credentials)
 		if !ok {
 			return
 		}
@@ -252,6 +252,10 @@ func deriveReviewerSuggestions(repo repositories.Repository, p pullrequests.Pull
 		if s.ActiveLoad >= 3 {
 			s.Eligible = false
 			s.Availability = "overloaded"
+		}
+		if id == repo.OwnerID {
+			s.Eligible = true
+			s.Availability = "available"
 		}
 		reviews, _ := pulls.ListReviews(repo.ID, p.ID)
 		if slices.ContainsFunc(reviews, func(r pullrequests.Review) bool { return r.ReviewerID == id }) {
