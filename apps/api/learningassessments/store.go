@@ -261,6 +261,31 @@ func (s *Store) Attempts(repo, slug string) ([]Attempt, error) {
 	defer s.mu.Unlock()
 	return s.attempts(repo, slug)
 }
+
+// FindAttempt resolves an opaque attempt identity within one repository. The
+// repository boundary is deliberate: possessing an attempt ID is not enough
+// to disclose learning evidence from another project.
+func (s *Store) FindAttempt(repo, attemptID string) (Attempt, error) {
+	if !safeID(repo) || !safeID(attemptID) {
+		return Attempt{}, ErrNotFound
+	}
+	slugs, err := s.Slugs(repo)
+	if err != nil {
+		return Attempt{}, err
+	}
+	for _, slug := range slugs {
+		attempts, err := s.Attempts(repo, slug)
+		if err != nil {
+			return Attempt{}, err
+		}
+		for _, attempt := range attempts {
+			if attempt.ID == attemptID && attempt.RepositoryID == repo {
+				return attempt, nil
+			}
+		}
+	}
+	return Attempt{}, ErrNotFound
+}
 func (s *Store) attempts(repo, slug string) ([]Attempt, error) {
 	if !safeID(repo) || !safeID(slug) {
 		return nil, ErrNotFound

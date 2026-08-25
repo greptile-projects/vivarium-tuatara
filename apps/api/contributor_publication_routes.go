@@ -307,7 +307,11 @@ func contributionEvidence(item workspaces.Workspace, assessment contributionPubl
 	}
 	sort.Strings(mentor)
 	sort.Strings(agent)
-	return pullrequests.ContributionEvidence{OpportunityID: item.ContributorContext.OpportunityID, OpportunityVersion: item.ContributorContext.OpportunityVersion, PathwayVersion: item.ContributorContext.PathwayVersion, UpstreamRevision: item.CommitID, SetupEvidence: setup, MentorGuidanceIDs: mentor, AgentAssistanceIDs: agent, AcceptanceCriteria: append([]string(nil), assessment.AcceptanceCriteria...), SatisfiedCriteria: append([]string(nil), satisfied...), ProjectRequirements: assessment.ProjectRequirements, CoachingNeeds: assessment.CoachingNeeds}
+	var learning *pullrequests.ContributionLearningEvidence
+	if retained := item.ContributorContext.LearningEvidence; retained != nil {
+		learning = &pullrequests.ContributionLearningEvidence{AssessmentSlug: retained.AssessmentSlug, AssessmentVersion: retained.AssessmentVersion, AttemptID: retained.AttemptID, PathwaySlug: retained.PathwaySlug, PathwayVersion: retained.PathwayVersion, ModuleID: retained.ModuleID, ExerciseID: retained.ExerciseID, CheckpointIDs: append([]string(nil), retained.CheckpointIDs...), CommandOutcomeIDs: append([]string(nil), retained.CommandOutcomeIDs...), AuthorshipStatement: retained.AuthorshipStatement, AgentAssistanceDeclared: retained.AgentAssistanceDeclared}
+	}
+	return pullrequests.ContributionEvidence{OpportunityID: item.ContributorContext.OpportunityID, OpportunityVersion: item.ContributorContext.OpportunityVersion, PathwayVersion: item.ContributorContext.PathwayVersion, UpstreamRevision: item.CommitID, SetupEvidence: setup, MentorGuidanceIDs: mentor, AgentAssistanceIDs: agent, AcceptanceCriteria: append([]string(nil), assessment.AcceptanceCriteria...), SatisfiedCriteria: append([]string(nil), satisfied...), ProjectRequirements: assessment.ProjectRequirements, CoachingNeeds: assessment.CoachingNeeds, LearningEvidence: learning}
 }
 
 func contributionPullBody(item workspaces.Workspace, checkpoint workspaces.Checkpoint, evidence pullrequests.ContributionEvidence) string {
@@ -316,6 +320,15 @@ func contributionPullBody(item workspaces.Workspace, checkpoint workspaces.Check
 	b.WriteString("Pathway revision: ")
 	b.WriteString(intString(evidence.PathwayVersion))
 	b.WriteString("\n")
+	if learning := evidence.LearningEvidence; learning != nil {
+		b.WriteString("Learning pathway: " + learning.PathwaySlug + " revision " + intString(learning.PathwayVersion) + "\n")
+		b.WriteString("Completed exercise: " + learning.ModuleID + "/" + learning.ExerciseID + "\n")
+		b.WriteString("Assessment: " + learning.AssessmentSlug + " revision " + intString(learning.AssessmentVersion) + " (attempt " + learning.AttemptID + ")\n")
+		b.WriteString("Authorship: " + learning.AuthorshipStatement + "\n")
+		if learning.AgentAssistanceDeclared {
+			b.WriteString("Learning agent assistance: declared\n")
+		}
+	}
 	b.WriteString("Upstream revision: " + evidence.UpstreamRevision + "\nWorkspace: " + item.ID + "\nCheckpoint: " + checkpoint.ID + "\n\nAcceptance criteria:\n")
 	for _, criterion := range evidence.AcceptanceCriteria {
 		b.WriteString("- [x] " + criterion + "\n")

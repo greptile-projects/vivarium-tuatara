@@ -118,17 +118,32 @@ type DurableMigrationReview struct {
 // ContributionEvidence keeps the intent and support behind guided newcomer
 // work attached to the ordinary pull. It is review context, never authority.
 type ContributionEvidence struct {
-	OpportunityID       string                `json:"opportunity_id"`
-	OpportunityVersion  int                   `json:"opportunity_version"`
-	PathwayVersion      int                   `json:"pathway_version"`
-	UpstreamRevision    string                `json:"upstream_revision"`
-	SetupEvidence       []ContributionSetup   `json:"setup_evidence"`
-	MentorGuidanceIDs   []string              `json:"mentor_guidance_ids"`
-	AgentAssistanceIDs  []string              `json:"agent_assistance_ids"`
-	AcceptanceCriteria  []string              `json:"acceptance_criteria"`
-	SatisfiedCriteria   []string              `json:"satisfied_criteria"`
-	ProjectRequirements []ContributionFinding `json:"project_requirements"`
-	CoachingNeeds       []ContributionFinding `json:"coaching_needs"`
+	OpportunityID       string                        `json:"opportunity_id"`
+	OpportunityVersion  int                           `json:"opportunity_version"`
+	PathwayVersion      int                           `json:"pathway_version"`
+	UpstreamRevision    string                        `json:"upstream_revision"`
+	SetupEvidence       []ContributionSetup           `json:"setup_evidence"`
+	MentorGuidanceIDs   []string                      `json:"mentor_guidance_ids"`
+	AgentAssistanceIDs  []string                      `json:"agent_assistance_ids"`
+	AcceptanceCriteria  []string                      `json:"acceptance_criteria"`
+	SatisfiedCriteria   []string                      `json:"satisfied_criteria"`
+	ProjectRequirements []ContributionFinding         `json:"project_requirements"`
+	CoachingNeeds       []ContributionFinding         `json:"coaching_needs"`
+	LearningEvidence    *ContributionLearningEvidence `json:"learning_evidence,omitempty"`
+}
+
+type ContributionLearningEvidence struct {
+	AssessmentSlug          string   `json:"assessment_slug"`
+	AssessmentVersion       int      `json:"assessment_version"`
+	AttemptID               string   `json:"attempt_id"`
+	PathwaySlug             string   `json:"pathway_slug"`
+	PathwayVersion          int      `json:"pathway_version"`
+	ModuleID                string   `json:"module_id"`
+	ExerciseID              string   `json:"exercise_id"`
+	CheckpointIDs           []string `json:"checkpoint_ids"`
+	CommandOutcomeIDs       []string `json:"command_outcome_ids"`
+	AuthorshipStatement     string   `json:"authorship_statement"`
+	AgentAssistanceDeclared bool     `json:"agent_assistance_declared"`
 }
 
 type ContributionSetup struct {

@@ -2434,6 +2434,28 @@ defaults beneath `$LEARNING_ASSESSMENT_STORAGE_ROOT` (`learning-assessments`).
 Assessments and results grant no Git, workspace, check, review, repository, or
 contribution authority.
 
+An authenticated learner can include up to twenty demonstrated assessment
+attempt IDs when requesting `POST
+/repositories/{id}/contribution-opportunity-matches`. The server admits only
+that learner's unblocked result at the current assessment and learning-pathway
+revisions, derives bounded matching skills from its reviewed rubric and exact
+module objectives, and returns the eligible retained evidence beside ordinary
+opportunity scores and gaps. The request profile is still ephemeral, and a
+learning result neither claims an opportunity nor changes its reservation.
+
+After an ordinary exact-version claim, `POST
+/repositories/{id}/contribution-opportunities/{opportunity}/launch` may name
+one `learning_attempt_id`. The independently owned fork workspace preloads the
+assessment, pathway, module, exercise, checkpoint, command, authorship, and
+declared-agent-assistance references; existing opportunity mentors and approved
+agent leases continue from that context without acquiring upstream authority.
+Publication copies the same learning evidence onto the ordinary pull beside
+current contribution-pathway revision, contribution authorship and assistance,
+and frozen acceptance criteria. Contributor membership, review, checks,
+integration, merge, releases, recognized readiness, charter responsibilities,
+and every permission remain separately governed; educational completion never
+mints write, secret, merge, or governance access.
+
 References to documentation, current ownership, releases, issues, proposals,
 and workspace definitions are projected against live repository state on every
 read. Missing, moved, or private requirements remain in history and are marked
