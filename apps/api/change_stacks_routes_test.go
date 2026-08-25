@@ -11,7 +11,22 @@ import (
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/changestacks"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 )
+
+func TestStackIntegrationCheckStatusUsesPersistedTerminalStates(t *testing.T) {
+	revision := strings.Repeat("1", 40)
+	candidate := changestacks.IntegrationCandidate{CandidateRevision: revision, RequiredChecks: []string{"required"}}
+	if got := stackIntegrationCheckStatus(candidate, []checkruns.Run{{CommitID: revision, Definition: checkruns.Definition{Name: "required"}, State: "succeeded"}}); got != "passed" {
+		t.Fatalf("succeeded check status = %q, want passed", got)
+	}
+	if got := stackIntegrationCheckStatus(candidate, []checkruns.Run{{CommitID: revision, Definition: checkruns.Definition{Name: "required"}, State: "canceled"}}); got != "failed" {
+		t.Fatalf("canceled check status = %q, want failed", got)
+	}
+	if got := stackIntegrationCheckStatus(candidate, []checkruns.Run{{CommitID: revision, Definition: checkruns.Definition{Name: "required"}, State: "running"}}); got != "verifying" {
+		t.Fatalf("running check status = %q, want verifying", got)
+	}
+}
 
 func TestChangeStackAgentMemberScopeRejectsAnotherBranch(t *testing.T) {
 	repositoryID := strings.Repeat("a", 32)
