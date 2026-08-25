@@ -545,6 +545,41 @@ func TestSynchronizeSourceAfterRejectsMergeIntentBeforeCallback(t *testing.T) {
 	}
 }
 
+func TestRecordStackMergeRecoversAfterSourceSynchronization(t *testing.T) {
+	gitStore, _ := storage.New(t.TempDir())
+	repository, _ := gitStore.Create(testID('1'))
+	tree, _ := repository.WriteObject(storage.TreeObject, nil)
+	base := writeCommit(t, repository, tree, "base")
+	head := writeCommitWithParents(t, repository, tree, []storage.ObjectID{base}, "reviewed layer")
+	next := writeCommitWithParents(t, repository, tree, []storage.ObjectID{head}, "late branch update")
+	candidate := writeCommitWithParents(t, repository, tree, []storage.ObjectID{base, head}, "integrated prefix")
+	_ = repository.CreateReference(storage.Reference{Name: "refs/heads/main", Target: string(base)})
+	_ = repository.CreateReference(storage.Reference{Name: "refs/heads/topic", Target: string(head)})
+	store, _ := New(t.TempDir(), gitStore)
+	pull, err := store.Create(repository.ID(), testID('2'), "Layer", "", "topic", "main", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.UpdateReference(storage.Reference{Name: "refs/heads/topic", Target: string(next)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SynchronizeSource(repository.ID(), pull.ID); err != nil {
+		t.Fatal(err)
+	}
+	merged, err := store.RecordStackMerge(repository.ID(), pull.ID, string(head), string(candidate), testID('3'))
+	if err != nil || merged.Status != Merged || merged.SourceCommitID != string(head) || merged.MergeCommitID == nil || *merged.MergeCommitID != string(candidate) {
+		t.Fatalf("reconciled pull = %#v, %v", merged, err)
+	}
+	unrelated := writeCommit(t, repository, tree, "unrelated")
+	otherPull, err := store.Create(repository.ID(), testID('2'), "Other", "", "topic", "main", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RecordStackMerge(repository.ID(), otherPull.ID, string(unrelated), string(candidate), testID('3')); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("unrelated retained revision = %v", err)
+	}
+}
+
 func TestReviewsCaptureCurrentCommitBecomeStaleAndRemainAttributable(t *testing.T) {
 	gitStore, _ := storage.New(t.TempDir())
 	repository, _ := gitStore.Create(testID('a'))

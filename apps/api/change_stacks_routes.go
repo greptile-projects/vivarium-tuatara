@@ -234,6 +234,9 @@ func registerChangeStackRoutes(mux *http.ServeMux, git *storage.Store, catalog *
 		v.Timeline = timeline
 		for i := range v.IntegrationCandidates {
 			candidate := &v.IntegrationCandidates[i]
+			if candidate.Status == "merged" {
+				continue
+			}
 			if candidate.SupersededAt != nil {
 				candidate.Status = "superseded"
 				continue
@@ -561,8 +564,16 @@ func registerChangeStackRoutes(mux *http.ServeMux, git *storage.Store, catalog *
 		}
 		parent := target
 		revisions := map[string]string{}
+		landedPosition := stackMergedPosition(retained)
+		if landedPosition >= in.ThroughPosition {
+			writeAPIError(w, 409, "stack_prefix_already_integrated", "the selected prefix is already integrated")
+			return
+		}
+		for i := 0; i < landedPosition; i++ {
+			revisions[retained.Members[i].ID] = retained.Members[i].Revision
+		}
 		var candidate changestacks.IntegrationCandidate
-		for i := 0; i < in.ThroughPosition; i++ {
+		for i := landedPosition; i < in.ThroughPosition; i++ {
 			member := retained.Members[i]
 			if member.SourceRepositoryID != "" && member.SourceRepositoryID != retained.RepositoryID {
 				writeAPIError(w, 409, "stack_member_independently_owned", "cross-repository members must integrate through their ordinary owner")
@@ -621,6 +632,99 @@ func registerChangeStackRoutes(mux *http.ServeMux, git *storage.Store, catalog *
 		startBoundCheckRuns(git, checks, retained.RepositoryID, retained.Members[in.ThroughPosition-1].PullRequestID, parent, definitions)
 		writeJSON(w, 201, candidate)
 	})
+	mux.HandleFunc("POST /repositories/{id}/change-stacks/{stack_id}/integration-candidates/{candidate_id}/merge", func(w http.ResponseWriter, r *http.Request) {
+		actor, owner, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		if !owner || actor.AgentID != "" {
+			writeAPIError(w, 403, "stack_integration_forbidden", "only a current human repository maintainer may integrate a stack")
+			return
+		}
+		stack, err := stacks.Get(r.PathValue("id"), r.PathValue("stack_id"))
+		if err != nil {
+			writeAPIError(w, 404, "change_stack_not_found", "change stack not found")
+			return
+		}
+		var candidate *changestacks.IntegrationCandidate
+		for i := range stack.IntegrationCandidates {
+			if stack.IntegrationCandidates[i].ID == r.PathValue("candidate_id") {
+				candidate = &stack.IntegrationCandidates[i]
+				break
+			}
+		}
+		if candidate == nil {
+			writeAPIError(w, 404, "stack_candidate_not_found", "integration candidate not found")
+			return
+		}
+		repository, err := git.Open(stack.RepositoryID)
+		if err != nil {
+			writeAPIError(w, 409, "stack_target_missing", "target repository is unavailable")
+			return
+		}
+		live, _ := gitOutput(repository.Path(), "rev-parse", "--verify", "refs/heads/"+strings.TrimPrefix(stack.TargetBranch, "refs/heads/")+"^{commit}")
+		if candidate.Status == "merged" {
+			_, completed, completeErr := stacks.CompleteIntegration(stack.RepositoryID, stack.ID, candidate.ID, actor.UserID)
+			if completeErr != nil {
+				writeAPIError(w, 500, "stack_integration_publication_uncertain", "target advanced but integration metadata requires retry")
+				return
+			}
+			writeJSON(w, 200, completed)
+			return
+		}
+		if live == candidate.CandidateRevision {
+			for i := stackMergedPosition(stack); i < candidate.Position; i++ {
+				m := stack.Members[i]
+				if _, recordErr := pulls.RecordStackMerge(stack.RepositoryID, m.PullRequestID, candidate.MemberRevisions[m.ID], candidate.CandidateRevision, actor.UserID); recordErr != nil {
+					writeAPIError(w, 500, "stack_integration_publication_uncertain", "target advanced but pull reconciliation requires retry")
+					return
+				}
+			}
+			_, completed, completeErr := stacks.CompleteIntegration(stack.RepositoryID, stack.ID, candidate.ID, actor.UserID)
+			if completeErr != nil {
+				writeAPIError(w, 500, "stack_integration_publication_uncertain", "target advanced but integration metadata requires retry")
+				return
+			}
+			writeJSON(w, 200, completed)
+			return
+		}
+		if candidate.SupersededAt != nil || live != candidate.TargetRevision {
+			writeAPIError(w, 409, "stack_candidate_stale", "target moved; prepare a new exact candidate")
+			return
+		}
+		runs, _ := checks.List(stack.RepositoryID, stack.Members[candidate.Position-1].PullRequestID)
+		if stackIntegrationCheckStatus(*candidate, runs) != "passed" {
+			writeAPIError(w, 409, "stack_candidate_not_ready", "cumulative verification has not passed")
+			return
+		}
+		landedPosition := stackMergedPosition(stack)
+		for i := landedPosition; i < candidate.Position; i++ {
+			m := stack.Members[i]
+			p, pullErr := pulls.Get(stack.RepositoryID, m.PullRequestID)
+			ready, readyErr := pulls.Readiness(stack.RepositoryID, m.PullRequestID, true)
+			if pullErr != nil || readyErr != nil || p.Status != pullrequests.Open || p.SourceCommitID != candidate.MemberRevisions[m.ID] || !ready.CanMerge {
+				writeAPIError(w, 409, "stack_prefix_stale", "review, checks, policy, or a member revision changed")
+				return
+			}
+		}
+		if err := repository.UpdateReferenceIfTarget(storage.Reference{Name: "refs/heads/" + strings.TrimPrefix(stack.TargetBranch, "refs/heads/"), Target: candidate.CandidateRevision}, candidate.TargetRevision); err != nil {
+			writeAPIError(w, 409, "stack_candidate_stale", "target changed concurrently; prepare a new candidate")
+			return
+		}
+		for i := landedPosition; i < candidate.Position; i++ {
+			m := stack.Members[i]
+			if _, err := pulls.RecordStackMerge(stack.RepositoryID, m.PullRequestID, candidate.MemberRevisions[m.ID], candidate.CandidateRevision, actor.UserID); err != nil {
+				writeAPIError(w, 500, "stack_integration_publication_uncertain", "target advanced but pull reconciliation requires retry")
+				return
+			}
+		}
+		_, completed, err := stacks.CompleteIntegration(stack.RepositoryID, stack.ID, candidate.ID, actor.UserID)
+		if err != nil {
+			writeAPIError(w, 500, "stack_integration_publication_uncertain", "target advanced but integration metadata requires retry")
+			return
+		}
+		writeJSON(w, 200, completed)
+	})
 	registerChangeStackRestackRoutes(mux, git, catalog, credentials, stacks, pulls, checks)
 	registerChangeStackCollaborationRoutes(mux, catalog, organizationsStore, credentials, stacks)
 }
@@ -647,6 +751,16 @@ func stackIntegrationCheckStatus(candidate changestacks.IntegrationCandidate, ru
 		state = "verifying"
 	}
 	return state
+}
+
+func stackMergedPosition(stack changestacks.Stack) int {
+	position := 0
+	for _, candidate := range stack.IntegrationCandidates {
+		if candidate.Status == "merged" && candidate.Position > position {
+			position = candidate.Position
+		}
+	}
+	return position
 }
 
 func stackUpstreamCurrent(frozen, current map[string]string) (bool, []string) {
