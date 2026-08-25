@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -72,6 +73,39 @@ type Source struct {
 	DebuggingWorkspaceID    string `json:"debugging_workspace_id,omitempty"`
 	ReplayScenarioID        string `json:"replay_scenario_id,omitempty"`
 	ConflictLaunchID        string `json:"conflict_launch_id,omitempty"`
+	LearningPathwaySlug     string `json:"learning_pathway_slug,omitempty"`
+	LearningPathwayVersion  int    `json:"learning_pathway_version,omitempty"`
+	LearningModuleID        string `json:"learning_module_id,omitempty"`
+	LearningExerciseID      string `json:"learning_exercise_id,omitempty"`
+}
+
+type LearningCheckpoint struct {
+	ID                string    `json:"id"`
+	Summary           string    `json:"summary"`
+	CriterionIDs      []string  `json:"criterion_ids"`
+	CommandOutcomeIDs []string  `json:"command_outcome_ids"`
+	CreatedAt         time.Time `json:"created_at"`
+}
+type LearningHintUse struct {
+	Index  int       `json:"index"`
+	Hint   string    `json:"hint"`
+	UsedAt time.Time `json:"used_at"`
+}
+type LearningContext struct {
+	PathwaySlug           string               `json:"pathway_slug"`
+	PathwayVersion        int                  `json:"pathway_version"`
+	ModuleID              string               `json:"module_id"`
+	ExerciseID            string               `json:"exercise_id"`
+	Kind                  string               `json:"kind"`
+	Instructions          string               `json:"instructions"`
+	StarterCommands       []string             `json:"starter_commands"`
+	AcceptanceCriteria    []string             `json:"acceptance_criteria"`
+	Data                  []string             `json:"data"`
+	Hints                 []string             `json:"hints"`
+	HintsUsed             []LearningHintUse    `json:"hints_used"`
+	Checkpoints           []LearningCheckpoint `json:"checkpoints"`
+	ReproducibilitySHA256 string               `json:"reproducibility_sha256"`
+	Cost                  float64              `json:"cost"`
 }
 
 // ConflictContext freezes the two histories and the evidence that was visible
@@ -399,8 +433,73 @@ type Workspace struct {
 	ReproductionInputAttachmentIDs []string               `json:"reproduction_input_attachment_ids,omitempty"`
 	ContributorContext             *ContributorContext    `json:"contributor_context,omitempty"`
 	ConflictContext                *ConflictContext       `json:"conflict_context,omitempty"`
+	LearningContext                *LearningContext       `json:"learning_context,omitempty"`
 	Participants                   []WorkspaceParticipant `json:"participants,omitempty"`
 }
+
+func (s *Store) UseLearningHint(id, actor string, index int) (Workspace, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w, err := s.read(id)
+	if err != nil {
+		return Workspace{}, err
+	}
+	if w.LearningContext == nil || actor != w.CreatorID || index < 0 || index >= len(w.LearningContext.Hints) {
+		return Workspace{}, ErrInvalid
+	}
+	for _, used := range w.LearningContext.HintsUsed {
+		if used.Index == index {
+			return w, nil
+		}
+	}
+	now := s.now()
+	hint := LearningHintUse{Index: index, Hint: w.LearningContext.Hints[index], UsedAt: now}
+	w.LearningContext.HintsUsed = append(w.LearningContext.HintsUsed, hint)
+	w.UpdatedAt = now
+	w.Events = append(w.Events, Event{Kind: "learning.hint.used", ActorID: actor, Role: "instruction", Detail: fmt.Sprint(index), CreatedAt: now})
+	return w, s.write(w)
+}
+
+func (s *Store) AddLearningCheckpoint(id, actor, summary string, criteria, outcomes []string) (Workspace, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w, err := s.read(id)
+	if err != nil {
+		return Workspace{}, err
+	}
+	if w.LearningContext == nil || actor != w.CreatorID || strings.TrimSpace(summary) == "" || len(summary) > 1000 || len(criteria) == 0 {
+		return Workspace{}, ErrInvalid
+	}
+	validCriteria := map[string]bool{}
+	for _, c := range w.LearningContext.AcceptanceCriteria {
+		validCriteria[c] = true
+	}
+	validOutcomes := map[string]bool{}
+	for _, o := range w.Commands {
+		validOutcomes[o.ID] = true
+	}
+	for _, c := range criteria {
+		if !validCriteria[c] {
+			return Workspace{}, ErrInvalid
+		}
+	}
+	for _, o := range outcomes {
+		if !validOutcomes[o] {
+			return Workspace{}, ErrInvalid
+		}
+	}
+	idv, err := randomID(12)
+	if err != nil {
+		return Workspace{}, err
+	}
+	now := s.now()
+	cp := LearningCheckpoint{ID: idv, Summary: summary, CriterionIDs: append([]string(nil), criteria...), CommandOutcomeIDs: append([]string(nil), outcomes...), CreatedAt: now}
+	w.LearningContext.Checkpoints = append(w.LearningContext.Checkpoints, cp)
+	w.UpdatedAt = now
+	w.Events = append(w.Events, Event{ID: idv, Kind: "learning.checkpoint.created", ActorID: actor, Role: "verification", Detail: summary, CreatedAt: now})
+	return w, s.write(w)
+}
+
 type ReasoningContext struct {
 	AssessmentID      string                     `json:"assessment_id"`
 	AssessmentVersion int                        `json:"assessment_version"`
@@ -715,6 +814,12 @@ func (s *Store) RecordCommand(id string, outcome CommandOutcome) (Workspace, err
 		return Workspace{}, err
 	}
 	w.Commands = append(w.Commands, outcome)
+	if w.LearningContext != nil {
+		hours := outcome.CompletedAt.Sub(outcome.StartedAt).Hours()
+		if hours > 0 {
+			w.LearningContext.Cost += hours * (w.Definition.Resources.CPUs*0.04 + float64(w.Definition.Resources.MemoryMB)/1024*0.01)
+		}
+	}
 	if len(w.Commands) > 100 {
 		w.Commands = w.Commands[len(w.Commands)-100:]
 	}
@@ -1549,6 +1654,14 @@ func (s *Store) Complete(id string, steps []SetupStep, failure bool) (Workspace,
 		return Workspace{}, e
 	}
 	w.Setup = steps
+	if w.LearningContext != nil {
+		for _, step := range steps {
+			hours := step.CompletedAt.Sub(step.StartedAt).Hours()
+			if hours > 0 {
+				w.LearningContext.Cost += hours * (w.Definition.Resources.CPUs*0.04 + float64(w.Definition.Resources.MemoryMB)/1024*0.01)
+			}
+		}
+	}
 	if failure {
 		w.State = "failed"
 	} else {

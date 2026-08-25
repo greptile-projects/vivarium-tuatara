@@ -3,20 +3,452 @@ import { useCallback, useEffect, useState } from "react";
 import { api, type LearningPathway } from "@/lib/api";
 import { useAuth } from "./auth";
 
-const lines=(v:string)=>v.split("\n").map(x=>x.trim()).filter(Boolean);
-const badge=(status?:string)=>status==="current"?"border-emerald-200 bg-emerald-50 text-emerald-800":status==="unsupported"?"border-violet-200 bg-violet-50 text-violet-800":"border-amber-200 bg-amber-50 text-amber-800";
+const lines = (v: string) =>
+  v
+    .split("\n")
+    .map((x) => x.trim())
+    .filter(Boolean);
+const badge = (status?: string) =>
+  status === "current"
+    ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+    : status === "unsupported"
+      ? "border-violet-200 bg-violet-50 text-violet-800"
+      : "border-amber-200 bg-amber-50 text-amber-800";
 
-export function LearningPathwaysWorkspace({repositoryId}:{repositoryId:string}) {
- const {token}=useAuth();const [items,setItems]=useState<LearningPathway[]>([]);const [selected,setSelected]=useState<LearningPathway|null>(null);const [error,setError]=useState("");const [editing,setEditing]=useState(false);const [requestId,setRequestId]=useState(()=>crypto.randomUUID());
- const [form,setForm]=useState({slug:"contributor",role:"Contributor",outcome:"Contribute safely to this project",prerequisites:"Basic Git",objectives:"Understand the project architecture",revisions:"",minutes:"120",accessibility:"Keyboard-accessible tools",locales:"en-US",evidence:"Passing exercise evidence",modules:"[]",mentors:"[]",environments:"[]"});
- const load=useCallback(async()=>{try{const d=await api<{pathways:LearningPathway[]}>(`/repositories/${repositoryId}/learning-pathways`,{},token);setItems(d.pathways);if(!selected&&d.pathways[0])setSelected(d.pathways[0]);setError("")}catch(e){setError(e instanceof Error?e.message:"Could not load learning pathways")}},[repositoryId,token,selected]);useEffect(()=>{void Promise.resolve().then(load)},[load]);
- async function publish(){try{const modules=JSON.parse(form.modules),mentors=JSON.parse(form.mentors),environments=JSON.parse(form.environments);const current=items.find(x=>x.slug===form.slug);const published=await api<LearningPathway>(`/repositories/${repositoryId}/learning-pathways/${form.slug}`,{method:"PUT",body:JSON.stringify({request_id:requestId,expected_version:current?.version??0,pathway:{role:form.role,outcome:form.outcome,prerequisites:lines(form.prerequisites),objectives:lines(form.objectives),supported_revisions:lines(form.revisions),expected_minutes:Number(form.minutes),accessibility_needs:lines(form.accessibility),locales:lines(form.locales),completion_evidence:lines(form.evidence),modules,mentors,environments}})},token);setEditing(false);setRequestId(crypto.randomUUID());setItems(xs=>[published,...xs.filter(x=>x.slug!==published.slug)]);setSelected(published);setError("");try{const d=await api<{pathways:LearningPathway[]}>(`/repositories/${repositoryId}/learning-pathways`,{},token);setItems(d.pathways);setSelected(d.pathways.find(x=>x.slug===published.slug)??published)}catch{setError("Pathway published, but the pathway list could not be refreshed.")}}catch(e){setError(e instanceof Error?e.message:"Could not publish pathway")}}
- return <div className="space-y-6"><header className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-[.18em] text-[var(--brand-strong)]">Project learning</p><h1 className="mt-2 text-3xl font-semibold tracking-tight">Learn for real project work</h1><p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--muted)]">Versioned roles, ordered practice, exact project material, and visible support gaps—maintained beside the software.</p></div>{token&&<button onClick={()=>setEditing(!editing)} className="rounded-lg bg-[var(--brand)] px-4 py-2 text-sm font-semibold text-white">{editing?"Cancel":"Publish pathway"}</button>}</header>
- {error&&<p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">{error}</p>}
- {editing&&<section className="rounded-xl border border-[var(--line)] bg-white p-5"><h2 className="font-semibold">New immutable revision</h2><div className="mt-4 grid gap-3 md:grid-cols-2">{([['slug','Stable slug'],['role','Project role'],['outcome','Practical outcome'],['minutes','Expected minutes'],['revisions','Supported 40-character revisions'],['locales','Locales'],['prerequisites','Prerequisites'],['objectives','Objectives'],['accessibility','Accessibility needs'],['evidence','Completion evidence']] as const).map(([key,label])=><label key={key} className="text-xs font-semibold text-[var(--muted)]">{label}<textarea value={form[key]} onChange={e=>setForm({...form,[key]:e.target.value})} className="mt-1 min-h-10 w-full rounded-lg border border-[var(--line)] p-2 text-sm text-[var(--ink)]"/></label>)}</div><p className="mt-4 text-xs text-[var(--muted)]">Modules, mentors, and environments use the public API object shapes, making exact links and support ownership fully inspectable.</p>{([['modules','Ordered modules JSON'],['mentors','Mentors JSON'],['environments','Learner environments JSON']] as const).map(([key,label])=><label key={key} className="mt-3 block text-xs font-semibold text-[var(--muted)]">{label}<textarea value={form[key]} onChange={e=>setForm({...form,[key]:e.target.value})} className="mt-1 min-h-28 w-full rounded-lg border border-[var(--line)] p-2 font-mono text-xs text-[var(--ink)]"/></label>)}<button onClick={publish} className="mt-4 rounded-lg bg-[var(--brand)] px-4 py-2 text-sm font-semibold text-white">Publish revision</button></section>}
- <div className="grid gap-5 lg:grid-cols-[18rem_1fr]"><aside className="space-y-2">{items.map(x=><button key={x.slug} onClick={()=>setSelected(x)} className={`w-full rounded-xl border p-4 text-left ${selected?.slug===x.slug?'border-[var(--brand)] bg-white':'border-[var(--line)] bg-[var(--surface)]'}`}><span className="text-sm font-semibold">{x.role}</span><span className="mt-1 block text-xs text-[var(--muted)]">v{x.version} · {x.expected_minutes} min</span></button>)}{!items.length&&!editing&&<p className="rounded-xl border border-dashed border-[var(--line)] p-5 text-sm text-[var(--muted)]">No learning pathway has been published.</p>}</aside>{selected&&<Pathway pathway={selected}/>}</div></div>
+export function LearningPathwaysWorkspace({
+  repositoryId,
+}: {
+  repositoryId: string;
+}) {
+  const { token } = useAuth();
+  const [items, setItems] = useState<LearningPathway[]>([]);
+  const [selected, setSelected] = useState<LearningPathway | null>(null);
+  const [error, setError] = useState("");
+  const [editing, setEditing] = useState(false);
+  const [requestId, setRequestId] = useState(() => crypto.randomUUID());
+  const [form, setForm] = useState({
+    slug: "contributor",
+    role: "Contributor",
+    outcome: "Contribute safely to this project",
+    prerequisites: "Basic Git",
+    objectives: "Understand the project architecture",
+    revisions: "",
+    minutes: "120",
+    accessibility: "Keyboard-accessible tools",
+    locales: "en-US",
+    evidence: "Passing exercise evidence",
+    modules: "[]",
+    mentors: "[]",
+    environments: "[]",
+  });
+  const load = useCallback(async () => {
+    try {
+      const d = await api<{ pathways: LearningPathway[] }>(
+        `/repositories/${repositoryId}/learning-pathways`,
+        {},
+        token,
+      );
+      setItems(d.pathways);
+      if (!selected && d.pathways[0]) setSelected(d.pathways[0]);
+      setError("");
+    } catch (e) {
+      setError(
+        e instanceof Error ? e.message : "Could not load learning pathways",
+      );
+    }
+  }, [repositoryId, token, selected]);
+  useEffect(() => {
+    void Promise.resolve().then(load);
+  }, [load]);
+  async function publish() {
+    try {
+      const modules = JSON.parse(form.modules),
+        mentors = JSON.parse(form.mentors),
+        environments = JSON.parse(form.environments);
+      const current = items.find((x) => x.slug === form.slug);
+      const published = await api<LearningPathway>(
+        `/repositories/${repositoryId}/learning-pathways/${form.slug}`,
+        {
+          method: "PUT",
+          body: JSON.stringify({
+            request_id: requestId,
+            expected_version: current?.version ?? 0,
+            pathway: {
+              role: form.role,
+              outcome: form.outcome,
+              prerequisites: lines(form.prerequisites),
+              objectives: lines(form.objectives),
+              supported_revisions: lines(form.revisions),
+              expected_minutes: Number(form.minutes),
+              accessibility_needs: lines(form.accessibility),
+              locales: lines(form.locales),
+              completion_evidence: lines(form.evidence),
+              modules,
+              mentors,
+              environments,
+            },
+          }),
+        },
+        token,
+      );
+      setEditing(false);
+      setRequestId(crypto.randomUUID());
+      setItems((xs) => [
+        published,
+        ...xs.filter((x) => x.slug !== published.slug),
+      ]);
+      setSelected(published);
+      setError("");
+      try {
+        const d = await api<{ pathways: LearningPathway[] }>(
+          `/repositories/${repositoryId}/learning-pathways`,
+          {},
+          token,
+        );
+        setItems(d.pathways);
+        setSelected(
+          d.pathways.find((x) => x.slug === published.slug) ?? published,
+        );
+      } catch {
+        setError(
+          "Pathway published, but the pathway list could not be refreshed.",
+        );
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not publish pathway");
+    }
+  }
+  return (
+    <div className="space-y-6">
+      <header className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[.18em] text-[var(--brand-strong)]">
+            Project learning
+          </p>
+          <h1 className="mt-2 text-3xl font-semibold tracking-tight">
+            Learn for real project work
+          </h1>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--muted)]">
+            Versioned roles, ordered practice, exact project material, and
+            visible support gaps—maintained beside the software.
+          </p>
+        </div>
+        {token && (
+          <button
+            onClick={() => setEditing(!editing)}
+            className="rounded-lg bg-[var(--brand)] px-4 py-2 text-sm font-semibold text-white"
+          >
+            {editing ? "Cancel" : "Publish pathway"}
+          </button>
+        )}
+      </header>
+      {error && (
+        <p
+          role="alert"
+          className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800"
+        >
+          {error}
+        </p>
+      )}
+      {editing && (
+        <section className="rounded-xl border border-[var(--line)] bg-white p-5">
+          <h2 className="font-semibold">New immutable revision</h2>
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            {(
+              [
+                ["slug", "Stable slug"],
+                ["role", "Project role"],
+                ["outcome", "Practical outcome"],
+                ["minutes", "Expected minutes"],
+                ["revisions", "Supported 40-character revisions"],
+                ["locales", "Locales"],
+                ["prerequisites", "Prerequisites"],
+                ["objectives", "Objectives"],
+                ["accessibility", "Accessibility needs"],
+                ["evidence", "Completion evidence"],
+              ] as const
+            ).map(([key, label]) => (
+              <label
+                key={key}
+                className="text-xs font-semibold text-[var(--muted)]"
+              >
+                {label}
+                <textarea
+                  value={form[key]}
+                  onChange={(e) => setForm({ ...form, [key]: e.target.value })}
+                  className="mt-1 min-h-10 w-full rounded-lg border border-[var(--line)] p-2 text-sm text-[var(--ink)]"
+                />
+              </label>
+            ))}
+          </div>
+          <p className="mt-4 text-xs text-[var(--muted)]">
+            Modules, mentors, and environments use the public API object shapes,
+            making exact links and support ownership fully inspectable.
+          </p>
+          {(
+            [
+              ["modules", "Ordered modules JSON"],
+              ["mentors", "Mentors JSON"],
+              ["environments", "Learner environments JSON"],
+            ] as const
+          ).map(([key, label]) => (
+            <label
+              key={key}
+              className="mt-3 block text-xs font-semibold text-[var(--muted)]"
+            >
+              {label}
+              <textarea
+                value={form[key]}
+                onChange={(e) => setForm({ ...form, [key]: e.target.value })}
+                className="mt-1 min-h-28 w-full rounded-lg border border-[var(--line)] p-2 font-mono text-xs text-[var(--ink)]"
+              />
+            </label>
+          ))}
+          <button
+            onClick={publish}
+            className="mt-4 rounded-lg bg-[var(--brand)] px-4 py-2 text-sm font-semibold text-white"
+          >
+            Publish revision
+          </button>
+        </section>
+      )}
+      <div className="grid gap-5 lg:grid-cols-[18rem_1fr]">
+        <aside className="space-y-2">
+          {items.map((x) => (
+            <button
+              key={x.slug}
+              onClick={() => setSelected(x)}
+              className={`w-full rounded-xl border p-4 text-left ${selected?.slug === x.slug ? "border-[var(--brand)] bg-white" : "border-[var(--line)] bg-[var(--surface)]"}`}
+            >
+              <span className="text-sm font-semibold">{x.role}</span>
+              <span className="mt-1 block text-xs text-[var(--muted)]">
+                v{x.version} · {x.expected_minutes} min
+              </span>
+            </button>
+          ))}
+          {!items.length && !editing && (
+            <p className="rounded-xl border border-dashed border-[var(--line)] p-5 text-sm text-[var(--muted)]">
+              No learning pathway has been published.
+            </p>
+          )}
+        </aside>
+        {selected && (
+          <Pathway
+            pathway={selected}
+            repositoryId={repositoryId}
+            token={token}
+            onError={setError}
+          />
+        )}
+      </div>
+    </div>
+  );
 }
-function Pathway({pathway:p}:{pathway:LearningPathway}) {return <main className="space-y-5"><section className="rounded-xl border border-[var(--line)] bg-white p-6"><div className="flex flex-wrap justify-between gap-3"><div><p className="text-xs text-[var(--muted)]">{p.slug} · revision {p.version}</p><h2 className="mt-1 text-2xl font-semibold">{p.outcome}</h2></div><span className="text-sm font-semibold">{p.expected_minutes} minutes</span></div><div className="mt-5 grid gap-4 sm:grid-cols-3"><Summary title="Prerequisites" values={p.prerequisites}/><Summary title="Objectives" values={p.objectives}/><Summary title="Completion evidence" values={p.completion_evidence}/></div><p className="mt-4 text-xs text-[var(--muted)]">Supported revisions: {p.supported_revisions.join(", ")} · Locales: {p.locales.join(", ")}</p></section>
- {p.modules.map((m,index)=><section key={m.id} className="rounded-xl border border-[var(--line)] bg-white p-6"><p className="text-xs font-semibold text-[var(--brand-strong)]">Module {index+1} · {m.estimated_minutes} min</p><h3 className="mt-1 text-xl font-semibold">{m.title}</h3><p className="mt-2 text-sm text-[var(--muted)]">Why it matters: {m.why_it_matters}</p><div className="mt-4 space-y-2">{m.materials.map((x,i)=><div key={i} className="rounded-lg border border-[var(--line)] p-3"><div className="flex flex-wrap items-center gap-2"><span className="text-sm font-semibold">{x.label}</span><span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${badge(x.status)}`}>{x.status?.replace('_',' ')}</span><span className="text-xs text-[var(--muted)]">{x.kind}</span></div>{x.status_detail&&<p className="mt-1 text-xs text-[var(--muted)]">{x.status_detail}</p>}</div>)}</div>{m.exercises.map((x,i)=><div key={i} className="mt-4 rounded-lg bg-[var(--canvas)] p-4"><p className="text-sm font-semibold">Exercise · {x.title}</p><p className="mt-1 text-sm text-[var(--muted)]">{x.instructions}</p><p className="mt-2 text-xs">Evidence: {x.completion_evidence.join(", ")}</p></div>)}</section>)}
- <section className="grid gap-4 md:grid-cols-2"><div className="rounded-xl border border-[var(--line)] bg-white p-5"><h3 className="font-semibold">Mentors</h3>{p.mentors.map(x=><p key={x.user_id} className="mt-3 text-sm">{x.responsibility} <span className={`ml-2 rounded-full border px-2 py-0.5 text-[10px] ${badge(x.status)}`}>{x.status}</span></p>)}</div><div className="rounded-xl border border-[var(--line)] bg-white p-5"><h3 className="font-semibold">Learner environments</h3>{p.environments.map(x=><p key={x.name} className="mt-3 text-sm">{x.name} <span className={`ml-2 rounded-full border px-2 py-0.5 text-[10px] ${badge(x.status)}`}>{x.status?.replace('_',' ')}</span></p>)}</div></section></main>}
-function Summary({title,values}:{title:string;values:string[]}){return <div><h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">{title}</h3><ul className="mt-2 space-y-1 text-sm">{values.map(x=><li key={x}>• {x}</li>)}</ul></div>}
+function Pathway({
+  pathway: p,
+  repositoryId,
+  token,
+  onError,
+}: {
+  pathway: LearningPathway;
+  repositoryId: string;
+  token: string | null;
+  onError: (v: string) => void;
+}) {
+  const [attempt, setAttempt] = useState<{
+    id: string;
+    state: string;
+    commit_id: string;
+    learning_context: {
+      instructions: string;
+      acceptance_criteria: string[];
+      starter_commands: string[];
+      reproducibility_sha256: string;
+    };
+  } | null>(null);
+  const [launching, setLaunching] = useState("");
+  async function launch(moduleId: string, exerciseId: string) {
+    setLaunching(exerciseId);
+    try {
+      const value = await api<typeof attempt>(
+        `/repositories/${repositoryId}/learning-pathways/${p.slug}/modules/${moduleId}/attempts`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            pathway_version: p.version,
+            exercise_id: exerciseId,
+          }),
+        },
+        token,
+      );
+      setAttempt(value);
+      onError("");
+    } catch (e) {
+      onError(
+        e instanceof Error ? e.message : "Exercise could not be launched",
+      );
+    } finally {
+      setLaunching("");
+    }
+  }
+  return (
+    <main className="space-y-5">
+      <section className="rounded-xl border border-[var(--line)] bg-white p-6">
+        <div className="flex flex-wrap justify-between gap-3">
+          <div>
+            <p className="text-xs text-[var(--muted)]">
+              {p.slug} · revision {p.version}
+            </p>
+            <h2 className="mt-1 text-2xl font-semibold">{p.outcome}</h2>
+          </div>
+          <span className="text-sm font-semibold">
+            {p.expected_minutes} minutes
+          </span>
+        </div>
+        <div className="mt-5 grid gap-4 sm:grid-cols-3">
+          <Summary title="Prerequisites" values={p.prerequisites} />
+          <Summary title="Objectives" values={p.objectives} />
+          <Summary title="Completion evidence" values={p.completion_evidence} />
+        </div>
+        <p className="mt-4 text-xs text-[var(--muted)]">
+          Supported revisions: {p.supported_revisions.join(", ")} · Locales:{" "}
+          {p.locales.join(", ")}
+        </p>
+      </section>
+      {attempt && (
+        <section className="rounded-xl border border-emerald-200 bg-emerald-50 p-5">
+          <p className="text-xs font-semibold uppercase tracking-wide text-emerald-800">
+            Bounded practice workspace · {attempt.state}
+          </p>
+          <h3 className="mt-1 font-semibold">
+            Exact revision {attempt.commit_id.slice(0, 12)}
+          </h3>
+          <p className="mt-2 text-sm">
+            {attempt.learning_context.instructions}
+          </p>
+          <p className="mt-3 text-xs">
+            Acceptance:{" "}
+            {attempt.learning_context.acceptance_criteria.join(" · ")}
+          </p>
+          <p className="mt-2 font-mono text-[10px] text-emerald-900">
+            Reproduce {attempt.learning_context.reproducibility_sha256}
+          </p>
+          <a
+            href={`/workspaces/${attempt.id}`}
+            className="mt-3 inline-block text-sm font-semibold text-[var(--brand)]"
+          >
+            Open workspace →
+          </a>
+        </section>
+      )}
+      {p.modules.map((m, index) => (
+        <section
+          key={m.id}
+          className="rounded-xl border border-[var(--line)] bg-white p-6"
+        >
+          <p className="text-xs font-semibold text-[var(--brand-strong)]">
+            Module {index + 1} · {m.estimated_minutes} min
+          </p>
+          <h3 className="mt-1 text-xl font-semibold">{m.title}</h3>
+          <p className="mt-2 text-sm text-[var(--muted)]">
+            Why it matters: {m.why_it_matters}
+          </p>
+          <div className="mt-4 space-y-2">
+            {m.materials.map((x, i) => (
+              <div
+                key={i}
+                className="rounded-lg border border-[var(--line)] p-3"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-sm font-semibold">{x.label}</span>
+                  <span
+                    className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${badge(x.status)}`}
+                  >
+                    {x.status?.replace("_", " ")}
+                  </span>
+                  <span className="text-xs text-[var(--muted)]">{x.kind}</span>
+                </div>
+                {x.status_detail && (
+                  <p className="mt-1 text-xs text-[var(--muted)]">
+                    {x.status_detail}
+                  </p>
+                )}
+              </div>
+            ))}
+          </div>
+          {m.exercises.map((x, i) => (
+            <div key={i} className="mt-4 rounded-lg bg-[var(--canvas)] p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm font-semibold">Exercise · {x.title}</p>
+                  <p className="mt-1 text-sm text-[var(--muted)]">
+                    {x.instructions}
+                  </p>
+                </div>
+                {token && x.id && x.revision && (
+                  <button
+                    disabled={launching === x.id}
+                    onClick={() => void launch(m.id, x.id!)}
+                    className="rounded-lg bg-[var(--brand)] px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
+                  >
+                    {launching === x.id ? "Preparing…" : "Launch practice"}
+                  </button>
+                )}
+              </div>
+              {x.kind && (
+                <p className="mt-2 text-xs">
+                  {x.kind} · exact revision {x.revision?.slice(0, 12)}
+                </p>
+              )}
+              <p className="mt-2 text-xs">
+                Evidence: {x.completion_evidence.join(", ")}
+              </p>
+            </div>
+          ))}
+        </section>
+      ))}
+      <section className="grid gap-4 md:grid-cols-2">
+        <div className="rounded-xl border border-[var(--line)] bg-white p-5">
+          <h3 className="font-semibold">Mentors</h3>
+          {p.mentors.map((x) => (
+            <p key={x.user_id} className="mt-3 text-sm">
+              {x.responsibility}{" "}
+              <span
+                className={`ml-2 rounded-full border px-2 py-0.5 text-[10px] ${badge(x.status)}`}
+              >
+                {x.status}
+              </span>
+            </p>
+          ))}
+        </div>
+        <div className="rounded-xl border border-[var(--line)] bg-white p-5">
+          <h3 className="font-semibold">Learner environments</h3>
+          {p.environments.map((x) => (
+            <p key={x.name} className="mt-3 text-sm">
+              {x.name}{" "}
+              <span
+                className={`ml-2 rounded-full border px-2 py-0.5 text-[10px] ${badge(x.status)}`}
+              >
+                {x.status?.replace("_", " ")}
+              </span>
+            </p>
+          ))}
+        </div>
+      </section>
+    </main>
+  );
+}
+function Summary({ title, values }: { title: string; values: string[] }) {
+  return (
+    <div>
+      <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">
+        {title}
+      </h3>
+      <ul className="mt-2 space-y-1 text-sm">
+        {values.map((x) => (
+          <li key={x}>• {x}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}

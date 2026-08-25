@@ -2359,6 +2359,26 @@ removed from the curriculum. Records default beneath
 `$LEARNING_PATHWAY_STORAGE_ROOT` (`learning-pathways`) and grant no Git,
 repository, package, issue, mentor, workspace, review, or completion authority.
 
+Launchable exercises add an ID, practice kind (`exploration`, `command`,
+`debugging`, `test`, `api`, or `change`), exact commit, bounded starter
+commands, acceptance criteria, optional progressive hints, and at most twenty
+synthetic or permitted data files. Permitted data names a safe repository path
+at that same commit; synthetic data is bounded inline content. Both are screened
+for credential-shaped material before staging.
+
+`POST /repositories/{id}/learning-pathways/{slug}/modules/{module_id}/attempts`
+selects an immutable `pathway_version` and exercise, verifies its commit and
+`.vivarium/workspace.json`, applies effective repository and organization
+resource limits, and launches the normal bounded executor. The container has no
+network, capabilities, production credentials, writable host mount, or Git
+remote; changes remain unpublished and disposable. The workspace freezes
+instructions, tools, data paths, criteria, starter commands, and a
+reproducibility digest alongside setup, command output, changes, and estimated
+compute cost. Learners reveal hints and append checkpoints citing exact criteria
+and retained command outcomes through `/workspaces/{id}/learning/hints/{index}`
+and `/workspaces/{id}/learning/checkpoints`. Failed setup remains inspectable,
+and relaunching gives a clean attempt against the immutable inputs.
+
 References to documentation, current ownership, releases, issues, proposals,
 and workspace definitions are projected against live repository state on every
 read. Missing, moved, or private requirements remain in history and are marked

@@ -50,9 +50,22 @@ type Material struct {
 	StatusDetail   string `json:"status_detail,omitempty"`
 }
 type Exercise struct {
-	Title        string   `json:"title"`
-	Instructions string   `json:"instructions"`
-	Evidence     []string `json:"completion_evidence"`
+	ID                 string         `json:"id"`
+	Title              string         `json:"title"`
+	Kind               string         `json:"kind"`
+	Instructions       string         `json:"instructions"`
+	Revision           string         `json:"revision"`
+	StarterCommands    []string       `json:"starter_commands"`
+	AcceptanceCriteria []string       `json:"acceptance_criteria"`
+	Hints              []string       `json:"hints,omitempty"`
+	Data               []ExerciseData `json:"data,omitempty"`
+	Evidence           []string       `json:"completion_evidence"`
+}
+type ExerciseData struct {
+	Kind    string `json:"kind"`
+	Path    string `json:"path"`
+	Content string `json:"content,omitempty"`
+	Source  string `json:"source,omitempty"`
 }
 type Module struct {
 	ID               string     `json:"id"`
@@ -230,9 +243,43 @@ func validate(v Revision) error {
 			return ErrInvalid
 		}
 		seen[m.ID] = true
+		exercises := map[string]bool{}
 		for _, x := range m.Exercises {
 			if strings.TrimSpace(x.Title) == "" || strings.TrimSpace(x.Instructions) == "" || len(x.Evidence) == 0 {
 				return ErrInvalid
+			}
+			practice := x.ID != "" || x.Kind != "" || x.Revision != "" || len(x.AcceptanceCriteria) != 0 || len(x.StarterCommands) != 0 || len(x.Hints) != 0 || len(x.Data) != 0
+			supported := false
+			for _, revision := range v.SupportedRevisions {
+				if revision == x.Revision {
+					supported = true
+				}
+			}
+			if practice && (!validSlug(x.ID) || exercises[x.ID] || !oneOf(x.Kind, "exploration", "command", "debugging", "test", "api", "change") || !isRevision(x.Revision) || !supported || len(x.AcceptanceCriteria) == 0 || len(x.StarterCommands) > 20 || len(x.Hints) > 20 || len(x.Data) > 20) {
+				return ErrInvalid
+			}
+			if practice {
+				exercises[x.ID] = true
+			}
+			for _, command := range x.StarterCommands {
+				if strings.TrimSpace(command) == "" || len(command) > 2000 {
+					return ErrInvalid
+				}
+			}
+			for _, criterion := range x.AcceptanceCriteria {
+				if strings.TrimSpace(criterion) == "" || len(criterion) > 1000 {
+					return ErrInvalid
+				}
+			}
+			for _, hint := range x.Hints {
+				if strings.TrimSpace(hint) == "" || len(hint) > 2000 {
+					return ErrInvalid
+				}
+			}
+			for _, data := range x.Data {
+				if !oneOf(data.Kind, "synthetic", "permitted") || !safePath(data.Path) || (data.Kind == "synthetic" && (data.Content == "" || len(data.Content) > 65536 || credentialLike(data.Path, data.Content))) || (data.Kind == "permitted" && (!safePath(data.Source) || data.Content != "")) {
+					return ErrInvalid
+				}
 			}
 		}
 		for _, x := range m.Materials {
@@ -260,6 +307,16 @@ func validate(v Revision) error {
 		}
 	}
 	return nil
+}
+
+func credentialLike(path, content string) bool {
+	lower := strings.ToLower(path + "\n" + content)
+	for _, marker := range []string{"-----begin private key-----", "authorization: bearer ", "authorization: basic ", ".env", "password=", "passwd=", "api_key=", "apikey=", "access_token=", "client_secret="} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 func oneOf(v string, xs ...string) bool {
 	for _, x := range xs {
