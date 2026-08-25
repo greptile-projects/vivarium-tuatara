@@ -48,6 +48,37 @@ type findingResolutionInput struct {
 	Evidence       []reviewplans.WorkCitation   `json:"evidence"`
 }
 
+// Review agents hold repository-bound read credentials: publishing attributed
+// review observations is not repository write authority. Humans still require
+// repositories:write before the route applies its narrower role checks.
+func authenticateReviewMutation(w http.ResponseWriter, r *http.Request, credentials *auth.Store, repositoryID string) (auth.Credential, bool) {
+	if actor, authenticated, err := authenticateOptionalCredential(r, credentials, "repositories:write"); err == nil && authenticated {
+		if !reviewCredentialCoversRepository(actor, repositoryID) {
+			writeAPIError(w, http.StatusForbidden, "review_credential_repository_mismatch", "agent credential does not cover this repository")
+			return auth.Credential{}, false
+		}
+		return actor, true
+	}
+	actor, authenticated, err := authenticateOptionalCredential(r, credentials, "repositories:read")
+	if err != nil || !authenticated || actor.AgentID == "" {
+		writeAuthenticationRequired(w, false)
+		return auth.Credential{}, false
+	}
+	if !reviewCredentialCoversRepository(actor, repositoryID) {
+		writeAPIError(w, http.StatusForbidden, "review_credential_repository_mismatch", "agent credential does not cover this repository")
+		return auth.Credential{}, false
+	}
+	return actor, true
+}
+
+func reviewCredentialCoversRepository(actor auth.Credential, repositoryID string) bool {
+	return actor.AgentID == "" || actor.RepositoryID == repositoryID
+}
+
+func agentReviewResolutionActionAllowed(action string) bool {
+	return slices.Contains([]string{"discuss", "classify", "challenge"}, action)
+}
+
 func registerReviewWorkRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, pulls *pullrequests.Store, plans *reviewplans.Store, orgs *organizations.Store, checks *checkruns.Store, previewStore *previews.Store, decisionStore *decisions.Store, proposalStore *proposals.Store, sessions *changesessions.Store, workspaceStore *workspaces.Store) {
 	mux.HandleFunc("GET /repositories/{id}/pulls/{pull_id}/review-work", func(w http.ResponseWriter, r *http.Request) {
 		actor, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id"))
@@ -112,12 +143,13 @@ func registerReviewWorkRoutes(mux *http.ServeMux, git *storage.Store, catalog *r
 					areaAssignments = append(areaAssignments, a)
 				}
 			}
-			queues = append(queues, map[string]any{"area": area, "assignments": areaAssignments, "entries": areaEntries, "coverage": map[string]any{"entry_count": len(areaEntries), "finding_count": findings, "uncertainty_count": uncertainty, "conflicting_conclusions": len(conclusions) > 1}, "dependencies": area.DependsOn})
+			dependencies := append([]string{}, area.DependsOn...)
+			queues = append(queues, map[string]any{"area": area, "assignments": areaAssignments, "entries": areaEntries, "coverage": map[string]any{"entry_count": len(areaEntries), "finding_count": findings, "uncertainty_count": uncertainty, "conflicting_conclusions": len(conclusions) > 1}, "dependencies": dependencies})
 		}
 		writeJSON(w, 200, map[string]any{"plan_id": plan.ID, "plan_version": plan.Version, "source_revision": plan.SourceRevision, "target_revision": plan.TargetRevision, "stale": plan.Stale, "queues": queues, "finding_resolutions": resolutionProjection, "viewer_id": actor.UserID, "authority": "Shared review work and finding decisions preserve exact reasoning but grant no branch, agent, approval, merge, exception, evidence, disclosure, or operational authority."})
 	})
 	mux.HandleFunc("POST /repositories/{id}/pulls/{pull_id}/review-work", func(w http.ResponseWriter, r *http.Request) {
-		actor, ok := authenticateRequest(w, r, credentials, "repositories:write", true)
+		actor, ok := authenticateReviewMutation(w, r, credentials, r.PathValue("id"))
 		if !ok {
 			return
 		}
@@ -189,7 +221,7 @@ func registerReviewWorkRoutes(mux *http.ServeMux, git *storage.Store, catalog *r
 		writeJSON(w, 201, value)
 	})
 	mux.HandleFunc("POST /repositories/{id}/pulls/{pull_id}/review-findings/resolutions", func(w http.ResponseWriter, r *http.Request) {
-		actor, ok := authenticateRequest(w, r, credentials, "repositories:write", true)
+		actor, ok := authenticateReviewMutation(w, r, credentials, r.PathValue("id"))
 		if !ok {
 			return
 		}
@@ -247,6 +279,10 @@ func registerReviewWorkRoutes(mux *http.ServeMux, git *storage.Store, catalog *r
 		actorID, actorType := actor.UserID, "human"
 		if actor.AgentID != "" {
 			actorID, actorType = actor.AgentID, "agent"
+			if !agentReviewResolutionActionAllowed(in.Action) {
+				writeAPIError(w, 403, "review_human_decision_required", "agents may discuss, classify, or challenge findings but cannot change their disposition")
+				return
+			}
 		}
 		ownerAction := slices.Contains([]string{"accept", "supersede", "resolved", "accepted_risk", "exception"}, in.Action)
 		if ownerAction && (actorType != "human" || (actorID != pull.AuthorID && actorID != repo.OwnerID)) {
@@ -335,6 +371,8 @@ func projectFindingResolutions(work []reviewplans.WorkEntry, values []reviewplan
 		events := []reviewplans.FindingResolution{}
 		for _, v := range values {
 			if v.FindingID == finding.ID {
+				v.Links = append([]reviewplans.ResolutionLink{}, v.Links...)
+				v.Evidence = append([]reviewplans.WorkCitation{}, v.Evidence...)
 				events = append(events, v)
 			}
 		}

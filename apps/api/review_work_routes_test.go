@@ -4,9 +4,35 @@ import (
 	"testing"
 	"time"
 
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/reviewplans"
 )
+
+func TestReviewAgentCredentialMustCoverRouteRepository(t *testing.T) {
+	if reviewCredentialCoversRepository(auth.Credential{AgentID: "agent", RepositoryID: "repo-a"}, "repo-b") {
+		t.Fatal("cross-repository agent credential accepted")
+	}
+	if !reviewCredentialCoversRepository(auth.Credential{AgentID: "agent", RepositoryID: "repo-a"}, "repo-a") {
+		t.Fatal("exact repository agent credential rejected")
+	}
+	if !reviewCredentialCoversRepository(auth.Credential{UserID: "human"}, "repo-b") {
+		t.Fatal("ordinary human credential incorrectly treated as repository-bound")
+	}
+}
+
+func TestAgentReviewResolutionActionsCannotChangeDisposition(t *testing.T) {
+	for _, action := range []string{"discuss", "classify", "challenge"} {
+		if !agentReviewResolutionActionAllowed(action) {
+			t.Fatalf("agent discussion action %q rejected", action)
+		}
+	}
+	for _, action := range []string{"accept", "defer", "remains_applicable", "supersede", "resolved", "accepted_risk", "exception"} {
+		if agentReviewResolutionActionAllowed(action) {
+			t.Fatalf("agent disposition action %q accepted", action)
+		}
+	}
+}
 
 func TestReviewWorkCitationsStayInsideExactArea(t *testing.T) {
 	area := reviewplans.Area{Paths: []string{"api/auth.go"}, Questions: []string{"Does retry reconcile?"}, Evidence: []reviewplans.Evidence{{Description: "passing auth check"}}}

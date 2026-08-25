@@ -129,11 +129,20 @@ func (s *Store) Transition(repo, pull, id, actor, action, reason string, replace
 		return Assignment{}, ErrNotFound
 	}
 	v := &values[index]
-	allowed := map[string][]string{"invited": {"accept", "decline", "recuse", "unavailable", "release", "replace"}, "accepted": {"decline", "recuse", "unavailable", "release", "replace"}}
+	allowed := map[string][]string{
+		"invited":     {"accept", "decline", "recuse", "unavailable", "release", "replace"},
+		"accepted":    {"decline", "recuse", "unavailable", "release", "replace"},
+		"declined":    {"replace"},
+		"recused":     {"replace"},
+		"unavailable": {"replace"},
+	}
 	if !slices.Contains(allowed[v.Status], action) {
 		return Assignment{}, ErrConflict
 	}
-	if action == "accept" {
+	// The repository owner remains the acknowledgement backstop for every
+	// derived area. Their self-assigned areas must not deadlock a plan whose
+	// specialist surface is wider than the ordinary reviewer load threshold.
+	if action == "accept" && v.PrincipalID != v.AssignedBy {
 		repositoryAssignments, loadErr := s.readRepositoryAssignments(repo)
 		if loadErr != nil {
 			return Assignment{}, loadErr

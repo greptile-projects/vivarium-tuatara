@@ -36,6 +36,33 @@ func TestReviewAssignmentLifecycleIsAreaBoundedAndRetryStable(t *testing.T) {
 	}
 }
 
+func TestOwnerCanReplaceReviewerAfterRecusal(t *testing.T) {
+	store, _ := New(t.TempDir())
+	created, _ := store.CreateAssignment(Assignment{RequestID: "recusal-original", RepositoryID: "repo", PullRequestID: "pull", PlanID: "plan", PlanVersion: 1, AreaID: "security", PrincipalType: "human", PrincipalID: "reviewer", AssignedBy: "owner"})
+	accepted, _ := store.Transition("repo", "pull", created.ID, "reviewer", "accept", "", nil)
+	recused, _ := store.Transition("repo", "pull", accepted.ID, "reviewer", "recuse", "authored the design", nil)
+	if _, err := store.Transition("repo", "pull", recused.ID, "owner", "replace", "independent review required", &Assignment{RequestID: "recusal-replacement", PrincipalType: "human", PrincipalID: "replacement"}); err != nil {
+		t.Fatal(err)
+	}
+	values, _ := store.ListAssignments("repo", "pull")
+	if len(values) != 2 || values[0].Status != "replaced" || values[1].Status != "invited" || values[1].ReplacesID != values[0].ID {
+		t.Fatalf("replacement after recusal = %#v", values)
+	}
+}
+
+func TestSelfAssignedOwnerCanAcceptEveryPlannedArea(t *testing.T) {
+	store, _ := New(t.TempDir())
+	for index, area := range []string{"change-intent", "security", "accessibility", "interface"} {
+		created, err := store.CreateAssignment(Assignment{RequestID: fmt.Sprintf("owner-area-%d", index), RepositoryID: "repo", PullRequestID: "pull", PlanID: "plan", PlanVersion: 1, AreaID: area, PrincipalType: "human", PrincipalID: "owner", AssignedBy: "owner"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = store.Transition("repo", "pull", created.ID, "owner", "accept", "", nil); err != nil {
+			t.Fatalf("owner area %s: %v", area, err)
+		}
+	}
+}
+
 func TestReviewAssignmentAreaConflictIsScopedToExactPlan(t *testing.T) {
 	store, _ := New(t.TempDir())
 	first := Assignment{RequestID: "request-plan-a", RepositoryID: "repo", PullRequestID: "pull", PlanID: "plan-a", PlanVersion: 1, AreaID: "security", PrincipalType: "human", PrincipalID: "one", AssignedBy: "owner"}
