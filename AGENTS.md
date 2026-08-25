@@ -538,7 +538,18 @@ whenever dependencies change or the web job fails before it starts.
   compatibility, and known gaps with inspectable references. Missing, inaccessible, and
   version-stale evidence remains an explicit gap rather than proof of fit. Workspaces grant no
   repository, package, API, procurement, agent, Git, environment, deployment, or provider-roadmap
-  authority.
+authority.
+
+Revision-exact demand and capacity models at repository `/capacity-models` routes and
+the repository `/capacity` workspace retain immutable forecasts beneath
+`$CAPACITY_MODEL_STORAGE_ROOT` (`capacity-models`). Human participants and repository-bound
+read-only agents bind sanitized multi-domain observations to exact releases and closed
+windows, then expose assumptions, workload segments, explained saturation uncertainty,
+cost curves, provenance, and alternative scenarios. Audience projection preserves
+inaccessible evidence as a gap; instrumentation changes, anomalies, and append-only
+challenge, support, or supersession events remain visible without rewriting earlier
+predictions. Models grant no repository, data, infrastructure, deployment, funding,
+scaling, or operational authority.
   CAS-versioned bounded trials resolve an existing attested release or exact readable commit, scope
   packages/APIs and synthetic or permitted data, and select only the adopter's declared journeys.
   Definitions and immutable attempts retain setup, configuration, commands, integration changes,

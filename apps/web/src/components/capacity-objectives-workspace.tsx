@@ -214,7 +214,7 @@ export function CapacityObjectivesWorkspace({
           : "Capacity objectives could not be loaded.",
       );
     }
-  }, [legacyPendingCreateKey, pendingCreateKey, repositoryID, token, user?.id]);
+  }, [legacyPendingCreateKey, pendingCreateKey, repositoryID, token, user]);
   useEffect(() => {
     void Promise.resolve().then(load);
   }, [load]);
