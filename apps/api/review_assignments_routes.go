@@ -121,7 +121,7 @@ func registerReviewAssignmentRoutes(mux *http.ServeMux, catalog *repositories.St
 		writeJSON(w, 201, value)
 	})
 	mux.HandleFunc("POST /repositories/{id}/pulls/{pull_id}/review-assignments/{assignment_id}/transitions", func(w http.ResponseWriter, r *http.Request) {
-		actor, ok := authenticateReviewMutation(w, r, credentials)
+		actor, ok := authenticateReviewMutation(w, r, credentials, r.PathValue("id"))
 		if !ok {
 			return
 		}
