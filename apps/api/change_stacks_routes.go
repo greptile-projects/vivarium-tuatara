@@ -250,24 +250,18 @@ func registerChangeStackRoutes(mux *http.ServeMux, git *storage.Store, catalog *
 				candidate.Status = "evidence_unavailable"
 				continue
 			}
-			state, matched := "passed", 0
 			candidate.CheckRunIDs = []string{}
+			requiredChecks := map[string]bool{}
+			for _, name := range candidate.RequiredChecks {
+				requiredChecks[name] = true
+			}
 			for _, run := range runs {
-				if run.CommitID != candidate.CandidateRevision {
+				if run.CommitID != candidate.CandidateRevision || !requiredChecks[run.Definition.Name] {
 					continue
 				}
-				matched++
 				candidate.CheckRunIDs = append(candidate.CheckRunIDs, run.ID)
-				if run.State == "failed" || run.State == "cancelled" {
-					state = "failed"
-				} else if run.State != "passed" && state != "failed" {
-					state = "verifying"
-				}
 			}
-			if matched < len(candidate.RequiredChecks) && state != "failed" {
-				state = "verifying"
-			}
-			candidate.Status = state
+			candidate.Status = stackIntegrationCheckStatus(*candidate, runs)
 		}
 		return v
 	}
@@ -629,6 +623,30 @@ func registerChangeStackRoutes(mux *http.ServeMux, git *storage.Store, catalog *
 	})
 	registerChangeStackRestackRoutes(mux, git, catalog, credentials, stacks, pulls, checks)
 	registerChangeStackCollaborationRoutes(mux, catalog, organizationsStore, credentials, stacks)
+}
+
+func stackIntegrationCheckStatus(candidate changestacks.IntegrationCandidate, runs []checkruns.Run) string {
+	state := "passed"
+	required := map[string]bool{}
+	for _, name := range candidate.RequiredChecks {
+		required[name] = true
+	}
+	matched := map[string]bool{}
+	for _, run := range runs {
+		if run.CommitID != candidate.CandidateRevision || !required[run.Definition.Name] {
+			continue
+		}
+		matched[run.Definition.Name] = true
+		if run.State == "failed" || run.State == "canceled" {
+			state = "failed"
+		} else if run.State != "succeeded" && state != "failed" {
+			state = "verifying"
+		}
+	}
+	if len(matched) < len(required) && state != "failed" {
+		state = "verifying"
+	}
+	return state
 }
 
 func stackUpstreamCurrent(frozen, current map[string]string) (bool, []string) {
