@@ -1527,7 +1527,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 				selected := []provenanceassessments.Assessment{}
 				blockers := []pullrequests.ReadinessBlocker{}
 				for _, a := range values {
-					if a.Candidate.Kind == "pull_request" && a.Candidate.ID == p.ID {
+					if a.Candidate.Kind == "pull_request" && a.Candidate.ID == p.ID && a.Candidate.Revision == p.SourceCommitID {
 						selected = append(selected, a)
 						if !a.Ready {
 							blockers = append(blockers, pullrequests.ReadinessBlocker{Code: "provenance_evidence_required", Message: "current provenance assessment has unresolved or stale blocking findings"})

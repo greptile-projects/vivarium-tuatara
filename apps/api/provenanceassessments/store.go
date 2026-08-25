@@ -221,6 +221,9 @@ func project(a Assessment, c Current) Assessment {
 	a.Ready = true
 	candidateStale := c.CandidateRevision == "" || c.CandidateRevision != a.Candidate.Revision || c.GraphDigest != a.GraphDigest
 	a.Stale = candidateStale
+	if candidateStale {
+		a.Ready = false
+	}
 	for i := range a.Findings {
 		f := &a.Findings[i]
 		f.Current = !candidateStale && (f.DependencyRevision == "" || c.DependencyRevisions[f.NodeID] == f.DependencyRevision) && (f.ToolRevision == "" || c.ToolRevisions[f.NodeID] == f.ToolRevision) && (f.PolicyRuleDigest == "" || c.PolicyRuleDigests[f.MaterialKind] == f.PolicyRuleDigest)

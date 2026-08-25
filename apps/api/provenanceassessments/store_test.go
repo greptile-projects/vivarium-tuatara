@@ -37,3 +37,21 @@ func TestAssessmentSelectivelyInvalidatesAndRequiresOwnerDecision(t *testing.T) 
 		t.Fatalf("selective invalidation = %#v", a)
 	}
 }
+
+func TestCandidateOrGraphStalenessAlwaysClearsReadiness(t *testing.T) {
+	s, _ := New(t.TempDir())
+	a, err := s.Create(Assessment{RequestID: "warning", RepositoryID: "repo", Candidate: Candidate{Kind: "release_candidate", ID: "release", Revision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, GraphID: "graph", GraphDigest: "digest", PolicyID: "policy", PolicyVersion: 1, CreatedBy: "owner", Findings: []Finding{{ID: "generated", Kind: "generated_output", Severity: "warning", MaterialKind: "generated_code", Summary: "review generator"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	matching := Current{CandidateRevision: a.Candidate.Revision, GraphDigest: a.GraphDigest}
+	if a, err = s.Get("repo", a.ID, matching); err != nil || !a.Ready || a.Stale {
+		t.Fatalf("matching warning assessment = %#v, %v", a, err)
+	}
+	for name, current := range map[string]Current{"candidate": {CandidateRevision: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", GraphDigest: a.GraphDigest}, "graph": {CandidateRevision: a.Candidate.Revision, GraphDigest: "changed"}} {
+		projected, getErr := s.Get("repo", a.ID, current)
+		if getErr != nil || projected.Ready || !projected.Stale {
+			t.Fatalf("%s stale assessment = %#v, %v", name, projected, getErr)
+		}
+	}
+}

@@ -205,7 +205,9 @@ func deriveProvenanceFindings(g provenancegraphs.Graph, p provenancepolicies.Rev
 	}
 	for _, e := range g.Edges {
 		if src, ok := nodes[e.From]; ok {
-			origins[e.To] = append(origins[e.To], src.Label)
+			if provenanceOriginTransformation(e.Transformation) {
+				origins[e.To] = append(origins[e.To], src.Label)
+			}
 			if e.Transformation == "generated" {
 				generated[e.To] = src.Label
 			}

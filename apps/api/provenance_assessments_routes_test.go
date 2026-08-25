@@ -23,3 +23,20 @@ func TestProvenanceAssessmentDerivesLicenseGenerationAndDistributionObligations(
 		}
 	}
 }
+
+func TestProvenanceAssessmentRejectsClaimOnlyEdgesAsOrigins(t *testing.T) {
+	policy := provenancepolicies.Revision{Rules: []provenancepolicies.MaterialRule{{Kind: "source", PermittedLicenses: []string{"MIT"}, ReviewOwnerIDs: []string{"reviewer"}}}}
+	for _, transformation := range []string{"licensed_as", "attested"} {
+		graph := provenancegraphs.Graph{Nodes: []provenancegraphs.Node{{ID: "claim", Kind: "license", Label: "MIT", License: "MIT"}, {ID: "material", Kind: "file", Label: "main.go", License: "MIT"}}, Edges: []provenancegraphs.Edge{{From: "claim", To: "material", Transformation: transformation}}}
+		findings := deriveProvenanceFindings(graph, policy, nil)
+		found := false
+		for _, finding := range findings {
+			if finding.Kind == "unattributed_material" && finding.NodeID == "material" && finding.Severity == "blocking" {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("%s claim satisfied production origin: %#v", transformation, findings)
+		}
+	}
+}
