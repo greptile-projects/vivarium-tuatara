@@ -18,6 +18,12 @@ finding disputes and recovery, exact-current verification, integration queue,
 and merge as one public pull workflow. Agent review publication stays bounded
 to an accepted exact area and grants no repository-write or approval authority.
 
+Repository collaborators can publish immutable capacity-objective revisions at
+`/repositories/{id}/capacity-objectives` and use the repository Capacity workspace
+to agree on forecast demand, traffic shape, reliability, dependency, regional,
+budget, lead-time, success, and rollback boundaries. Unsupported inputs and changing
+commitments remain explicit rather than being treated as settled planning facts.
+
 ## Getting started
 
 ```sh
