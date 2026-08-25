@@ -13,8 +13,10 @@ service-objective, infrastructure, release, and funding links. Forecast and assu
 evidence remains caller-declared: unsupported forecasts, missing signals, conflicting
 successor commitments, and expiring or expired assumptions are attributable diagnostics,
 not inferred proof. Publication requires repository-write scope and current participation
-for every named owner; optimistic versions reject concurrent successors, old revisions
-remain readable, and these contracts grant no infrastructure, funding, release, scaling,
+for every named owner; caller-stable request identities reconcile ambiguous create and
+revision retries and reject changed reuse. Repeated typed links pair by kind and stable
+label, so order does not manufacture commitment conflicts. Optimistic versions reject
+concurrent successors, old revisions remain readable, and these contracts grant no infrastructure, funding, release, scaling,
 repository, or operational authority.
 
 Revision-exact review planning at pull request `/review-plans` routes and the pull web surface retains immutable plan versions beneath `$REVIEW_PLAN_STORAGE_ROOT` (`review-plans`). A pull author or current repository owner can derive areas, acceptance questions, required evidence, dependencies, completion rules, policy checks, risks, and affected security, privacy, accessibility, and interface commitments from the exact source/target diff and declared intent. Caller-stable request identities reconcile ambiguous post-publication retries and reject changed reuse. Reads preserve old versions and project source or target movement as an attributable stale-analysis gap; missing ownership and overlapping scope remain diagnostics. Plans coordinate review only and grant no repository, evidence, review, approval, merge, policy, commitment, or disclosure authority.

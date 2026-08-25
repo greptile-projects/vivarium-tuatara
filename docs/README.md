@@ -8,7 +8,10 @@ written down here as they're decided, not before.
 Repository readers list and inspect immutable demand contracts through
 `GET /repositories/{id}/capacity-objectives` and its `{objective_id}` detail route.
 Current participants with repository-write scope create a contract or publish a complete
-optimistic-concurrency successor. The persisted contract covers supported surface,
+optimistic-concurrency successor. Every mutation carries a caller-stable `request_id`:
+unchanged retries return the already-retained objective or revision, changed reuse is a
+conflict, and a post-rename durability error is explicitly reported as an ambiguous commit
+that callers reconcile by retrying that same identity. The persisted contract covers supported surface,
 forecast windows and evidence, traffic shape and seasonality, reliability levels,
 bottleneck and dependency signals, regional demand allocation, current human owners,
 budget, scaling lead time, success and rollback evidence, expiring assumptions, and
@@ -20,6 +23,8 @@ lock while earlier revisions remain embedded and readable.
 Projection deliberately reports `unsupported_forecast`, `missing_signal`,
 `unsupported_assumption`, `expiring_assumption`, `expired_assumption`, and
 `conflicting_commitment` states with the actor who introduced the relevant declaration.
+Repeated links pair across revisions by their `(kind, label)` identity, which must be
+unique within a revision, so reordering same-kind commitments does not create false gaps.
 These are diagnostics, not validation shortcuts or evidence derived from linked systems.
 The repository `/capacity` workspace exposes the complete public JSON contract so no
 repeated entry is silently discarded when publishing a successor. Contracts coordinate

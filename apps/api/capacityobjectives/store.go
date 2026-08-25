@@ -2,7 +2,7 @@
 package capacityobjectives
 
 import (
-	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -19,6 +19,7 @@ import (
 var ErrNotFound = errors.New("capacity objective not found")
 var ErrInvalid = errors.New("invalid capacity objective")
 var ErrConflict = errors.New("capacity objective version conflict")
+var ErrCommitted = errors.New("capacity objective may have committed")
 
 type Scope struct {
 	Kind       string `json:"kind"`
@@ -110,6 +111,7 @@ type Diagnostic struct {
 	AttributedTo string `json:"attributed_to"`
 }
 type Revision struct {
+	RequestID        string            `json:"request_id"`
 	Version          int               `json:"version"`
 	Title            string            `json:"title"`
 	Summary          string            `json:"summary"`
@@ -134,6 +136,8 @@ type Revision struct {
 }
 type Objective struct {
 	ID             string       `json:"id"`
+	RequestID      string       `json:"request_id"`
+	RequestDigest  string       `json:"request_digest"`
 	RepositoryID   string       `json:"repository_id"`
 	CurrentVersion int          `json:"current_version"`
 	Revisions      []Revision   `json:"revisions"`
@@ -156,27 +160,53 @@ func New(root string) (*Store, error) {
 	}
 	return &Store{root: root, now: func() time.Time { return time.Now().UTC().Truncate(time.Microsecond) }}, nil
 }
-func (s *Store) Create(repositoryID, actor string, r Revision) (Objective, error) {
+func (s *Store) Create(repositoryID, actor, requestID string, r Revision) (Objective, error) {
 	var out Objective
 	err := s.lock(func() error {
+		if blank(requestID) {
+			return ErrInvalid
+		}
 		if validate(r) != nil {
 			return ErrInvalid
 		}
+		digest := revisionDigest(r)
+		id := stableID(repositoryID, actor, requestID)
+		if existing, e := s.read(id); e == nil {
+			if existing.RequestID != requestID || existing.RequestDigest != digest {
+				return ErrConflict
+			}
+			out = existing
+			return nil
+		} else if !errors.Is(e, ErrNotFound) {
+			return e
+		}
 		now := s.now()
 		stamp(&r, actor)
+		r.RequestID = requestID
 		r.Version = 1
 		r.CreatedAt = now
-		out = Objective{ID: randomID(), RepositoryID: repositoryID, CurrentVersion: 1, Revisions: []Revision{r}, CreatedAt: now, UpdatedAt: now}
+		out = Objective{ID: id, RequestID: requestID, RequestDigest: digest, RepositoryID: repositoryID, CurrentVersion: 1, Revisions: []Revision{r}, CreatedAt: now, UpdatedAt: now}
 		return s.write(out)
 	})
 	return s.project(out), err
 }
-func (s *Store) Revise(id string, expected int, actor string, r Revision) (Objective, error) {
+func (s *Store) Revise(id string, expected int, actor, requestID string, r Revision) (Objective, error) {
 	var out Objective
 	err := s.lock(func() error {
+		if blank(requestID) {
+			return ErrInvalid
+		}
 		v, e := s.read(id)
 		if e != nil {
 			return e
+		}
+		digest := revisionDigest(r)
+		if v.CurrentVersion == expected+1 && len(v.Revisions) > 0 {
+			latest := v.Revisions[len(v.Revisions)-1]
+			if latest.RequestID == requestID && revisionDigest(latest) == digest {
+				out = v
+				return nil
+			}
 		}
 		if v.CurrentVersion != expected {
 			return ErrConflict
@@ -185,6 +215,7 @@ func (s *Store) Revise(id string, expected int, actor string, r Revision) (Objec
 			return ErrInvalid
 		}
 		stamp(&r, actor)
+		r.RequestID = requestID
 		r.Version = expected + 1
 		r.CreatedAt = s.now()
 		v.CurrentVersion = r.Version
@@ -276,10 +307,10 @@ func (s *Store) project(v Objective) Objective {
 		previous := v.Revisions[len(v.Revisions)-2]
 		old := map[string]string{}
 		for _, l := range previous.Links {
-			old[l.Kind] = l.ResourceID
+			old[linkIdentity(l)] = l.ResourceID
 		}
 		for _, l := range r.Links {
-			if id := old[l.Kind]; id != "" && id != l.ResourceID {
+			if id := old[linkIdentity(l)]; id != "" && id != l.ResourceID {
 				d = append(d, diag("conflicting_commitment", "warning", "This linked commitment differs from the prior version.", l.ResourceID, l.AddedBy))
 			}
 		}
@@ -344,10 +375,13 @@ func validate(r Revision) error {
 		}
 	}
 	validLinks := map[string]bool{"roadmap": true, "experiment": true, "performance_goal": true, "service_objective": true, "infrastructure": true, "release": true, "funding": true}
+	linkIDs := map[string]bool{}
 	for _, x := range r.Links {
-		if !validLinks[x.Kind] || blank(x.ResourceID) {
+		identity := linkIdentity(x)
+		if !validLinks[x.Kind] || blank(x.ResourceID) || blank(x.Label) || linkIDs[identity] {
 			return ErrInvalid
 		}
+		linkIDs[identity] = true
 	}
 	for _, x := range r.Assumptions {
 		if blank(x.ID) || blank(x.Statement) || x.ExpiresAt.IsZero() {
@@ -356,9 +390,32 @@ func validate(r Revision) error {
 	}
 	return nil
 }
-func blank(v string) bool     { return strings.TrimSpace(v) == "" }
-func finite(v float64) bool   { return !math.IsNaN(v) && !math.IsInf(v, 0) }
-func positive(v float64) bool { return finite(v) && v > 0 }
+func blank(v string) bool        { return strings.TrimSpace(v) == "" }
+func finite(v float64) bool      { return !math.IsNaN(v) && !math.IsInf(v, 0) }
+func positive(v float64) bool    { return finite(v) && v > 0 }
+func linkIdentity(v Link) string { return v.Kind + "\x00" + v.Label }
+func revisionDigest(v Revision) string {
+	v.Version = 0
+	v.RequestID = ""
+	v.CreatedBy = ""
+	v.CreatedAt = time.Time{}
+	for i := range v.Forecasts {
+		v.Forecasts[i].AttributedTo = ""
+	}
+	for i := range v.Assumptions {
+		v.Assumptions[i].AttributedTo = ""
+	}
+	for i := range v.Links {
+		v.Links[i].AddedBy = ""
+	}
+	b, _ := json.Marshal(v)
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
+func stableID(repositoryID, actor, requestID string) string {
+	sum := sha256.Sum256([]byte(repositoryID + "\x00" + actor + "\x00" + requestID))
+	return hex.EncodeToString(sum[:16])
+}
 func (s *Store) read(id string) (Objective, error) {
 	var v Objective
 	b, e := os.ReadFile(filepath.Join(s.root, id+".json"))
@@ -394,8 +451,10 @@ func (s *Store) write(v Objective) error {
 	if e == nil {
 		e = closeErr
 	}
+	renamed := false
 	if e == nil {
 		e = os.Rename(name, filepath.Join(s.root, v.ID+".json"))
+		renamed = e == nil
 	}
 	if e == nil {
 		dir, x := os.Open(s.root)
@@ -404,6 +463,9 @@ func (s *Store) write(v Objective) error {
 		}
 		e = dir.Sync()
 		_ = dir.Close()
+	}
+	if e != nil && renamed {
+		return errors.Join(ErrCommitted, e)
 	}
 	return e
 }
@@ -421,4 +483,3 @@ func (s *Store) lock(fn func() error) error {
 	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 	return fn()
 }
-func randomID() string { b := make([]byte, 16); _, _ = rand.Read(b); return hex.EncodeToString(b) }

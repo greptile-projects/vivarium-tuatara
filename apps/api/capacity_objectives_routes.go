@@ -11,6 +11,7 @@ import (
 )
 
 type capacityObjectiveInput struct {
+	RequestID       string                      `json:"request_id"`
 	ExpectedVersion int                         `json:"expected_version"`
 	Revision        capacityobjectives.Revision `json:"revision"`
 }
@@ -51,7 +52,7 @@ func registerCapacityObjectiveRoutes(mux *http.ServeMux, catalog *repositories.S
 		var out capacityobjectives.Objective
 		err := catalog.WithCurrentParticipants(append([]string{actor.UserID}, in.Revision.OwnerIDs...), r.PathValue("id"), func() error {
 			var e error
-			out, e = store.Create(r.PathValue("id"), actor.UserID, in.Revision)
+			out, e = store.Create(r.PathValue("id"), actor.UserID, in.RequestID, in.Revision)
 			return e
 		})
 		writeCapacityObjective(w, out, err, 201)
@@ -74,7 +75,7 @@ func registerCapacityObjectiveRoutes(mux *http.ServeMux, catalog *repositories.S
 		var out capacityobjectives.Objective
 		err = catalog.WithCurrentParticipants(append([]string{actor.UserID}, in.Revision.OwnerIDs...), current.RepositoryID, func() error {
 			var e error
-			out, e = store.Revise(current.ID, in.ExpectedVersion, actor.UserID, in.Revision)
+			out, e = store.Revise(current.ID, in.ExpectedVersion, actor.UserID, in.RequestID, in.Revision)
 			return e
 		})
 		writeCapacityObjective(w, out, err, 200)
@@ -86,6 +87,8 @@ func writeCapacityObjective(w http.ResponseWriter, out capacityobjectives.Object
 		writeJSON(w, status, out)
 	case errors.Is(err, capacityobjectives.ErrConflict):
 		writeAPIError(w, 409, "capacity_objective_conflict", "the objective changed; reload before publishing another revision")
+	case errors.Is(err, capacityobjectives.ErrCommitted):
+		writeAPIError(w, 503, "capacity_objective_commit_ambiguous", "the objective may have committed; retry the unchanged request_id to reconcile it")
 	case errors.Is(err, capacityobjectives.ErrInvalid):
 		writeAPIError(w, 400, "invalid_capacity_objective", "the objective must include valid demand, reliability, resource, dependency, regional, ownership, cost, timing, success, and rollback boundaries")
 	case errors.Is(err, repositories.ErrInvalidCollaborator), errors.Is(err, repositories.ErrNotFound):
