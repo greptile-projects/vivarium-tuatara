@@ -52,9 +52,20 @@ type Candidate struct {
 }
 
 type Store struct {
-	root string
-	mu   sync.Mutex
-	now  func() time.Time
+	root            string
+	mu              sync.Mutex
+	now             func() time.Time
+	provenanceReady func(Candidate) (bool, error)
+}
+
+func (s *Store) ConfigureProvenanceReadiness(fn func(Candidate) (bool, error)) {
+	s.provenanceReady = fn
+}
+func (s *Store) ProvenanceReady(candidate Candidate) (bool, error) {
+	if s.provenanceReady == nil {
+		return true, nil
+	}
+	return s.provenanceReady(candidate)
 }
 
 func New(root string) (*Store, error) {

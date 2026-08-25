@@ -244,6 +244,8 @@ export function RepositoryBrowser({ id }: { id: string }) {
             <Link href={`/repositories/${id}/assurance`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Assurance program</Link>
             <Link href={`/repositories/${id}/provenance`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Software provenance policy</Link>
             <Link href={`/repositories/${id}/provenance/graph`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Revision-exact provenance</Link>
+
+            <Link href={`/repositories/${id}/provenance/assessments`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Provenance readiness</Link>
             <Link href={`/repositories/${id}/workflows`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Collaboration workflows</Link>
             <Link href={`/repositories/${id}/agents`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Agent projects</Link>
             <Link href={`/repositories/${id}/security`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Security expectations</Link>
