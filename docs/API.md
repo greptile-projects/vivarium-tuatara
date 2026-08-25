@@ -1,5 +1,9 @@
 # HTTP API contract
 
+## Software provenance policies
+
+`GET` and owner-only `POST` routes beneath `/repositories/{id}/provenance-policies` and `/organizations/{id}/provenance-policies` list and publish immutable policy revisions; `POST .../{policy_id}/revisions` uses `expected_version` for compare-and-swap revision. Each revision defines rules for the seven supported material kinds, connected contribution and delivery boundaries, and time-bounded exceptions. Responses derive attributable `unknown_license`, `conflicting_terms`, `missing_owner`, and `expiring_exception` diagnostics. Repository policy identities are rechecked as current participants during publication. Policies communicate acceptance and distribution obligations only and confer no linked-system authority.
+
 ## Repository restructuring candidates
 
 `POST /repositories/{id}/restructuring-plans/{plan_id}/candidate-sets` accepts a stable `request_id`,

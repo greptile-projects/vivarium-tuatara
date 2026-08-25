@@ -1,0 +1,1 @@
+import type {Metadata} from "next";import {ProvenancePoliciesWorkspace} from "@/components/provenance-policies-workspace";export const metadata:Metadata={title:"Organization provenance policy"};export default async function Page({params}:{params:Promise<{id:string}>}){const{id}=await params;return <ProvenancePoliciesWorkspace scopeKind="organization" scopeID={id}/>}

@@ -310,7 +310,7 @@ export function OrganizationDetail({
         </p>
         <h1 className="mt-2 text-3xl font-bold">{group.name}</h1>
         <p className="mt-2 text-sm text-[var(--muted)]">{group.description}</p>
-        <Link href={`/organizations/${group.id}/charter`} className="mt-3 inline-flex text-sm font-semibold text-[var(--brand)] hover:underline">Governance charter</Link>
+        <div className="mt-3 flex gap-4"><Link href={`/organizations/${group.id}/charter`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Governance charter</Link><Link href={`/organizations/${group.id}/provenance`} className="text-sm font-semibold text-[var(--brand)] hover:underline">Software provenance policy</Link></div>
       </header>
       {error && (
         <p
