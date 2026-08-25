@@ -3957,6 +3957,17 @@ export type ReviewPlan = {
   created_at: string;
   authority: string;
 };
+export type ReviewAssignment = {
+  id: string; request_id: string; plan_id: string; plan_version: number; area_id: string;
+  principal_type: "human" | "agent"; principal_id: string; agent_grant_id?: string;
+  status: "invited" | "accepted" | "declined" | "unavailable" | "recused" | "released" | "replaced" | "revoked";
+  deadline?: string; escalation_path?: string; assigned_by: string; action_required?: string; authority: string;
+};
+export type ReviewerSuggestion = {
+  principal_type: "human" | "agent"; principal_id: string; agent_grant_id?: string; area_ids: string[];
+  eligible: boolean; availability: string; conflict?: string; active_load: number;
+  evidence: { kind: string; summary: string }[]; missing_evidence?: string[];
+};
 export type DocumentationPullReview = {
   repository_id: string;
   pull_request_id: string;
