@@ -278,6 +278,10 @@ func registerReviewWorkRoutes(mux *http.ServeMux, git *storage.Store, catalog *r
 			}
 			expiry = &v
 		}
+		if in.Action == "exception" && !slices.ContainsFunc(in.Links, func(link reviewplans.ResolutionLink) bool { return link.Kind == "follow_up" }) {
+			writeAPIError(w, 422, "review_exception_invalid", "an emergency review exception must link to ordinary follow-up work")
+			return
+		}
 		existing, _ := plans.ListFindingResolutions(repo.ID, pull.ID)
 		if in.SupersedesID != "" && !slices.ContainsFunc(existing, func(x reviewplans.FindingResolution) bool {
 			return x.ID == in.SupersedesID && x.FindingID == finding.ID
