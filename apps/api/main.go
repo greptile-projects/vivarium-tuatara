@@ -77,13 +77,14 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/previews"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/privacychecks"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/privacyreviews"
-	"github.com/greptile-projects/vivarium-tuatara/apps/api/provenancepolicies"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/productexperiments"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/productopportunities"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/projectfunds"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/propagationcampaigns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/protectionplans"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/provenancegraphs"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/provenancepolicies"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/qualityplans"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/recoverycommitments"
@@ -1098,6 +1099,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	var qualityPlanStore *qualityplans.Store
 	var assuranceProgramStore *assuranceprograms.Store
 	var provenancePolicyStore *provenancepolicies.Store
+	var provenanceGraphStore *provenancegraphs.Store
 	var assuranceEvidenceStore *assuranceevidence.Store
 	var assuranceImpactStore *assuranceimpact.Store
 	var assuranceAssessmentStore *assuranceassessments.Store
@@ -1257,6 +1259,8 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 			assuranceProgramStore = value
 		case *provenancepolicies.Store:
 			provenancePolicyStore = value
+		case *provenancegraphs.Store:
+			provenanceGraphStore = value
 		case *assuranceevidence.Store:
 			assuranceEvidenceStore = value
 		case *assuranceimpact.Store:
@@ -1458,11 +1462,23 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	}
 	if provenancePolicyStore == nil {
 		root := os.Getenv("PROVENANCE_POLICY_STORAGE_ROOT")
-		if root == "" { root = "provenance-policies" }
+		if root == "" {
+			root = "provenance-policies"
+		}
 		provenancePolicyStore, _ = provenancepolicies.New(root)
 	}
 	if authStore != nil && repositoryCatalog != nil && provenancePolicyStore != nil {
 		registerProvenancePolicyRoutes(mux, repositoryCatalog, organizationStore, authStore, provenancePolicyStore, contributorPathwayStore, agentProjectStore, packageStore, releaseStore)
+	}
+	if provenanceGraphStore == nil {
+		root := os.Getenv("PROVENANCE_GRAPH_STORAGE_ROOT")
+		if root == "" {
+			root = "provenance-graphs"
+		}
+		provenanceGraphStore, _ = provenancegraphs.New(root)
+	}
+	if authStore != nil && repositoryCatalog != nil && store != nil && provenanceGraphStore != nil && provenancePolicyStore != nil {
+		registerProvenanceGraphRoutes(mux, store, repositoryCatalog, authStore, provenanceGraphStore, provenancePolicyStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && userStore != nil && assuranceProgramStore != nil && assuranceEvidenceStore != nil && assuranceAssessmentStore != nil {
 		registerAssuranceAssessmentRoutes(mux, store, repositoryCatalog, authStore, userStore, assuranceProgramStore, assuranceEvidenceStore, assuranceAssessmentStore, proposalStore, pullRequestStore, releaseStore)
