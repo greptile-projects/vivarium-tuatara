@@ -67,6 +67,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/interfacesystems"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/issues"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/knowledgeanswers"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/learningassessments"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/learningpathways"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/localeplans"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/localization"
@@ -116,6 +117,8 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/workflowcomponents"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/workspaces"
 )
+
+var defaultLearningAssessmentStore *learningassessments.Store
 
 const (
 	uploadPackService   = "git-upload-pack"
@@ -335,6 +338,15 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	learningAssessmentRoot := os.Getenv("LEARNING_ASSESSMENT_STORAGE_ROOT")
+	if learningAssessmentRoot == "" {
+		learningAssessmentRoot = "learning-assessments"
+	}
+	learningAssessmentStore, err := learningassessments.New(learningAssessmentRoot)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defaultLearningAssessmentStore = learningAssessmentStore
 	contributorOpportunityRoot := os.Getenv("CONTRIBUTION_OPPORTUNITY_STORAGE_ROOT")
 	if contributorOpportunityRoot == "" {
 		contributorOpportunityRoot = "contribution-opportunities"
@@ -1028,6 +1040,9 @@ func newPlatformHandler(store *storage.Store, userStore *users.Store, authStore 
 }
 
 func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, authStore *auth.Store, repositoryCatalog *repositories.Store, proposalStore *proposals.Store, pullRequestStore *pullrequests.Store, activityStore *activities.Store, changeSessionStore *changesessions.Store, checkRunStore *checkruns.Store, optionalStores ...any) http.Handler {
+	if defaultLearningAssessmentStore != nil {
+		optionalStores = append(optionalStores, defaultLearningAssessmentStore)
+	}
 	var releaseStore *releases.Store
 	var deploymentStore *deployments.Store
 	var incidentStore *incidents.Store
@@ -1049,6 +1064,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	var knowledgeAnswerStore *knowledgeanswers.Store
 	var contributorPathwayStore *contributorpathways.Store
 	var learningPathwayStore *learningpathways.Store
+	var learningAssessmentStore *learningassessments.Store
 	var contributorOpportunityStore *contributoropportunities.Store
 	var previewStore *previews.Store
 	var acceptanceStore *acceptance.Store
@@ -1171,6 +1187,8 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 			contributorPathwayStore = value
 		case *learningpathways.Store:
 			learningPathwayStore = value
+		case *learningassessments.Store:
+			learningAssessmentStore = value
 		case *contributoropportunities.Store:
 			contributorOpportunityStore = value
 		case *previews.Store:
@@ -1411,6 +1429,9 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	}
 	if authStore != nil && repositoryCatalog != nil && learningPathwayStore != nil {
 		registerLearningPathwayRoutes(mux, store, repositoryCatalog, learningPathwayStore, issueStore, proposalStore, packageStore, contributorPathwayStore, workspaceStore, organizationStore, authStore)
+	}
+	if authStore != nil && repositoryCatalog != nil && learningPathwayStore != nil && learningAssessmentStore != nil && workspaceStore != nil && checkRunStore != nil {
+		registerLearningAssessmentRoutes(mux, store, repositoryCatalog, learningPathwayStore, learningAssessmentStore, workspaceStore, checkRunStore, authStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && contributorOpportunityStore != nil {
 		registerContributorOpportunityRoutes(mux, store, repositoryCatalog, contributorOpportunityStore, issueStore, proposalStore, pullRequestStore, releaseStore, authStore)

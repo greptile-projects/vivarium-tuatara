@@ -2760,6 +2760,21 @@ whenever dependencies change or the web job fails before it starts.
   The timeline grants no repository, assessment, solution, Git, or workspace
   authority.
 
+- **Reviewable learning assessments** — Repository owners publish immutable
+  practical assessments at `/repositories/{id}/learning-assessments/{slug}`.
+  Definitions bind an exact pathway version and supported project commit to
+  public weighted criteria, required repository checks, retry limits,
+  accommodations, and owner-only protected cases. Learner submissions must
+  cite retained evidence from their own exact reproducible workspace. Owner
+  reviews retain a decision, rationale, and confidence for every criterion,
+  feedback, uncertainty, and the authoritative check evidence. Changed
+  criteria, stale project revisions, missing or flaky checks, missing
+  authorship, copied-work signals, and agent overreach block a demonstrated
+  outcome. Learners retain bounded retries and append-only appeal. Storage
+  defaults beneath `$LEARNING_ASSESSMENT_STORAGE_ROOT`
+  (`learning-assessments`); assessment records grant no Git, workspace, check,
+  review, repository, completion, or contribution authority.
+
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
 
   Pull privacy review at `/repositories/{id}/pulls/{pull_id}/privacy-review` requires a candidate

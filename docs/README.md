@@ -2410,6 +2410,30 @@ The workspace UI presents the help and control trail beside the exercise,
 preserving the distinction between what the learner did and what help they
 received.
 
+Practical readiness assessment is a separate owner-governed boundary at
+`/repositories/{id}/learning-assessments/{slug}`. Each immutable definition
+binds one exact learning-pathway version and supported project commit to a
+public weighted rubric, named repository checks, bounded retry policy,
+permitted accommodations, and protected cases. Normal readers see that
+protected cases exist but never receive their identifiers, descriptions, or
+expected answers; repository owners retain the full definition for review.
+
+Learners submit an assessment attempt only from their own reproducible learning
+workspace at the definition's exact pathway and project revisions. Submissions
+cite retained checkpoint and command IDs, repository check-run identities, an
+authorship statement, declared agent assistance, and an optional permitted
+accommodation. Owners record a decision, rationale, and confidence for every
+public rubric criterion plus feedback and uncertainty. Passing check runs must
+belong to the same repository and exact project commit. Changed criteria,
+default-branch movement, unavailable or flaky checks, missing authorship,
+copied-work signals, or agent action beyond attributable hints remain explicit
+blockers and force `not_yet_demonstrated`; status alone cannot assert
+completion. Attempts retain retry sequence and limits, and learners can append
+an attributable appeal without changing the evidence or review. Storage
+defaults beneath `$LEARNING_ASSESSMENT_STORAGE_ROOT` (`learning-assessments`).
+Assessments and results grant no Git, workspace, check, review, repository, or
+contribution authority.
+
 References to documentation, current ownership, releases, issues, proposals,
 and workspace definitions are projected against live repository state on every
 read. Missing, moved, or private requirements remain in history and are marked

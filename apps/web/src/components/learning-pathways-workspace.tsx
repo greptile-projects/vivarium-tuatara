@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type LearningPathway } from "@/lib/api";
+import { api, type LearningAssessment, type LearningAssessmentAttempt, type LearningPathway } from "@/lib/api";
 import { useAuth } from "./auth";
 
 const lines = (v: string) =>
@@ -440,8 +440,38 @@ function Pathway({
           ))}
         </div>
       </section>
+      <AssessmentPanel pathway={p} repositoryId={repositoryId} token={token} onError={onError} />
     </main>
   );
+}
+function AssessmentPanel({ pathway, repositoryId, token, onError }: { pathway: LearningPathway; repositoryId: string; token: string | null; onError: (v: string) => void }) {
+  const [assessment, setAssessment] = useState<LearningAssessment | null>(null);
+  const [attempts, setAttempts] = useState<LearningAssessmentAttempt[]>([]);
+  const [editing, setEditing] = useState(false);
+  const [form, setForm] = useState({ slug: `${pathway.slug}-practical`, title: "Practical project assessment", instructions: "Complete the project task in your bounded workspace and cite your evidence.", revision: pathway.supported_revisions[0] ?? "", criteria: '[{"id":"implementation","label":"Implementation","description":"The work satisfies the public project requirement.","weight":1,"required":true}]', protected: "[]", checks: "", retries: "2", accommodations: "Extra time" });
+  const load = useCallback(async () => {
+    try {
+      const list = await api<{ assessments: LearningAssessment[] }>(`/repositories/${repositoryId}/learning-assessments`, {}, token);
+      const found = list.assessments.find((x) => x.pathway_slug === pathway.slug && x.pathway_version === pathway.version) ?? null;
+      setAssessment(found);
+      if (found) {
+        const detail = await api<{ assessment: LearningAssessment; attempts: LearningAssessmentAttempt[] }>(`/repositories/${repositoryId}/learning-assessments/${found.slug}`, {}, token);
+        setAssessment(detail.assessment); setAttempts(detail.attempts);
+      } else setAttempts([]);
+    } catch (e) { onError(e instanceof Error ? e.message : "Could not load practical assessments"); }
+  }, [repositoryId, token, pathway.slug, pathway.version, onError]);
+  useEffect(() => { void Promise.resolve().then(load); }, [load]);
+  async function publish() {
+    try {
+      const value = await api<LearningAssessment>(`/repositories/${repositoryId}/learning-assessments/${form.slug}`, { method: "PUT", body: JSON.stringify({ request_id: crypto.randomUUID(), expected_version: assessment?.slug === form.slug ? assessment.version : 0, assessment: { pathway_slug: pathway.slug, pathway_version: pathway.version, project_revision: form.revision, title: form.title, instructions: form.instructions, criteria: JSON.parse(form.criteria), protected_cases: JSON.parse(form.protected), required_checks: lines(form.checks), retry_policy: { maximum_attempts: Number(form.retries), cooldown_hours: 0 }, accommodation_options: lines(form.accommodations) } }) }, token);
+      setAssessment(value); setEditing(false); onError(""); await load();
+    } catch (e) { onError(e instanceof Error ? e.message : "Could not publish assessment"); }
+  }
+  return <section className="rounded-xl border border-[var(--line)] bg-white p-6">
+    <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs font-semibold uppercase tracking-wide text-[var(--brand-strong)]">Demonstrated competence</p><h3 className="mt-1 text-xl font-semibold">Practical assessment</h3><p className="mt-1 text-sm text-[var(--muted)]">Public rubric decisions and reproducible evidence stay visible; protected cases remain concealed.</p></div>{token && <button onClick={() => setEditing(!editing)} className="rounded-lg bg-[var(--brand)] px-3 py-2 text-xs font-semibold text-white">{editing ? "Cancel" : assessment ? "Revise assessment" : "Define assessment"}</button>}</div>
+    {editing && <div className="mt-5 grid gap-3 md:grid-cols-2">{([ ["slug","Stable assessment slug"], ["title","Title"], ["instructions","Learner instructions"], ["revision","Exact project revision"], ["checks","Required repository checks"], ["retries","Maximum attempts"], ["accommodations","Permitted accommodations"], ["criteria","Public criteria JSON"], ["protected","Protected cases JSON"] ] as const).map(([key,label]) => <label key={key} className="text-xs font-semibold text-[var(--muted)]">{label}<textarea value={form[key]} onChange={(e)=>setForm({...form,[key]:e.target.value})} className="mt-1 min-h-16 w-full rounded-lg border border-[var(--line)] p-2 text-sm text-[var(--ink)]" /></label>)}<button onClick={() => void publish()} className="rounded-lg bg-[var(--brand)] px-4 py-2 text-sm font-semibold text-white">Publish immutable assessment</button></div>}
+    {assessment && <div className="mt-5"><div className="flex flex-wrap gap-2 text-xs"><span className="rounded-full border px-2 py-1">revision {assessment.version}</span><span className="rounded-full border px-2 py-1">project {assessment.project_revision.slice(0,12)}</span><span className="rounded-full border px-2 py-1">{assessment.retry_policy.maximum_attempts} attempts</span></div><p className="mt-3 text-sm">{assessment.instructions}</p><div className="mt-4 grid gap-3 md:grid-cols-2">{assessment.criteria.map((c)=><div key={c.id} className="rounded-lg bg-[var(--canvas)] p-3"><p className="text-sm font-semibold">{c.label}</p><p className="mt-1 text-xs text-[var(--muted)]">{c.description}</p></div>)}</div>{assessment.protected_cases?.length ? <p className="mt-3 text-xs text-[var(--muted)]">{assessment.protected_cases.length} protected case{assessment.protected_cases.length === 1 ? "" : "s"} · answer material is not shown to learners.</p> : null}<div className="mt-5 space-y-3">{attempts.map((a)=><article key={a.id} className="rounded-lg border border-[var(--line)] p-4"><div className="flex justify-between gap-3"><p className="text-sm font-semibold">Attempt {a.attempt_number} · {a.status.replaceAll("_"," ")}</p><span className="text-xs text-[var(--muted)]">{a.project_revision.slice(0,12)}</span></div>{a.blockers.length>0&&<p className="mt-2 text-xs text-amber-800">Completion blocked: {a.blockers.map(x=>x.replaceAll("_"," ")).join(" · ")}</p>}{a.reviews.map((r,i)=><div key={i} className="mt-3 border-t border-[var(--line)] pt-3 text-sm"><p>{r.feedback}</p>{r.uncertainty&&<p className="mt-1 text-xs text-[var(--muted)]">Uncertainty: {r.uncertainty}</p>}</div>)}{a.accommodation&&<p className="mt-2 text-xs">Accommodation: {a.accommodation}</p>}{a.appeals.length>0&&<p className="mt-2 text-xs text-[var(--brand-strong)]">Appeal recorded and attributable.</p>}</article>)}</div></div>}
+  </section>;
 }
 function Summary({ title, values }: { title: string; values: string[] }) {
   return (
