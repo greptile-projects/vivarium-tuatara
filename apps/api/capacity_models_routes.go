@@ -7,6 +7,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/capacitymodels"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/capacityobjectives"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 )
 
@@ -27,7 +28,7 @@ func capacityActor(c auth.Credential) (string, string) {
 	return "human", c.UserID
 }
 
-func registerCapacityModelRoutes(mux *http.ServeMux, repos *repositories.Store, credentials *auth.Store, objectives *capacityobjectives.Store, models *capacitymodels.Store) {
+func registerCapacityModelRoutes(mux *http.ServeMux, repos *repositories.Store, credentials *auth.Store, objectives *capacityobjectives.Store, models *capacitymodels.Store, releaseStore *releases.Store) {
 	read := func(w http.ResponseWriter, r *http.Request) (auth.Credential, bool) {
 		c, _, ok := authorizeRepositoryRead(w, r, repos, credentials, r.PathValue("id"))
 		return c, ok
@@ -74,9 +75,16 @@ func registerCapacityModelRoutes(mux *http.ServeMux, repos *repositories.Store, 
 			writeAPIError(w, 422, "capacity_objective_invalid", "the exact capacity objective revision does not resolve")
 			return
 		}
+		for _, evidence := range in.Revision.Evidence {
+			release, releaseErr := releaseStore.Get(r.PathValue("id"), evidence.ReleaseID)
+			if releaseErr != nil || release.CommitID != evidence.ReleaseRevision {
+				writeAPIError(w, 422, "capacity_evidence_release_invalid", "every evidence item must bind the authoritative exact release commit in this repository")
+				return
+			}
+		}
 		var out capacitymodels.Model
 		if revise {
-			out, e = models.Revise(r.PathValue("model_id"), in.ExpectedVersion, actor, in.RequestID, in.Revision)
+			out, e = models.Revise(r.PathValue("id"), r.PathValue("model_id"), in.ExpectedVersion, actor, in.RequestID, in.Revision)
 		} else {
 			out, e = models.Create(r.PathValue("id"), kind, actor, in.RequestID, in.Revision)
 		}
@@ -99,7 +107,7 @@ func registerCapacityModelRoutes(mux *http.ServeMux, repos *repositories.Store, 
 			writeAPIError(w, 400, "invalid_request", "a challenge, support, or supersede event is required")
 			return
 		}
-		out, e := models.AddEvent(r.PathValue("model_id"), kind, actor, in.ExpectedVersion, in.Event)
+		out, e := models.AddEvent(r.PathValue("id"), r.PathValue("model_id"), kind, actor, in.ExpectedVersion, in.Event)
 		writeCapacityModel(w, out, e, 201)
 	})
 }

@@ -20,7 +20,7 @@ func TestProjectionRetainsRestrictedGapAndDisagreement(t *testing.T) {
 		t.Fatal("author lost permitted evidence")
 	}
 	event := Event{RequestID: "challenge-1", Kind: "challenge", Statement: "growth changes after launch", EvidenceIDs: []string{"usage-1"}}
-	challenged, e := s.AddEvent(created.ID, "agent", "forecast-agent", 1, event)
+	challenged, e := s.AddEvent("repo", created.ID, "agent", "forecast-agent", 1, event)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -45,20 +45,31 @@ func TestRevisionAndEventRetriesAreStable(t *testing.T) {
 	created, _ := s.Create("repo", "human", "author", "create", validRevision(now))
 	next := validRevision(now)
 	next.Title = "Updated"
-	updated, e := s.Revise(created.ID, 1, "author", "revise", next)
+	updated, e := s.Revise("repo", created.ID, 1, "author", "revise", next)
 	if e != nil {
 		t.Fatal(e)
 	}
-	again, e := s.Revise(created.ID, 2, "author", "revise", next)
+	again, e := s.Revise("repo", created.ID, 2, "author", "revise", next)
 	if e != nil || len(again.Revisions) != 2 {
 		t.Fatalf("retry=%+v %v", again, e)
 	}
 	event := Event{RequestID: "event", Kind: "supersede", Statement: "version one used pre-launch mix", SupersedesVersion: 1}
-	if _, e = s.AddEvent(created.ID, "human", "author", 2, event); e != nil {
+	if _, e = s.AddEvent("repo", created.ID, "human", "author", 2, event); e != nil {
 		t.Fatal(e)
 	}
-	if out, e := s.AddEvent(created.ID, "human", "author", 2, event); e != nil || len(out.Events) != 1 {
+	if out, e := s.AddEvent("repo", created.ID, "human", "author", 2, event); e != nil || len(out.Events) != 1 {
 		t.Fatalf("event retry=%+v %v", out, e)
 	}
 	_ = updated
+}
+
+func TestMutationsAreRepositoryScoped(t *testing.T) {
+	s, _ := New(t.TempDir())
+	created, _ := s.Create("repo-b", "human", "author", "create", validRevision(time.Now().UTC()))
+	if _, err := s.Revise("repo-a", created.ID, 1, "attacker", "revise", validRevision(time.Now().UTC())); err != ErrNotFound {
+		t.Fatalf("cross-repository revision = %v", err)
+	}
+	if _, err := s.AddEvent("repo-a", created.ID, "human", "attacker", 1, Event{RequestID: "event", Kind: "challenge", Statement: "attack"}); err != ErrNotFound {
+		t.Fatalf("cross-repository event = %v", err)
+	}
 }

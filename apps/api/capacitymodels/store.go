@@ -163,12 +163,15 @@ func (s *Store) Create(repositoryID, actorType, actorID, requestID string, r Rev
 	})
 	return s.project(out, actorID), err
 }
-func (s *Store) Revise(id string, expected int, actorID, requestID string, r Revision) (Model, error) {
+func (s *Store) Revise(repositoryID, id string, expected int, actorID, requestID string, r Revision) (Model, error) {
 	var out Model
 	err := s.lock(func() error {
 		v, e := s.read(id)
 		if e != nil {
 			return e
+		}
+		if v.RepositoryID != repositoryID {
+			return ErrNotFound
 		}
 		digest := revisionDigest(r)
 		for _, x := range v.Revisions {
@@ -192,12 +195,15 @@ func (s *Store) Revise(id string, expected int, actorID, requestID string, r Rev
 	})
 	return s.project(out, actorID), err
 }
-func (s *Store) AddEvent(id, actorType, actorID string, expected int, e Event) (Model, error) {
+func (s *Store) AddEvent(repositoryID, id, actorType, actorID string, expected int, e Event) (Model, error) {
 	var out Model
 	err := s.lock(func() error {
 		v, x := s.read(id)
 		if x != nil {
 			return x
+		}
+		if v.RepositoryID != repositoryID {
+			return ErrNotFound
 		}
 		for _, old := range v.Events {
 			if old.RequestID == e.RequestID {

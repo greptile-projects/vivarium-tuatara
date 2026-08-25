@@ -1557,8 +1557,8 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	}
 	if authStore != nil && repositoryCatalog != nil && capacityObjectiveStore != nil {
 		registerCapacityObjectiveRoutes(mux, repositoryCatalog, authStore, capacityObjectiveStore)
-		if capacityModelStore != nil {
-			registerCapacityModelRoutes(mux, repositoryCatalog, authStore, capacityObjectiveStore, capacityModelStore)
+		if capacityModelStore != nil && releaseStore != nil {
+			registerCapacityModelRoutes(mux, repositoryCatalog, authStore, capacityObjectiveStore, capacityModelStore, releaseStore)
 		}
 	}
 	if authStore != nil && repositoryCatalog != nil && qualityPlanStore != nil {
