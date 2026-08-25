@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/contributorpathways"
@@ -437,6 +438,10 @@ func registerLearningPathwayRoutes(mux *http.ServeMux, git *storage.Store, repos
 			writeAPIError(w, 403, "learning_guidance_forbidden", "only the learner, designated mentors, or the learner's active approved agent can use this timeline")
 			return workspaces.Workspace{}, auth.Credential{}, learningpathways.Revision{}, false, false
 		}
+		if actor.AgentID != "" && !activeLearningGuide(item, actor.AgentID, time.Now()) {
+			writeAPIError(w, 403, "learning_agent_access_inactive", "only the learner-selected active agent with live guide control can use this timeline")
+			return workspaces.Workspace{}, auth.Credential{}, learningpathways.Revision{}, false, false
+		}
 		return item, actor, pathway, mentor, true
 	}
 	mux.HandleFunc("GET /workspaces/{workspace_id}/learning/guidance", func(w http.ResponseWriter, r *http.Request) {
@@ -511,8 +516,7 @@ func registerLearningPathwayRoutes(mux *http.ServeMux, git *storage.Store, repos
 			}
 		}
 		if actorKind == "agent" {
-			g := item.LearningContext.Guidance
-			if g.AgentID != agentID || g.AgentState != "active" || item.Control.PrincipalKind != "approved_agent" || item.Control.PrincipalID != agentID || item.Control.Mode != "guide" {
+			if !activeLearningGuide(item, agentID, time.Now()) {
 				writeAPIError(w, 409, "learning_agent_paused", "agent guidance requires active learner approval and live guide control")
 				return
 			}
@@ -579,6 +583,10 @@ func registerLearningPathwayRoutes(mux *http.ServeMux, git *storage.Store, repos
 		}
 		writeJSON(w, 200, updated.LearningContext.Guidance)
 	})
+}
+
+func activeLearningGuide(item workspaces.Workspace, agentID string, now time.Time) bool {
+	return item.LearningContext != nil && agentID != "" && item.LearningContext.Guidance.AgentID == agentID && item.LearningContext.Guidance.AgentState == "active" && item.Control.PrincipalKind == "approved_agent" && item.Control.PrincipalID == agentID && item.Control.Mode == "guide" && item.Control.ExpiresAt.After(now)
 }
 
 func learningDigest(body []byte) []byte { sum := sha256.Sum256(body); return sum[:] }
