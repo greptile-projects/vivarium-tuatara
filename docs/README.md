@@ -2367,7 +2367,8 @@ at that same commit; synthetic data is bounded inline content. Both are screened
 for credential-shaped material before staging.
 
 `POST /repositories/{id}/learning-pathways/{slug}/modules/{module_id}/attempts`
-selects an immutable `pathway_version` and exercise, verifies its commit and
+selects an immutable `pathway_version` and exercise with a caller-stable
+`request_id`, verifies its commit and
 `.vivarium/workspace.json`, applies effective repository and organization
 resource limits, and launches the normal bounded executor. The container has no
 network, capabilities, production credentials, writable host mount, or Git
@@ -2377,7 +2378,11 @@ reproducibility digest alongside setup, command output, changes, and estimated
 compute cost. Learners reveal hints and append checkpoints citing exact criteria
 and retained command outcomes through `/workspaces/{id}/learning/hints/{index}`
 and `/workspaces/{id}/learning/checkpoints`. Failed setup remains inspectable,
-and relaunching gives a clean attempt against the immutable inputs.
+and an exact launch retry reuses that attempt atomically; changed request reuse
+conflicts. A new request identity gives a clean attempt against the immutable
+inputs. Organization-policy read failures create nothing, and checkpoints may
+cite any command in the uncapped provenance ledger even after it leaves the
+bounded recent-command projection.
 
 References to documentation, current ownership, releases, issues, proposals,
 and workspace definitions are projected against live repository state on every

@@ -2724,6 +2724,8 @@ whenever dependencies change or the web job fails before it starts.
 - **Reproducible learning attempts** — Authenticated repository readers launch
   an exact pathway revision's configured module exercise at
   `/repositories/{id}/learning-pathways/{slug}/modules/{module_id}/attempts`.
+  Launches require a caller-stable request identity; exact retries atomically
+  reuse the retained attempt and changed reuse conflicts before provisioning.
   The exercise freezes its exact commit, practice kind, instructions, starter
   commands, acceptance criteria, hints, and bounded synthetic or exact-commit
   permitted data into the ordinary bounded workspace. Effective resource policy
@@ -2732,6 +2734,9 @@ whenever dependencies change or the web job fails before it starts.
   introduced. Setup, command output, and unpublished file changes use the
   workspace ledger, while learning context retains hint use, criterion-and-
   command-bound checkpoints, compute cost, and a reproducibility-input digest.
+  Checkpoint citations resolve against the uncapped command provenance ledger,
+  not the bounded recent-command projection. Organization-policy read failures
+  fail closed before workspace creation.
   Storage remains beneath `$WORKSPACE_STORAGE_ROOT`; hint and checkpoint
   mutations are under `/workspaces/{id}/learning`.
 

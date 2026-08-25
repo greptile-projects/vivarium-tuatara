@@ -20,10 +20,11 @@ import (
 )
 
 var (
-	ErrNotFound = errors.New("workspace not found")
-	ErrInvalid  = errors.New("invalid workspace")
-	ErrConflict = errors.New("workspace foundation changed")
-	ErrControl  = errors.New("workspace control changed")
+	ErrNotFound       = errors.New("workspace not found")
+	ErrInvalid        = errors.New("invalid workspace")
+	ErrConflict       = errors.New("workspace foundation changed")
+	ErrControl        = errors.New("workspace control changed")
+	ErrRequestChanged = errors.New("workspace request identity changed")
 )
 
 const DefinitionPath = ".vivarium/workspace.json"
@@ -77,6 +78,7 @@ type Source struct {
 	LearningPathwayVersion  int    `json:"learning_pathway_version,omitempty"`
 	LearningModuleID        string `json:"learning_module_id,omitempty"`
 	LearningExerciseID      string `json:"learning_exercise_id,omitempty"`
+	LearningRequestID       string `json:"learning_request_id,omitempty"`
 }
 
 type LearningCheckpoint struct {
@@ -475,7 +477,11 @@ func (s *Store) AddLearningCheckpoint(id, actor, summary string, criteria, outco
 		validCriteria[c] = true
 	}
 	validOutcomes := map[string]bool{}
-	for _, o := range w.Commands {
+	provenance, err := s.readOrSeedProvenance(id, w)
+	if err != nil {
+		return Workspace{}, err
+	}
+	for _, o := range provenance.Commands {
 		validOutcomes[o.ID] = true
 	}
 	for _, c := range criteria {
@@ -1607,6 +1613,37 @@ func hasResolutionChange(changes []Change, id string) bool {
 func (s *Store) Create(w Workspace, definitionBytes []byte) (Workspace, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.create(w, definitionBytes)
+}
+
+func (s *Store) CreateLearning(w Workspace, definitionBytes []byte) (Workspace, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if w.Source.LearningRequestID == "" || len(w.Source.LearningRequestID) > 200 {
+		return Workspace{}, false, ErrInvalid
+	}
+	entries, err := os.ReadDir(s.root)
+	if err != nil {
+		return Workspace{}, false, err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		prior, readErr := s.readName(entry.Name())
+		if readErr != nil || prior.CreatorID != w.CreatorID || prior.Source.Kind != "learning_exercise" || prior.Source.LearningRequestID != w.Source.LearningRequestID {
+			continue
+		}
+		if prior.RepositoryID != w.RepositoryID || prior.CommitID != w.CommitID || prior.Source.LearningPathwaySlug != w.Source.LearningPathwaySlug || prior.Source.LearningPathwayVersion != w.Source.LearningPathwayVersion || prior.Source.LearningModuleID != w.Source.LearningModuleID || prior.Source.LearningExerciseID != w.Source.LearningExerciseID || prior.LearningContext == nil || w.LearningContext == nil || prior.LearningContext.ReproducibilitySHA256 != w.LearningContext.ReproducibilitySHA256 {
+			return Workspace{}, false, ErrRequestChanged
+		}
+		return prior, true, nil
+	}
+	created, err := s.create(w, definitionBytes)
+	return created, false, err
+}
+
+func (s *Store) create(w Workspace, definitionBytes []byte) (Workspace, error) {
 	if w.RepositoryID == "" || w.CommitID == "" || w.CreatorID == "" {
 		return Workspace{}, ErrInvalid
 	}

@@ -16,7 +16,6 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/contributorpathways"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/issues"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/learningpathways"
-	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
 	packages "github.com/greptile-projects/vivarium-tuatara/apps/api/packages"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
@@ -24,7 +23,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/workspaces"
 )
 
-func registerLearningPathwayRoutes(mux *http.ServeMux, git *storage.Store, repos *repositories.Store, pathways *learningpathways.Store, issueStore *issues.Store, proposalStore *proposals.Store, packageStore *packages.Store, contributorStore *contributorpathways.Store, workspaceStore *workspaces.Store, organizationStore *organizations.Store, credentials *auth.Store) {
+func registerLearningPathwayRoutes(mux *http.ServeMux, git *storage.Store, repos *repositories.Store, pathways *learningpathways.Store, issueStore *issues.Store, proposalStore *proposals.Store, packageStore *packages.Store, contributorStore *contributorpathways.Store, workspaceStore *workspaces.Store, credentials *auth.Store) {
 	isParticipant := func(repositoryID, userID string) bool {
 		repo, e := repos.GetByID(repositoryID)
 		if e != nil {
@@ -260,6 +259,7 @@ func registerLearningPathwayRoutes(mux *http.ServeMux, git *storage.Store, repos
 		var in struct {
 			ExerciseID     string `json:"exercise_id"`
 			PathwayVersion int    `json:"pathway_version"`
+			RequestID      string `json:"request_id"`
 		}
 		if decodeJSON(r, &in) != nil {
 			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
@@ -311,11 +311,14 @@ func registerLearningPathwayRoutes(mux *http.ServeMux, git *storage.Store, repos
 		}
 		repo, _ := repos.GetByID(r.PathValue("id"))
 		scope := "repository"
-		if repo.OrganizationID != "" && organizationStore != nil {
-			if op, e := workspaceStore.GetPolicy("organization", repo.OrganizationID); e == nil {
-				policy = workspaces.Constrain(op, policy)
-				scope = "organization+repository"
+		if repo.OrganizationID != "" {
+			op, policyErr := workspaceStore.GetPolicy("organization", repo.OrganizationID)
+			if policyErr != nil {
+				writeAPIError(w, 500, "workspace_policy_unavailable", "workspace policy could not be read")
+				return
 			}
+			policy = workspaces.Constrain(op, policy)
+			scope = "organization+repository"
 		}
 		if definition.Resources.CPUs > policy.MaxCPUs || definition.Resources.MemoryMB > policy.MaxMemoryMB || definition.Resources.StorageMB > policy.MaxStorageMB {
 			writeAPIError(w, 422, "workspace_policy_resources_exceeded", "exercise workspace exceeds the effective resource policy")
@@ -332,9 +335,18 @@ func registerLearningPathwayRoutes(mux *http.ServeMux, git *storage.Store, repos
 			Criteria, Data []string
 		}{exercise.Revision, hex.EncodeToString(learningDigest(definitionBytes)), exercise.Instructions, exercise.AcceptanceCriteria, dataPaths})
 		ctx := &workspaces.LearningContext{PathwaySlug: pathway.Slug, PathwayVersion: pathway.Version, ModuleID: r.PathValue("module_id"), ExerciseID: exercise.ID, Kind: exercise.Kind, Instructions: exercise.Instructions, StarterCommands: exercise.StarterCommands, AcceptanceCriteria: exercise.AcceptanceCriteria, Data: dataPaths, Hints: exercise.Hints, ReproducibilitySHA256: hex.EncodeToString(learningDigest(repro))}
-		created, err := workspaceStore.Create(workspaces.Workspace{RepositoryID: repo.ID, OrganizationID: repo.OrganizationID, CommitID: exercise.Revision, Definition: definition, Source: workspaces.Source{Kind: "learning_exercise", RepositoryID: repo.ID, LearningPathwaySlug: pathway.Slug, LearningPathwayVersion: pathway.Version, LearningModuleID: r.PathValue("module_id"), LearningExerciseID: exercise.ID}, CreatorID: actor.UserID, Access: workspaces.Access{Role: "learner", Scopes: []string{"repositories:read"}}, Policy: policy, PolicyScope: scope, PolicyVersion: policy.Version, LearningContext: ctx}, definitionBytes)
+		created, reused, err := workspaceStore.CreateLearning(workspaces.Workspace{RepositoryID: repo.ID, OrganizationID: repo.OrganizationID, CommitID: exercise.Revision, Definition: definition, Source: workspaces.Source{Kind: "learning_exercise", RepositoryID: repo.ID, LearningPathwaySlug: pathway.Slug, LearningPathwayVersion: pathway.Version, LearningModuleID: r.PathValue("module_id"), LearningExerciseID: exercise.ID, LearningRequestID: in.RequestID}, CreatorID: actor.UserID, Access: workspaces.Access{Role: "learner", Scopes: []string{"repositories:read"}}, Policy: policy, PolicyScope: scope, PolicyVersion: policy.Version, LearningContext: ctx}, definitionBytes)
+		if errors.Is(err, workspaces.ErrRequestChanged) {
+			writeAPIError(w, 409, "learning_attempt_request_changed", "request identity was already used with different launch inputs")
+			return
+		}
 		if err != nil {
 			writeAPIError(w, 500, "learning_attempt_create_failed", "learning attempt could not be retained")
+			return
+		}
+		if reused {
+			w.Header().Set("Location", "/workspaces/"+created.ID)
+			writeJSON(w, 200, created)
 			return
 		}
 		steps, failed := provisionWorkspace(gr.Path(), workspaceStore.RuntimePath(created.ID), created.ID, exercise.Revision, definition)

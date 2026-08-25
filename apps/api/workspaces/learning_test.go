@@ -34,3 +34,61 @@ func TestLearningAttemptRetainsHintsCheckpointsCostAndReproduction(t *testing.T)
 		t.Fatalf("uncited criterion accepted: %v", err)
 	}
 }
+
+func TestLearningLaunchRequestReconcilesAtomically(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := Workspace{RepositoryID: "repo", CommitID: "revision", CreatorID: "learner", Source: Source{Kind: "learning_exercise", LearningRequestID: "launch-1", LearningPathwaySlug: "api", LearningPathwayVersion: 1, LearningModuleID: "routing", LearningExerciseID: "trace"}, LearningContext: &LearningContext{ReproducibilitySHA256: "digest"}}
+	first, reused, err := s.CreateLearning(input, []byte("definition"))
+	if err != nil || reused {
+		t.Fatalf("first launch: reused=%v err=%v", reused, err)
+	}
+	second, reused, err := s.CreateLearning(input, []byte("definition"))
+	if err != nil || !reused || second.ID != first.ID {
+		t.Fatalf("retry was not reconciled: %#v %v %v", second, reused, err)
+	}
+	changed := input
+	changed.CommitID = "other"
+	if _, _, err = s.CreateLearning(changed, []byte("definition")); err != ErrRequestChanged {
+		t.Fatalf("changed request accepted: %v", err)
+	}
+	all, _ := s.ListAll()
+	if len(all) != 1 {
+		t.Fatalf("retry created %d attempts", len(all))
+	}
+}
+
+func TestLearningCheckpointCitesDurableCommandBeyondProjection(t *testing.T) {
+	root := t.TempDir()
+	s, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := s.Create(Workspace{RepositoryID: "repo", CommitID: "revision", CreatorID: "learner", LearningContext: &LearningContext{AcceptanceCriteria: []string{"passes"}}}, []byte("definition"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldest := ""
+	for i := 0; i < 101; i++ {
+		w, err = s.RecordCommand(w.ID, CommandOutcome{ActorID: "learner"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 {
+			oldest = w.Commands[0].ID
+		}
+	}
+	if len(w.Commands) != 100 {
+		t.Fatalf("projection has %d commands", len(w.Commands))
+	}
+	reopened, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err = reopened.AddLearningCheckpoint(w.ID, "learner", "old evidence remains valid", []string{"passes"}, []string{oldest})
+	if err != nil || len(w.LearningContext.Checkpoints) != 1 {
+		t.Fatalf("durable outcome rejected: %v", err)
+	}
+}

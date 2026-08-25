@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type LearningPathway } from "@/lib/api";
 import { useAuth } from "./auth";
 
@@ -267,9 +267,13 @@ function Pathway({
     };
   } | null>(null);
   const [launching, setLaunching] = useState("");
+  const launchRequests = useRef(new Map<string, string>());
   async function launch(moduleId: string, exerciseId: string) {
     setLaunching(exerciseId);
     try {
+      const key = `${p.slug}:${p.version}:${moduleId}:${exerciseId}`;
+      const requestId = launchRequests.current.get(key) ?? crypto.randomUUID();
+      launchRequests.current.set(key, requestId);
       const value = await api<typeof attempt>(
         `/repositories/${repositoryId}/learning-pathways/${p.slug}/modules/${moduleId}/attempts`,
         {
@@ -277,6 +281,7 @@ function Pathway({
           body: JSON.stringify({
             pathway_version: p.version,
             exercise_id: exerciseId,
+            request_id: requestId,
           }),
         },
         token,
