@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -19,10 +20,11 @@ import (
 )
 
 var (
-	ErrNotFound = errors.New("workspace not found")
-	ErrInvalid  = errors.New("invalid workspace")
-	ErrConflict = errors.New("workspace foundation changed")
-	ErrControl  = errors.New("workspace control changed")
+	ErrNotFound       = errors.New("workspace not found")
+	ErrInvalid        = errors.New("invalid workspace")
+	ErrConflict       = errors.New("workspace foundation changed")
+	ErrControl        = errors.New("workspace control changed")
+	ErrRequestChanged = errors.New("workspace request identity changed")
 )
 
 const DefinitionPath = ".vivarium/workspace.json"
@@ -72,6 +74,40 @@ type Source struct {
 	DebuggingWorkspaceID    string `json:"debugging_workspace_id,omitempty"`
 	ReplayScenarioID        string `json:"replay_scenario_id,omitempty"`
 	ConflictLaunchID        string `json:"conflict_launch_id,omitempty"`
+	LearningPathwaySlug     string `json:"learning_pathway_slug,omitempty"`
+	LearningPathwayVersion  int    `json:"learning_pathway_version,omitempty"`
+	LearningModuleID        string `json:"learning_module_id,omitempty"`
+	LearningExerciseID      string `json:"learning_exercise_id,omitempty"`
+	LearningRequestID       string `json:"learning_request_id,omitempty"`
+}
+
+type LearningCheckpoint struct {
+	ID                string    `json:"id"`
+	Summary           string    `json:"summary"`
+	CriterionIDs      []string  `json:"criterion_ids"`
+	CommandOutcomeIDs []string  `json:"command_outcome_ids"`
+	CreatedAt         time.Time `json:"created_at"`
+}
+type LearningHintUse struct {
+	Index  int       `json:"index"`
+	Hint   string    `json:"hint"`
+	UsedAt time.Time `json:"used_at"`
+}
+type LearningContext struct {
+	PathwaySlug           string               `json:"pathway_slug"`
+	PathwayVersion        int                  `json:"pathway_version"`
+	ModuleID              string               `json:"module_id"`
+	ExerciseID            string               `json:"exercise_id"`
+	Kind                  string               `json:"kind"`
+	Instructions          string               `json:"instructions"`
+	StarterCommands       []string             `json:"starter_commands"`
+	AcceptanceCriteria    []string             `json:"acceptance_criteria"`
+	Data                  []string             `json:"data"`
+	Hints                 []string             `json:"hints"`
+	HintsUsed             []LearningHintUse    `json:"hints_used"`
+	Checkpoints           []LearningCheckpoint `json:"checkpoints"`
+	ReproducibilitySHA256 string               `json:"reproducibility_sha256"`
+	Cost                  float64              `json:"cost"`
 }
 
 // ConflictContext freezes the two histories and the evidence that was visible
@@ -399,8 +435,77 @@ type Workspace struct {
 	ReproductionInputAttachmentIDs []string               `json:"reproduction_input_attachment_ids,omitempty"`
 	ContributorContext             *ContributorContext    `json:"contributor_context,omitempty"`
 	ConflictContext                *ConflictContext       `json:"conflict_context,omitempty"`
+	LearningContext                *LearningContext       `json:"learning_context,omitempty"`
 	Participants                   []WorkspaceParticipant `json:"participants,omitempty"`
 }
+
+func (s *Store) UseLearningHint(id, actor string, index int) (Workspace, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w, err := s.read(id)
+	if err != nil {
+		return Workspace{}, err
+	}
+	if w.LearningContext == nil || actor != w.CreatorID || index < 0 || index >= len(w.LearningContext.Hints) {
+		return Workspace{}, ErrInvalid
+	}
+	for _, used := range w.LearningContext.HintsUsed {
+		if used.Index == index {
+			return w, nil
+		}
+	}
+	now := s.now()
+	hint := LearningHintUse{Index: index, Hint: w.LearningContext.Hints[index], UsedAt: now}
+	w.LearningContext.HintsUsed = append(w.LearningContext.HintsUsed, hint)
+	w.UpdatedAt = now
+	w.Events = append(w.Events, Event{Kind: "learning.hint.used", ActorID: actor, Role: "instruction", Detail: fmt.Sprint(index), CreatedAt: now})
+	return w, s.write(w)
+}
+
+func (s *Store) AddLearningCheckpoint(id, actor, summary string, criteria, outcomes []string) (Workspace, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w, err := s.read(id)
+	if err != nil {
+		return Workspace{}, err
+	}
+	if w.LearningContext == nil || actor != w.CreatorID || strings.TrimSpace(summary) == "" || len(summary) > 1000 || len(criteria) == 0 {
+		return Workspace{}, ErrInvalid
+	}
+	validCriteria := map[string]bool{}
+	for _, c := range w.LearningContext.AcceptanceCriteria {
+		validCriteria[c] = true
+	}
+	validOutcomes := map[string]bool{}
+	provenance, err := s.readOrSeedProvenance(id, w)
+	if err != nil {
+		return Workspace{}, err
+	}
+	for _, o := range provenance.Commands {
+		validOutcomes[o.ID] = true
+	}
+	for _, c := range criteria {
+		if !validCriteria[c] {
+			return Workspace{}, ErrInvalid
+		}
+	}
+	for _, o := range outcomes {
+		if !validOutcomes[o] {
+			return Workspace{}, ErrInvalid
+		}
+	}
+	idv, err := randomID(12)
+	if err != nil {
+		return Workspace{}, err
+	}
+	now := s.now()
+	cp := LearningCheckpoint{ID: idv, Summary: summary, CriterionIDs: append([]string(nil), criteria...), CommandOutcomeIDs: append([]string(nil), outcomes...), CreatedAt: now}
+	w.LearningContext.Checkpoints = append(w.LearningContext.Checkpoints, cp)
+	w.UpdatedAt = now
+	w.Events = append(w.Events, Event{ID: idv, Kind: "learning.checkpoint.created", ActorID: actor, Role: "verification", Detail: summary, CreatedAt: now})
+	return w, s.write(w)
+}
+
 type ReasoningContext struct {
 	AssessmentID      string                     `json:"assessment_id"`
 	AssessmentVersion int                        `json:"assessment_version"`
@@ -715,6 +820,12 @@ func (s *Store) RecordCommand(id string, outcome CommandOutcome) (Workspace, err
 		return Workspace{}, err
 	}
 	w.Commands = append(w.Commands, outcome)
+	if w.LearningContext != nil {
+		hours := outcome.CompletedAt.Sub(outcome.StartedAt).Hours()
+		if hours > 0 {
+			w.LearningContext.Cost += hours * (w.Definition.Resources.CPUs*0.04 + float64(w.Definition.Resources.MemoryMB)/1024*0.01)
+		}
+	}
 	if len(w.Commands) > 100 {
 		w.Commands = w.Commands[len(w.Commands)-100:]
 	}
@@ -1502,6 +1613,114 @@ func hasResolutionChange(changes []Change, id string) bool {
 func (s *Store) Create(w Workspace, definitionBytes []byte) (Workspace, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.create(w, definitionBytes)
+}
+
+func (s *Store) CreateLearning(w Workspace, definitionBytes []byte) (Workspace, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	release, err := s.learningFileLock("launch")
+	if err != nil {
+		return Workspace{}, false, err
+	}
+	defer release()
+	if w.Source.LearningRequestID == "" || len(w.Source.LearningRequestID) > 200 {
+		return Workspace{}, false, ErrInvalid
+	}
+	entries, err := os.ReadDir(s.root)
+	if err != nil {
+		return Workspace{}, false, err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		prior, readErr := s.readName(entry.Name())
+		if readErr != nil || prior.CreatorID != w.CreatorID || prior.Source.Kind != "learning_exercise" || prior.Source.LearningRequestID != w.Source.LearningRequestID {
+			continue
+		}
+		if prior.RepositoryID != w.RepositoryID || prior.CommitID != w.CommitID || prior.Source.LearningPathwaySlug != w.Source.LearningPathwaySlug || prior.Source.LearningPathwayVersion != w.Source.LearningPathwayVersion || prior.Source.LearningModuleID != w.Source.LearningModuleID || prior.Source.LearningExerciseID != w.Source.LearningExerciseID || prior.LearningContext == nil || w.LearningContext == nil || prior.LearningContext.ReproducibilitySHA256 != w.LearningContext.ReproducibilitySHA256 {
+			return Workspace{}, false, ErrRequestChanged
+		}
+		return prior, true, nil
+	}
+	created, err := s.create(w, definitionBytes)
+	return created, false, err
+}
+
+// ReconcileLearningProvisioning serializes setup for a retained attempt. A
+// concurrent retry waits for the active launch and observes its completed
+// state; after interruption or restart, the retry performs the missing setup.
+func (s *Store) ReconcileLearningProvisioning(id string, operation func() ([]SetupStep, bool)) (Workspace, bool, error) {
+	control := s.controlLock(id)
+	control.Lock()
+	defer control.Unlock()
+	release, err := s.learningFileLock("provision-" + id)
+	if err != nil {
+		return Workspace{}, false, err
+	}
+	defer release()
+	s.mu.Lock()
+	w, err := s.read(id)
+	s.mu.Unlock()
+	if err != nil {
+		return Workspace{}, false, err
+	}
+	if w.Source.Kind != "learning_exercise" || w.LearningContext == nil {
+		return Workspace{}, false, ErrInvalid
+	}
+	if w.State != "provisioning" {
+		return w, false, nil
+	}
+	steps, failure := operation()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w, err = s.read(id)
+	if err != nil {
+		return Workspace{}, true, err
+	}
+	if w.State != "provisioning" {
+		return w, false, nil
+	}
+	w.Setup = steps
+	if w.LearningContext != nil {
+		for _, step := range steps {
+			hours := step.CompletedAt.Sub(step.StartedAt).Hours()
+			if hours > 0 {
+				w.LearningContext.Cost += hours * (w.Definition.Resources.CPUs*0.04 + float64(w.Definition.Resources.MemoryMB)/1024*0.01)
+			}
+		}
+	}
+	if failure {
+		w.State = "failed"
+	} else {
+		w.State = "running"
+	}
+	w.UpdatedAt = s.now()
+	w.Events = append(w.Events, Event{Kind: "setup_completed", ActorID: w.CreatorID, CreatedAt: w.UpdatedAt})
+	return w, true, s.write(w)
+}
+
+func (s *Store) learningFileLock(name string) (func(), error) {
+	dir := filepath.Join(s.root, ".learning-locks")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return nil, err
+	}
+	file, err := os.OpenFile(filepath.Join(dir, name+".lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, err
+	}
+	if err = syscall.Flock(int(file.Fd()), syscall.LOCK_EX); err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	return func() {
+		_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+		_ = file.Close()
+	}, nil
+}
+
+func (s *Store) create(w Workspace, definitionBytes []byte) (Workspace, error) {
 	if w.RepositoryID == "" || w.CommitID == "" || w.CreatorID == "" {
 		return Workspace{}, ErrInvalid
 	}
@@ -1549,6 +1768,14 @@ func (s *Store) Complete(id string, steps []SetupStep, failure bool) (Workspace,
 		return Workspace{}, e
 	}
 	w.Setup = steps
+	if w.LearningContext != nil {
+		for _, step := range steps {
+			hours := step.CompletedAt.Sub(step.StartedAt).Hours()
+			if hours > 0 {
+				w.LearningContext.Cost += hours * (w.Definition.Resources.CPUs*0.04 + float64(w.Definition.Resources.MemoryMB)/1024*0.01)
+			}
+		}
+	}
 	if failure {
 		w.State = "failed"
 	} else {

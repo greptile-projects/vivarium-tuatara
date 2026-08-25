@@ -600,15 +600,80 @@ export type ContributorPathwayResponse = {
   acknowledgement_count: number;
 };
 export type LearningPathway = {
-  id: string; request_id: string; repository_id: string; slug: string; version: number; role: string; outcome: string;
-  prerequisites: string[]; objectives: string[]; supported_revisions: string[]; expected_minutes: number;
-  accessibility_needs: string[]; locales: string[]; completion_evidence: string[];
-  mentors: { user_id: string; responsibility: string; status?: "current" | "inaccessible"; status_detail?: string }[];
-  environments: { name: string; requirements: string[]; supported: boolean; owner_id?: string; status?: "current" | "missing_owner" | "unsupported"; status_detail?: string }[];
-  modules: { id: string; title: string; why_it_matters: string; objectives: string[]; estimated_minutes: number;
-    exercises: { title: string; instructions: string; completion_evidence: string[] }[];
-    materials: { kind: "documentation" | "symbol" | "decision" | "issue" | "api" | "package" | "contributor_guidance"; label: string; resource_id?: string; path?: string; symbol?: string; revision?: string; package_version?: string; owner_id?: string; status?: "current" | "stale" | "inaccessible" | "missing_owner"; status_detail?: string }[];
-  }[]; published_by: string; published_at: string;
+  id: string;
+  request_id: string;
+  repository_id: string;
+  slug: string;
+  version: number;
+  role: string;
+  outcome: string;
+  prerequisites: string[];
+  objectives: string[];
+  supported_revisions: string[];
+  expected_minutes: number;
+  accessibility_needs: string[];
+  locales: string[];
+  completion_evidence: string[];
+  mentors: {
+    user_id: string;
+    responsibility: string;
+    status?: "current" | "inaccessible";
+    status_detail?: string;
+  }[];
+  environments: {
+    name: string;
+    requirements: string[];
+    supported: boolean;
+    owner_id?: string;
+    status?: "current" | "missing_owner" | "unsupported";
+    status_detail?: string;
+  }[];
+  modules: {
+    id: string;
+    title: string;
+    why_it_matters: string;
+    objectives: string[];
+    estimated_minutes: number;
+    exercises: {
+      id?: string;
+      title: string;
+      kind?:
+        "exploration" | "command" | "debugging" | "test" | "api" | "change";
+      instructions: string;
+      revision?: string;
+      starter_commands?: string[];
+      acceptance_criteria?: string[];
+      hints?: string[];
+      data?: {
+        kind: "synthetic" | "permitted";
+        path: string;
+        content?: string;
+        source?: string;
+      }[];
+      completion_evidence: string[];
+    }[];
+    materials: {
+      kind:
+        | "documentation"
+        | "symbol"
+        | "decision"
+        | "issue"
+        | "api"
+        | "package"
+        | "contributor_guidance";
+      label: string;
+      resource_id?: string;
+      path?: string;
+      symbol?: string;
+      revision?: string;
+      package_version?: string;
+      owner_id?: string;
+      status?: "current" | "stale" | "inaccessible" | "missing_owner";
+      status_detail?: string;
+    }[];
+  }[];
+  published_by: string;
+  published_at: string;
 };
 export type ContributionOpportunity = {
   id: string;
@@ -2383,19 +2448,67 @@ export type ProvenanceBundle = {
   id: string;
   request_id: string;
   claim: {
-    schema: string; repository_id: string; release_id: string; release_version: string;
-    revision: string; graph_id: string; graph_digest: string; assessment_id: string;
-    assessment_version: number; policy_id: string; policy_version: number;
+    schema: string;
+    repository_id: string;
+    release_id: string;
+    release_version: string;
+    revision: string;
+    graph_id: string;
+    graph_digest: string;
+    assessment_id: string;
+    assessment_version: number;
+    policy_id: string;
+    policy_version: number;
     audience: "public" | "repository" | "restricted";
-    artifacts: { id: string; name: string; version: string; sha256: string; content_type: string; size: number }[];
-    materials: { id: string; kind: string; name: string; revision?: string; sha256?: string; license?: string; obligations?: string[] }[];
-    licenses: string[]; notices: string[]; omissions: string[]; verification: string[];
-    dependencies: { name: string; constraint: string; package_id?: string; revision?: string; sha256?: string }[];
-    published_at: string; published_by: string;
+    artifacts: {
+      id: string;
+      name: string;
+      version: string;
+      sha256: string;
+      content_type: string;
+      size: number;
+    }[];
+    materials: {
+      id: string;
+      kind: string;
+      name: string;
+      revision?: string;
+      sha256?: string;
+      license?: string;
+      obligations?: string[];
+    }[];
+    licenses: string[];
+    notices: string[];
+    omissions: string[];
+    verification: string[];
+    dependencies: {
+      name: string;
+      constraint: string;
+      package_id?: string;
+      revision?: string;
+      sha256?: string;
+    }[];
+    published_at: string;
+    published_by: string;
   };
-  payload: string; payload_sha256: string; signature: string; public_key: string;
-  algorithm: string; current: boolean; actionable_notices: number; verification_valid: boolean;
-  notices: { id: string; kind: string; severity: "warning" | "blocking"; summary: string; evidence: string; remediation_id?: string; propagation_campaign_id?: string; created_at: string }[];
+  payload: string;
+  payload_sha256: string;
+  signature: string;
+  public_key: string;
+  algorithm: string;
+  current: boolean;
+  actionable_notices: number;
+  verification_valid: boolean;
+  notices: {
+    id: string;
+    kind: string;
+    severity: "warning" | "blocking";
+    summary: string;
+    evidence: string;
+    remediation_id?: string;
+    propagation_campaign_id?: string;
+    created_at: string;
+  }[];
 };
 export type PackageVersion = {
   id: string;

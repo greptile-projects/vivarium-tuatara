@@ -2721,6 +2721,31 @@ whenever dependencies change or the web job fails before it starts.
   only and grant no repository, Git, issue, package, mentor, workspace, review,
   or completion authority.
 
+- **Reproducible learning attempts** — Authenticated repository readers launch
+  an exact pathway revision's configured module exercise at
+  `/repositories/{id}/learning-pathways/{slug}/modules/{module_id}/attempts`.
+  Launches require a caller-stable request identity; exact retries atomically
+  reuse the retained attempt and changed reuse conflicts before provisioning.
+  A durable filesystem claim spans lookup, comparison, and creation across API
+  workers sharing the workspace root; per-attempt durable claims likewise span
+  provisioning, so correctness does not depend on one process's mutexes.
+  Provisioning is serialized per attempt: a concurrent retry observes the first
+  launch's completed state, while a retry after interruption performs missing
+  setup and finalizes the same durable attempt instead of stranding it.
+  The exercise freezes its exact commit, practice kind, instructions, starter
+  commands, acceptance criteria, hints, and bounded synthetic or exact-commit
+  permitted data into the ordinary bounded workspace. Effective resource policy
+  and `.vivarium/workspace.json` govern a read-only, networkless,
+  capability-free container; no credential or authoritative-ref authority is
+  introduced. Setup, command output, and unpublished file changes use the
+  workspace ledger, while learning context retains hint use, criterion-and-
+  command-bound checkpoints, compute cost, and a reproducibility-input digest.
+  Checkpoint citations resolve against the uncapped command provenance ledger,
+  not the bounded recent-command projection. Organization-policy read failures
+  fail closed before workspace creation.
+  Storage remains beneath `$WORKSPACE_STORAGE_ROOT`; hint and checkpoint
+  mutations are under `/workspaces/{id}/learning`.
+
 - **Docs** — `docs/README.md` records decisions once they're made, not before.
 
   Pull privacy review at `/repositories/{id}/pulls/{pull_id}/privacy-review` requires a candidate

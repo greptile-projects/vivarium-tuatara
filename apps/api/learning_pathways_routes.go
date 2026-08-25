@@ -1,8 +1,14 @@
 package main
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"net/http"
+	"os/exec"
 	"strconv"
 	"strings"
 
@@ -14,9 +20,10 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/workspaces"
 )
 
-func registerLearningPathwayRoutes(mux *http.ServeMux, git *storage.Store, repos *repositories.Store, pathways *learningpathways.Store, issueStore *issues.Store, proposalStore *proposals.Store, packageStore *packages.Store, contributorStore *contributorpathways.Store, credentials *auth.Store) {
+func registerLearningPathwayRoutes(mux *http.ServeMux, git *storage.Store, repos *repositories.Store, pathways *learningpathways.Store, issueStore *issues.Store, proposalStore *proposals.Store, packageStore *packages.Store, contributorStore *contributorpathways.Store, workspaceStore *workspaces.Store, credentials *auth.Store) {
 	isParticipant := func(repositoryID, userID string) bool {
 		repo, e := repos.GetByID(repositoryID)
 		if e != nil {
@@ -241,4 +248,191 @@ func registerLearningPathwayRoutes(mux *http.ServeMux, git *storage.Store, repos
 		w.Header().Set("Location", "/repositories/"+r.PathValue("id")+"/learning-pathways/"+r.PathValue("slug"))
 		writeJSON(w, status, present(r.PathValue("id"), actor.UserID, v))
 	})
+	if workspaceStore == nil {
+		return
+	}
+	mux.HandleFunc("POST /repositories/{id}/learning-pathways/{slug}/modules/{module_id}/attempts", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryRead(w, r, repos, credentials, r.PathValue("id"))
+		if !ok {
+			return
+		}
+		var in struct {
+			ExerciseID     string `json:"exercise_id"`
+			PathwayVersion int    `json:"pathway_version"`
+			RequestID      string `json:"request_id"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		if strings.TrimSpace(in.RequestID) == "" || len(in.RequestID) > 200 {
+			writeAPIError(w, 422, "learning_attempt_request_invalid", "a bounded caller-stable request_id is required")
+			return
+		}
+		history, err := pathways.List(r.PathValue("id"), r.PathValue("slug"))
+		if err != nil || in.PathwayVersion < 1 || in.PathwayVersion > len(history) {
+			writeAPIError(w, 404, "learning_pathway_not_found", "exact learning pathway revision not found")
+			return
+		}
+		pathway := history[in.PathwayVersion-1]
+		var exercise *learningpathways.Exercise
+		for mi := range pathway.Modules {
+			if pathway.Modules[mi].ID == r.PathValue("module_id") {
+				for ei := range pathway.Modules[mi].Exercises {
+					if pathway.Modules[mi].Exercises[ei].ID == in.ExerciseID {
+						exercise = &pathway.Modules[mi].Exercises[ei]
+					}
+				}
+			}
+		}
+		if exercise == nil || exercise.Revision == "" {
+			writeAPIError(w, 422, "learning_exercise_not_launchable", "module exercise must define an exact practice revision, kind, and acceptance criteria")
+			return
+		}
+		gr, err := git.Open(r.PathValue("id"))
+		if err != nil {
+			writeAPIError(w, 404, "repository_not_found", "repository not found")
+			return
+		}
+		if _, err = gr.ReadCommit(storage.ObjectID(exercise.Revision)); err != nil {
+			writeAPIError(w, 422, "learning_revision_unavailable", "the exercise revision is unavailable")
+			return
+		}
+		definitionBytes, err := exec.Command("git", "--git-dir="+gr.Path(), "show", exercise.Revision+":"+workspaces.DefinitionPath).Output()
+		if err != nil {
+			writeAPIError(w, 422, "workspace_definition_missing", "the exercise revision must contain .vivarium/workspace.json")
+			return
+		}
+		definition, err := parseWorkspaceDefinition(definitionBytes)
+		if err != nil {
+			writeAPIError(w, 422, "workspace_definition_invalid", err.Error())
+			return
+		}
+		policy, err := workspaceStore.GetPolicy("repository", r.PathValue("id"))
+		if err != nil {
+			writeAPIError(w, 500, "workspace_policy_unavailable", "workspace policy could not be read")
+			return
+		}
+		repo, _ := repos.GetByID(r.PathValue("id"))
+		scope := "repository"
+		if repo.OrganizationID != "" {
+			op, policyErr := workspaceStore.GetPolicy("organization", repo.OrganizationID)
+			if policyErr != nil {
+				writeAPIError(w, 500, "workspace_policy_unavailable", "workspace policy could not be read")
+				return
+			}
+			policy = workspaces.Constrain(op, policy)
+			scope = "organization+repository"
+		}
+		if definition.Resources.CPUs > policy.MaxCPUs || definition.Resources.MemoryMB > policy.MaxMemoryMB || definition.Resources.StorageMB > policy.MaxStorageMB {
+			writeAPIError(w, 422, "workspace_policy_resources_exceeded", "exercise workspace exceeds the effective resource policy")
+			return
+		}
+		dataPaths := []string{}
+		for _, d := range exercise.Data {
+			dataPaths = append(dataPaths, d.Path)
+		}
+		repro, _ := json.Marshal(struct {
+			Revision       string
+			Definition     string
+			Instructions   string
+			Criteria, Data []string
+		}{exercise.Revision, hex.EncodeToString(learningDigest(definitionBytes)), exercise.Instructions, exercise.AcceptanceCriteria, dataPaths})
+		ctx := &workspaces.LearningContext{PathwaySlug: pathway.Slug, PathwayVersion: pathway.Version, ModuleID: r.PathValue("module_id"), ExerciseID: exercise.ID, Kind: exercise.Kind, Instructions: exercise.Instructions, StarterCommands: exercise.StarterCommands, AcceptanceCriteria: exercise.AcceptanceCriteria, Data: dataPaths, Hints: exercise.Hints, ReproducibilitySHA256: hex.EncodeToString(learningDigest(repro))}
+		created, reused, err := workspaceStore.CreateLearning(workspaces.Workspace{RepositoryID: repo.ID, OrganizationID: repo.OrganizationID, CommitID: exercise.Revision, Definition: definition, Source: workspaces.Source{Kind: "learning_exercise", RepositoryID: repo.ID, LearningPathwaySlug: pathway.Slug, LearningPathwayVersion: pathway.Version, LearningModuleID: r.PathValue("module_id"), LearningExerciseID: exercise.ID, LearningRequestID: in.RequestID}, CreatorID: actor.UserID, Access: workspaces.Access{Role: "learner", Scopes: []string{"repositories:read"}}, Policy: policy, PolicyScope: scope, PolicyVersion: policy.Version, LearningContext: ctx}, definitionBytes)
+		if errors.Is(err, workspaces.ErrRequestChanged) {
+			writeAPIError(w, 409, "learning_attempt_request_changed", "request identity was already used with different launch inputs")
+			return
+		}
+		if err != nil {
+			writeAPIError(w, 500, "learning_attempt_create_failed", "learning attempt could not be retained")
+			return
+		}
+		created, _, err = workspaceStore.ReconcileLearningProvisioning(created.ID, func() ([]workspaces.SetupStep, bool) {
+			if reused {
+				_ = exec.Command("docker", "rm", "-f", "-v", "vivarium-workspace-"+created.ID).Run()
+			}
+			steps, failed := provisionWorkspace(gr.Path(), workspaceStore.RuntimePath(created.ID), created.ID, exercise.Revision, definition)
+			if !failed {
+				if stageErr := stageLearningData(gr.Path(), created.ID, exercise.Revision, exercise.Data); stageErr != nil {
+					failed = true
+					steps = append(steps, failedSetupStep("stage permitted learning data", nil, stageErr))
+					_ = exec.Command("docker", "rm", "-f", "-v", "vivarium-workspace-"+created.ID).Run()
+				}
+			}
+			return steps, failed
+		})
+		if err != nil {
+			writeAPIError(w, 500, "learning_attempt_create_failed", "learning setup evidence could not be retained")
+			return
+		}
+		w.Header().Set("Location", "/workspaces/"+created.ID)
+		status := 201
+		if reused {
+			status = 200
+		}
+		writeJSON(w, status, created)
+	})
+	mux.HandleFunc("POST /workspaces/{workspace_id}/learning/hints/{index}", func(w http.ResponseWriter, r *http.Request) {
+		item, actor, ok := authorizeWorkspace(w, r, workspaceStore, repos, credentials, "repositories:read")
+		if !ok {
+			return
+		}
+		index, e := strconv.Atoi(r.PathValue("index"))
+		if e != nil {
+			writeAPIError(w, 422, "learning_hint_invalid", "hint index is invalid")
+			return
+		}
+		updated, e := workspaceStore.UseLearningHint(item.ID, actor.UserID, index)
+		if e != nil {
+			writeAPIError(w, 422, "learning_hint_invalid", "hint is unavailable")
+			return
+		}
+		writeJSON(w, 200, updated)
+	})
+	mux.HandleFunc("POST /workspaces/{workspace_id}/learning/checkpoints", func(w http.ResponseWriter, r *http.Request) {
+		item, actor, ok := authorizeWorkspace(w, r, workspaceStore, repos, credentials, "repositories:read")
+		if !ok {
+			return
+		}
+		var in struct {
+			Summary           string   `json:"summary"`
+			Criteria          []string `json:"criteria"`
+			CommandOutcomeIDs []string `json:"command_outcome_ids"`
+		}
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_json", "request body must be valid JSON")
+			return
+		}
+		updated, e := workspaceStore.AddLearningCheckpoint(item.ID, actor.UserID, in.Summary, in.Criteria, in.CommandOutcomeIDs)
+		if e != nil {
+			writeAPIError(w, 422, "learning_checkpoint_invalid", "checkpoint must cite retained criteria and command outcomes")
+			return
+		}
+		writeJSON(w, 201, updated)
+	})
 }
+
+func learningDigest(body []byte) []byte { sum := sha256.Sum256(body); return sum[:] }
+func stageLearningData(gitPath, workspaceID, revision string, data []learningpathways.ExerciseData) error {
+	for _, d := range data {
+		content := []byte(d.Content)
+		if d.Kind == "permitted" {
+			var err error
+			content, err = exec.Command("git", "--git-dir="+gitPath, "show", revision+":"+d.Source).Output()
+			if err != nil {
+				return errors.New("permitted data source is unavailable")
+			}
+		}
+		if reproductionSecretLike(d.Path, stringToBase64(content)) {
+			return errors.New("learning data resembles credential material")
+		}
+		cmd := exec.Command("docker", "exec", "-i", "vivarium-workspace-"+workspaceID, "sh", "-lc", "umask 077; mkdir -p -- \"$(dirname -- \"$1\")\"; cat > \"$1\"", "sh", "/workspace/"+d.Path)
+		cmd.Stdin = bytes.NewReader(content)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return errors.New("learning data could not be staged: " + string(out))
+		}
+	}
+	return nil
+}
+func stringToBase64(body []byte) string { return base64.StdEncoding.EncodeToString(body) }

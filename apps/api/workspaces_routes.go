@@ -221,7 +221,7 @@ func registerWorkspaceRoutes(mux *http.ServeMux, git *storage.Store, catalog *re
 		for _, item := range all {
 			meta, metaErr := catalog.GetByID(item.RepositoryID)
 			collaborator, _ := catalog.HasCollaborator(actor.UserID, item.RepositoryID)
-			if metaErr == nil && (meta.OwnerID == actor.UserID || collaborator || conflictParticipantCurrent(catalog, item, workspacePrincipal(actor), actor.UserID, actor.RepositoryID)) {
+			if metaErr == nil && (meta.OwnerID == actor.UserID || collaborator || item.Source.Kind == "learning_exercise" && item.CreatorID == actor.UserID || conflictParticipantCurrent(catalog, item, workspacePrincipal(actor), actor.UserID, actor.RepositoryID)) {
 				items = append(items, item)
 			}
 		}
@@ -353,7 +353,8 @@ func authorizeWorkspace(w http.ResponseWriter, r *http.Request, store *workspace
 	meta, err := catalog.GetByID(item.RepositoryID)
 	collaborator, _ := catalog.HasCollaborator(actor.UserID, item.RepositoryID)
 	invited := conflictParticipantCurrent(catalog, item, workspacePrincipal(actor), actor.UserID, actor.RepositoryID)
-	if err != nil || (actor.UserID != meta.OwnerID && !collaborator && !invited) || (item.Policy.Sharing == "private" && actor.UserID != item.CreatorID && actor.UserID != meta.OwnerID && !invited) {
+	learner := item.Source.Kind == "learning_exercise" && item.CreatorID == actor.UserID
+	if err != nil || (actor.UserID != meta.OwnerID && !collaborator && !invited && !learner) || (item.Policy.Sharing == "private" && actor.UserID != item.CreatorID && actor.UserID != meta.OwnerID && !invited) {
 		writeAPIError(w, 404, "workspace_not_found", "workspace not found")
 		return item, auth.Credential{}, false
 	}
