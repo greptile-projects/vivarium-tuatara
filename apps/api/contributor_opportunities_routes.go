@@ -10,14 +10,17 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/contributoropportunities"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/issues"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/learningassessments"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/learningpathways"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/workspaces"
 )
 
-func registerContributorOpportunityRoutes(mux *http.ServeMux, git *storage.Store, repos *repositories.Store, opportunities *contributoropportunities.Store, issueStore *issues.Store, proposalStore *proposals.Store, pulls *pullrequests.Store, releaseStore *releases.Store, credentials *auth.Store) {
+func registerContributorOpportunityRoutes(mux *http.ServeMux, git *storage.Store, repos *repositories.Store, opportunities *contributoropportunities.Store, issueStore *issues.Store, proposalStore *proposals.Store, pulls *pullrequests.Store, releaseStore *releases.Store, assessments *learningassessments.Store, learning *learningpathways.Store, workspaceStore *workspaces.Store, credentials *auth.Store) {
 	read := func(w http.ResponseWriter, r *http.Request) (auth.Credential, bool) {
 		actor, _, ok := authorizeRepositoryRead(w, r, repos, credentials, r.PathValue("id"))
 		return actor, ok
@@ -34,20 +37,38 @@ func registerContributorOpportunityRoutes(mux *http.ServeMux, git *storage.Store
 		writeJSON(w, 200, map[string]any{"opportunities": items})
 	})
 	mux.HandleFunc("POST /repositories/{id}/contribution-opportunity-matches", func(w http.ResponseWriter, r *http.Request) {
-		if _, ok := read(w, r); !ok {
+		actor, ok := read(w, r)
+		if !ok {
 			return
 		}
-		var p contributoropportunities.Profile
-		if decodeJSON(r, &p) != nil || p.AvailableMinutes < 15 || p.AvailableMinutes > 10080 || p.MaximumRisk != "low" && p.MaximumRisk != "medium" && p.MaximumRisk != "high" {
+		var input struct {
+			contributoropportunities.Profile
+			LearningAttemptIDs []string `json:"learning_attempt_ids"`
+		}
+		if decodeJSON(r, &input) != nil || input.AvailableMinutes < 15 || input.AvailableMinutes > 10080 || input.MaximumRisk != "low" && input.MaximumRisk != "medium" && input.MaximumRisk != "high" || len(input.LearningAttemptIDs) > 20 {
 			writeAPIError(w, 422, "invalid_match_profile", "skills, interests, available minutes, and maximum risk must describe realistic constraints")
 			return
+		}
+		learningEvidence := []workspaces.ContributionLearningEvidence{}
+		for _, attemptID := range input.LearningAttemptIDs {
+			evidence, skills, err := resolveContributionLearningEvidence(r.PathValue("id"), actor.UserID, attemptID, assessments, learning, workspaceStore)
+			if err != nil {
+				writeAPIError(w, 422, "learning_evidence_ineligible", "only the learner's current demonstrated module evidence can inform a match")
+				return
+			}
+			learningEvidence = append(learningEvidence, evidence)
+			for _, skill := range skills {
+				if !slices.Contains(input.Skills, skill) {
+					input.Skills = append(input.Skills, skill)
+				}
+			}
 		}
 		items, err := opportunities.List(r.PathValue("id"))
 		if err != nil {
 			writeAPIError(w, 500, "opportunities_read_failed", "contribution opportunities could not be read")
 			return
 		}
-		writeJSON(w, 200, map[string]any{"matches": contributoropportunities.MatchAll(items, p, time.Now())})
+		writeJSON(w, 200, map[string]any{"matches": contributoropportunities.MatchAll(items, input.Profile, time.Now()), "learning_evidence": learningEvidence})
 	})
 	mux.HandleFunc("PUT /repositories/{id}/contribution-opportunities/{opportunity}", func(w http.ResponseWriter, r *http.Request) {
 		actor, owner, ok := authorizeRepositoryParticipant(w, r, repos, credentials, r.PathValue("id"), "repositories:write")

@@ -1434,10 +1434,10 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		registerLearningAssessmentRoutes(mux, store, repositoryCatalog, learningPathwayStore, learningAssessmentStore, workspaceStore, checkRunStore, authStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && contributorOpportunityStore != nil {
-		registerContributorOpportunityRoutes(mux, store, repositoryCatalog, contributorOpportunityStore, issueStore, proposalStore, pullRequestStore, releaseStore, authStore)
+		registerContributorOpportunityRoutes(mux, store, repositoryCatalog, contributorOpportunityStore, issueStore, proposalStore, pullRequestStore, releaseStore, learningAssessmentStore, learningPathwayStore, workspaceStore, authStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && contributorOpportunityStore != nil && contributorPathwayStore != nil && workspaceStore != nil {
-		registerContributorLaunchRoutes(mux, store, repositoryCatalog, contributorOpportunityStore, contributorPathwayStore, workspaceStore, issueStore, proposalStore, authStore)
+		registerContributorLaunchRoutes(mux, store, repositoryCatalog, contributorOpportunityStore, contributorPathwayStore, workspaceStore, issueStore, proposalStore, learningAssessmentStore, learningPathwayStore, authStore)
 		registerContributorHelpRoutes(mux, workspaceStore, repositoryCatalog, contributorOpportunityStore, organizationStore, authStore)
 		registerContributorPublicationRoutes(mux, store, repositoryCatalog, pullRequestStore, checkRunStore, contributorOpportunityStore, contributorPathwayStore, workspaceStore, authStore)
 	}

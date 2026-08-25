@@ -12,6 +12,8 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/contributoropportunities"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/contributorpathways"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/issues"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/learningassessments"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/learningpathways"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
@@ -26,7 +28,7 @@ type contributionLaunchResult struct {
 // registerContributorLaunchRoutes turns a coordination-only match into an
 // independently owned fork and reproducible workspace. It deliberately mints
 // no upstream collaborator, Git, agent, or write authority.
-func registerContributorLaunchRoutes(mux *http.ServeMux, git *storage.Store, repos *repositories.Store, opportunities *contributoropportunities.Store, pathways *contributorpathways.Store, workspaceStore *workspaces.Store, issueStore *issues.Store, proposalStore *proposals.Store, credentials *auth.Store) {
+func registerContributorLaunchRoutes(mux *http.ServeMux, git *storage.Store, repos *repositories.Store, opportunities *contributoropportunities.Store, pathways *contributorpathways.Store, workspaceStore *workspaces.Store, issueStore *issues.Store, proposalStore *proposals.Store, assessments *learningassessments.Store, learning *learningpathways.Store, credentials *auth.Store) {
 	mux.HandleFunc("POST /repositories/{id}/contribution-opportunities/{opportunity}/launch", func(w http.ResponseWriter, r *http.Request) {
 		actor, ok := authenticateRequest(w, r, credentials, "repositories:write", false)
 		if !ok {
@@ -44,6 +46,7 @@ func registerContributorLaunchRoutes(mux *http.ServeMux, git *storage.Store, rep
 			ExpectedVersion     int      `json:"expected_version"`
 			ForkName            string   `json:"fork_name"`
 			SampleAttachmentIDs []string `json:"sample_attachment_ids"`
+			LearningAttemptID   string   `json:"learning_attempt_id"`
 		}
 		if decodeJSON(r, &input) != nil || strings.TrimSpace(input.ForkName) == "" {
 			writeAPIError(w, 400, "invalid_contribution_launch", "fork_name and expected_version are required")
@@ -70,6 +73,15 @@ func registerContributorLaunchRoutes(mux *http.ServeMux, git *storage.Store, rep
 		if err != nil {
 			writeAPIError(w, 422, "contribution_guidance_missing", "maintainers must publish current contribution guidance before this opportunity can launch")
 			return
+		}
+		var learningEvidence *workspaces.ContributionLearningEvidence
+		if input.LearningAttemptID != "" {
+			evidence, _, evidenceErr := resolveContributionLearningEvidence(upstream.ID, actor.UserID, input.LearningAttemptID, assessments, learning, workspaceStore)
+			if evidenceErr != nil {
+				writeAPIError(w, 422, "learning_evidence_ineligible", "the selected learning result is not the contributor's current demonstrated module evidence")
+				return
+			}
+			learningEvidence = &evidence
 		}
 		upstreamGit, err := git.Open(upstream.ID)
 		if err != nil {
@@ -190,7 +202,7 @@ func registerContributorLaunchRoutes(mux *http.ServeMux, git *storage.Store, rep
 		for _, mentor := range opportunity.Mentors {
 			mentorIDs = append(mentorIDs, mentor.UserID)
 		}
-		context := &workspaces.ContributorContext{OpportunityID: opportunity.ID, OpportunityVersion: opportunity.Version, UpstreamRepositoryID: upstream.ID, PathwayVersion: pathway.Version, Guidance: pathway.Setup.Summary, Prerequisites: append([]string(nil), pathway.Prerequisites...), AcceptanceCriteria: []string{opportunity.ExpectedOutcome, opportunity.Scope}, EvidenceKind: opportunity.Source.Kind, EvidenceID: opportunity.Source.ID, EvidenceParentID: opportunity.Source.ParentID, SampleAttachmentIDs: append([]string(nil), input.SampleAttachmentIDs...), Diagnostics: diagnostics, MentorIDs: mentorIDs, AgentAssistance: opportunity.AgentAssistance, Help: workspaces.ContributionHelp{Version: 1, State: "active", Entries: []workspaces.ContributionHelpEntry{}, Availability: []workspaces.MentorAvailability{}}}
+		context := &workspaces.ContributorContext{OpportunityID: opportunity.ID, OpportunityVersion: opportunity.Version, UpstreamRepositoryID: upstream.ID, PathwayVersion: pathway.Version, Guidance: pathway.Setup.Summary, Prerequisites: append([]string(nil), pathway.Prerequisites...), AcceptanceCriteria: []string{opportunity.ExpectedOutcome, opportunity.Scope}, EvidenceKind: opportunity.Source.Kind, EvidenceID: opportunity.Source.ID, EvidenceParentID: opportunity.Source.ParentID, SampleAttachmentIDs: append([]string(nil), input.SampleAttachmentIDs...), Diagnostics: diagnostics, MentorIDs: mentorIDs, AgentAssistance: opportunity.AgentAssistance, LearningEvidence: learningEvidence, Help: workspaces.ContributionHelp{Version: 1, State: "active", Entries: []workspaces.ContributionHelpEntry{}, Availability: []workspaces.MentorAvailability{}}}
 		created, err := workspaceStore.Create(workspaces.Workspace{RepositoryID: fork.ID, CommitID: opportunity.Revision, Definition: definition, Source: workspaces.Source{Kind: "repository", RepositoryID: fork.ID, UpstreamRepositoryID: upstream.ID, OpportunityID: opportunity.ID}, CreatorID: actor.UserID, Access: workspaces.Access{Role: "owner", Scopes: []string{"repositories:read", "repositories:write"}}, Policy: policy, PolicyScope: "repository", PolicyVersion: policy.Version, ContributorContext: context}, definitionBytes)
 		if err != nil {
 			writeJSON(w, 202, map[string]any{"fork": fork, "recovery_required": true, "message": "fork retained; workspace persistence must be retried"})

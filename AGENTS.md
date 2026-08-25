@@ -3267,4 +3267,13 @@ federated follower through explicit owner adoption, rejects a concurrent source 
 the new component remote, verifies both destination matrices, and retires compatibility by archiving the source.
 Playwright isolates the restructuring ledger for repeatable execution.
 
+Demonstrated learning can inform ordinary contribution matching without becoming authority. Opportunity match
+requests may cite the authenticated learner's current, unblocked assessment attempts; the server derives bounded
+skills from the exact reviewed rubric and module, and returns retained evidence beside ordinary match gaps. A
+claimed opportunity launch may preload one exact assessment/pathway/module/exercise plus checkpoint, command,
+authorship, and declared-agent-assistance references into the contributor-owned fork workspace. Guided pull
+publication preserves that evidence with the contribution pathway, assistance, and acceptance criteria, while
+ordinary claim, fork, agent lease, contributor, review, check, integration, merge, release, charter, and permission
+stores remain the only sources of authority.
+
 Sensitive history remediations at `/repositories/{id}/history-remediations` and the repository
