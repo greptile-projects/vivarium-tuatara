@@ -6,7 +6,7 @@ import (
 )
 
 func validRevision(now time.Time) Revision {
-	return Revision{Title: "Holiday capacity", Summary: "Serve launch demand", Scope: Scope{Kind: "service", Name: "catalog"}, Forecasts: []Forecast{{ID: "forecast-1", Segment: "all users", Start: now, End: now.Add(24 * time.Hour), Value: 1000, Unit: "requests/s", Confidence: "unsupported"}}, TrafficShapes: []TrafficShape{{Name: "launch", Pattern: "step", PeakMultiplier: 2, BurstDuration: "15m"}}, Seasonality: []Seasonality{{Name: "holiday", Window: "December", Multiplier: 1.5, Rationale: "prior launches"}}, ServiceLevels: []ServiceLevel{{Name: "availability", Indicator: "successful requests", Target: 99.9, Unit: "percent", Window: "30d"}}, Thresholds: []Threshold{{Resource: "CPU", Signal: "", Warning: 70, Critical: 90, Unit: "percent"}}, DependencyLimits: []DependencyLimit{{Name: "database", Limit: 5000, Unit: "connections", Signal: "db_connections"}}, Regions: []Region{{Name: "us-east", DemandShare: 1}}, OwnerIDs: []string{"owner"}, Budget: Budget{Amount: 5000, Currency: "USD", Period: "month"}, LeadTime: LeadTime{Duration: "14d", Trigger: "forecast exceeds warning capacity"}, SuccessCriteria: []Criterion{{Name: "serve peak", Condition: "p95 below 200ms", Evidence: "load check"}}, RollbackCriteria: []Criterion{{Name: "cost guard", Condition: "cost exceeds budget", Evidence: "billing signal"}}, Links: []Link{{Kind: "roadmap", ResourceID: "roadmap-1", Label: "holiday launch"}}, Assumptions: []Assumption{{ID: "assumption-1", Statement: "mix remains stable", ExpiresAt: now.Add(10 * 24 * time.Hour)}}, Rationale: "initial agreement"}
+	return Revision{Title: "Holiday capacity", Summary: "Serve launch demand", Scope: Scope{Kind: "service", Name: "catalog"}, Forecasts: []Forecast{{ID: "forecast-1", Segment: "all users", Start: now, End: now.Add(24 * time.Hour), Value: 1000, Unit: "requests/s", Confidence: "unsupported"}}, TrafficShapes: []TrafficShape{{Name: "launch", Pattern: "step", PeakMultiplier: 2, BurstDuration: "15m"}}, Seasonality: []Seasonality{{Name: "holiday", Window: "December", Multiplier: 1.5, Rationale: "prior launches"}}, ServiceLevels: []ServiceLevel{{Name: "availability", Indicator: "successful requests", Target: 99.9, Unit: "percent", Window: "30d"}}, Thresholds: []Threshold{{Resource: "CPU", Signal: "", Warning: 70, Critical: 90, Unit: "percent"}}, DependencyLimits: []DependencyLimit{{Name: "database", Limit: 5000, Unit: "connections", Signal: "db_connections"}}, Regions: []Region{{Name: "us-east", DemandShare: 1}}, OwnerIDs: []string{"owner"}, Budget: Budget{Amount: 5000, Currency: "USD", Period: "month"}, LeadTime: LeadTime{Duration: "14d", Trigger: "forecast exceeds warning capacity"}, SuccessCriteria: []Criterion{{Name: "serve peak", Condition: "p95 below 200ms", Evidence: "load check"}}, RollbackCriteria: []Criterion{{Name: "cost guard", Condition: "cost exceeds budget", Evidence: "billing signal"}}, Links: []Link{{ID: "launch-roadmap", Kind: "roadmap", ResourceID: "roadmap-1", Label: "holiday launch"}}, Assumptions: []Assumption{{ID: "assumption-1", Statement: "mix remains stable", ExpiresAt: now.Add(10 * 24 * time.Hour)}}, Rationale: "initial agreement"}
 }
 
 func TestVersionedDiagnostics(t *testing.T) {
@@ -38,6 +38,10 @@ func TestVersionedDiagnostics(t *testing.T) {
 	reconciled, err := s.Revise(created.ID, 1, "owner", "revise-1", next)
 	if err != nil || reconciled.CurrentVersion != 2 {
 		t.Fatalf("reconcile = %+v, %v", reconciled, err)
+	}
+	refreshed, err := s.Revise(created.ID, reconciled.CurrentVersion, "owner", "revise-1", next)
+	if err != nil || refreshed.CurrentVersion != 2 || len(refreshed.Revisions) != 2 {
+		t.Fatalf("refreshed reconcile = %+v, %v", refreshed, err)
 	}
 	if _, err = s.Revise(created.ID, 1, "owner", "revise-2", next); err != ErrConflict {
 		t.Fatalf("changed retry conflict = %v", err)
@@ -80,13 +84,13 @@ func TestRepeatedLinkKindsCompareByStableLabelRegardlessOfOrder(t *testing.T) {
 	now := time.Now().UTC()
 	s, _ := New(t.TempDir())
 	r := validRevision(now)
-	r.Links = []Link{{Kind: "roadmap", ResourceID: "a", Label: "alpha"}, {Kind: "roadmap", ResourceID: "b", Label: "beta"}, {Kind: "roadmap", ResourceID: "c", Label: "gamma"}}
+	r.Links = []Link{{ID: "a-link", Kind: "roadmap", ResourceID: "a", Label: "alpha"}, {ID: "b-link", Kind: "roadmap", ResourceID: "b", Label: "beta"}, {ID: "c-link", Kind: "roadmap", ResourceID: "c", Label: "gamma"}}
 	created, err := s.Create("repo", "owner", "links-create", r)
 	if err != nil {
 		t.Fatal(err)
 	}
 	next := r
-	next.Links = []Link{{Kind: "roadmap", ResourceID: "c-v2", Label: "gamma"}, {Kind: "roadmap", ResourceID: "b", Label: "beta"}, {Kind: "roadmap", ResourceID: "a", Label: "alpha"}}
+	next.Links = []Link{{ID: "c-link", Kind: "roadmap", ResourceID: "c-v2", Label: "renamed gamma"}, {ID: "b-link", Kind: "roadmap", ResourceID: "b", Label: "beta"}, {ID: "a-link", Kind: "roadmap", ResourceID: "a", Label: "alpha"}}
 	updated, err := s.Revise(created.ID, 1, "owner", "links-revise", next)
 	if err != nil {
 		t.Fatal(err)

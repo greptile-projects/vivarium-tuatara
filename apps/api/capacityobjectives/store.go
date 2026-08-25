@@ -90,6 +90,7 @@ type Criterion struct {
 	Evidence  string `json:"evidence"`
 }
 type Link struct {
+	ID         string `json:"id"`
 	Kind       string `json:"kind"`
 	ResourceID string `json:"resource_id"`
 	Version    string `json:"version,omitempty"`
@@ -201,9 +202,11 @@ func (s *Store) Revise(id string, expected int, actor, requestID string, r Revis
 			return e
 		}
 		digest := revisionDigest(r)
-		if v.CurrentVersion == expected+1 && len(v.Revisions) > 0 {
-			latest := v.Revisions[len(v.Revisions)-1]
-			if latest.RequestID == requestID && revisionDigest(latest) == digest {
+		for _, retained := range v.Revisions {
+			if retained.RequestID == requestID {
+				if revisionDigest(retained) != digest {
+					return ErrConflict
+				}
 				out = v
 				return nil
 			}
@@ -307,10 +310,10 @@ func (s *Store) project(v Objective) Objective {
 		previous := v.Revisions[len(v.Revisions)-2]
 		old := map[string]string{}
 		for _, l := range previous.Links {
-			old[linkIdentity(l)] = l.ResourceID
+			old[l.ID] = l.ResourceID
 		}
 		for _, l := range r.Links {
-			if id := old[linkIdentity(l)]; id != "" && id != l.ResourceID {
+			if id := old[l.ID]; id != "" && id != l.ResourceID {
 				d = append(d, diag("conflicting_commitment", "warning", "This linked commitment differs from the prior version.", l.ResourceID, l.AddedBy))
 			}
 		}
@@ -377,11 +380,10 @@ func validate(r Revision) error {
 	validLinks := map[string]bool{"roadmap": true, "experiment": true, "performance_goal": true, "service_objective": true, "infrastructure": true, "release": true, "funding": true}
 	linkIDs := map[string]bool{}
 	for _, x := range r.Links {
-		identity := linkIdentity(x)
-		if !validLinks[x.Kind] || blank(x.ResourceID) || blank(x.Label) || linkIDs[identity] {
+		if !validLinks[x.Kind] || blank(x.ID) || blank(x.ResourceID) || blank(x.Label) || linkIDs[x.ID] {
 			return ErrInvalid
 		}
-		linkIDs[identity] = true
+		linkIDs[x.ID] = true
 	}
 	for _, x := range r.Assumptions {
 		if blank(x.ID) || blank(x.Statement) || x.ExpiresAt.IsZero() {
@@ -390,10 +392,9 @@ func validate(r Revision) error {
 	}
 	return nil
 }
-func blank(v string) bool        { return strings.TrimSpace(v) == "" }
-func finite(v float64) bool      { return !math.IsNaN(v) && !math.IsInf(v, 0) }
-func positive(v float64) bool    { return finite(v) && v > 0 }
-func linkIdentity(v Link) string { return v.Kind + "\x00" + v.Label }
+func blank(v string) bool     { return strings.TrimSpace(v) == "" }
+func finite(v float64) bool   { return !math.IsNaN(v) && !math.IsInf(v, 0) }
+func positive(v float64) bool { return finite(v) && v > 0 }
 func revisionDigest(v Revision) string {
 	v.Version = 0
 	v.RequestID = ""

@@ -14,8 +14,10 @@ evidence remains caller-declared: unsupported forecasts, missing signals, confli
 successor commitments, and expiring or expired assumptions are attributable diagnostics,
 not inferred proof. Publication requires repository-write scope and current participation
 for every named owner; caller-stable request identities reconcile ambiguous create and
-revision retries and reject changed reuse. Repeated typed links pair by kind and stable
-label, so order does not manufacture commitment conflicts. Optimistic versions reject
+revision retries and reject changed reuse, even after a reader refreshes to the retained
+version. Pending web creates retain their exact identity and draft across reloads until
+success or explicit cancellation. Repeated typed links pair by immutable link ID, so
+label edits and ordering do not hide or manufacture commitment conflicts. Optimistic versions reject
 concurrent successors, old revisions remain readable, and these contracts grant no infrastructure, funding, release, scaling,
 repository, or operational authority.
 

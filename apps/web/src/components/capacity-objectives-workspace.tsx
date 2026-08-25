@@ -159,6 +159,7 @@ export function CapacityObjectivesWorkspace({
     [requestID, setRequestID] = useState(""),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
+  const pendingCreateKey = `capacity-objective:${repositoryID}:pending-create`;
   const current = selected?.revisions.at(-1);
   const load = useCallback(async () => {
     if (!token) return;
@@ -169,6 +170,23 @@ export function CapacityObjectivesWorkspace({
         token,
       );
       setItems(out.capacity_objectives);
+      const retained = window.localStorage.getItem(pendingCreateKey);
+      if (retained) {
+        try {
+          const pending = JSON.parse(retained) as {
+            request_id: string;
+            draft: string;
+          };
+          if (pending.request_id && pending.draft) {
+            setSelected(undefined);
+            setRequestID(pending.request_id);
+            setDraft(pending.draft);
+            return;
+          }
+        } catch {
+          window.localStorage.removeItem(pendingCreateKey);
+        }
+      }
       setSelected((value) => {
         const next =
           out.capacity_objectives.find((x) => x.id === value?.id) ??
@@ -189,7 +207,7 @@ export function CapacityObjectivesWorkspace({
           : "Capacity objectives could not be loaded.",
       );
     }
-  }, [repositoryID, token, user?.id]);
+  }, [pendingCreateKey, repositoryID, token, user?.id]);
   useEffect(() => {
     void Promise.resolve().then(load);
   }, [load]);
@@ -200,6 +218,12 @@ export function CapacityObjectivesWorkspace({
     setError("");
     const stableRequestID = requestID || crypto.randomUUID();
     setRequestID(stableRequestID);
+    if (!selected) {
+      window.localStorage.setItem(
+        pendingCreateKey,
+        JSON.stringify({ request_id: stableRequestID, draft }),
+      );
+    }
     try {
       const revision = JSON.parse(draft) as Revision;
       const path = selected
@@ -220,6 +244,7 @@ export function CapacityObjectivesWorkspace({
       setSelected(out);
       setItems((values) => [out, ...values.filter((x) => x.id !== out.id)]);
       setRequestID("");
+      if (!selected) window.localStorage.removeItem(pendingCreateKey);
     } catch (reason) {
       setError(
         reason instanceof Error
@@ -259,7 +284,7 @@ export function CapacityObjectivesWorkspace({
               precise API handoff.
             </p>
           </div>
-          {selected && (
+          {selected ? (
             <Button
               type="button"
               variant="secondary"
@@ -271,7 +296,20 @@ export function CapacityObjectivesWorkspace({
             >
               New objective
             </Button>
-          )}
+          ) : requestID ? (
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => {
+                window.localStorage.removeItem(pendingCreateKey);
+                setRequestID("");
+                setError("");
+                setDraft(JSON.stringify(template(user?.id), null, 2));
+              }}
+            >
+              Discard pending create
+            </Button>
+          ) : null}
         </div>
         <form onSubmit={publish} className="mt-4">
           <label className="text-xs font-semibold">
@@ -280,6 +318,7 @@ export function CapacityObjectivesWorkspace({
               aria-label="Capacity contract JSON"
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
+              disabled={Boolean(requestID)}
               rows={28}
               spellCheck={false}
               className="mt-1 w-full rounded-lg border bg-slate-950 p-4 font-mono text-xs leading-5 text-slate-100"
@@ -292,6 +331,12 @@ export function CapacityObjectivesWorkspace({
                 ? "Publish immutable successor"
                 : "Create objective"}
           </Button>
+          {requestID && (
+            <p className="mt-2 text-xs text-[var(--muted)]">
+              This exact request is retained for safe retry. Discard it before
+              changing the contract.
+            </p>
+          )}
         </form>
         {error && (
           <p role="alert" className="mt-3 text-sm text-[var(--danger)]">

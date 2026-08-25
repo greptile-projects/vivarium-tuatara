@@ -23,8 +23,12 @@ lock while earlier revisions remain embedded and readable.
 Projection deliberately reports `unsupported_forecast`, `missing_signal`,
 `unsupported_assumption`, `expiring_assumption`, `expired_assumption`, and
 `conflicting_commitment` states with the actor who introduced the relevant declaration.
-Repeated links pair across revisions by their `(kind, label)` identity, which must be
-unique within a revision, so reordering same-kind commitments does not create false gaps.
+Repeated links pair across revisions by an immutable link `id`, which must be unique
+within a revision, so renaming or reordering same-kind commitments does not hide or
+create false gaps. Revision reconciliation scans retained request identities before its
+version check, including after a caller refreshes. The web persists an unresolved create's
+exact request identity and draft locally across reloads, locks that draft during recovery,
+and removes it only after success or explicit discard.
 These are diagnostics, not validation shortcuts or evidence derived from linked systems.
 The repository `/capacity` workspace exposes the complete public JSON contract so no
 repeated entry is silently discarded when publishing a successor. Contracts coordinate
