@@ -500,6 +500,7 @@ type MergeReadiness struct {
 	QualityConfidence       any                                    `json:"quality_confidence,omitempty"`
 	SecurityConfidence      any                                    `json:"security_confidence,omitempty"`
 	AssuranceImpact         any                                    `json:"assurance_impact,omitempty"`
+	ProvenanceReadiness     any                                    `json:"provenance_readiness,omitempty"`
 }
 
 type commentRecord struct {
@@ -539,6 +540,7 @@ type Store struct {
 	qualityConfidence        func(PullRequest, []FileChange) (any, []ReadinessBlocker, error)
 	securityConfidence       func(PullRequest, []FileChange) (any, []ReadinessBlocker, error)
 	assuranceImpact          func(PullRequest, []FileChange) (any, []ReadinessBlocker, error)
+	provenanceReadiness      func(PullRequest, []FileChange) (any, []ReadinessBlocker, error)
 }
 
 // ConfigureDesignReadiness adds an evidence-only policy projection to ordinary
@@ -560,6 +562,9 @@ func (s *Store) ConfigureSecurityConfidence(fn func(PullRequest, []FileChange) (
 }
 func (s *Store) ConfigureAssuranceImpact(fn func(PullRequest, []FileChange) (any, []ReadinessBlocker, error)) {
 	s.assuranceImpact = fn
+}
+func (s *Store) ConfigureProvenanceReadiness(fn func(PullRequest, []FileChange) (any, []ReadinessBlocker, error)) {
+	s.provenanceReadiness = fn
 }
 
 func (s *Store) ConfigurePerformanceEvidence(store *performanceevidence.Store) { s.performance = store }
@@ -1892,6 +1897,18 @@ func (s *Store) Readiness(repositoryID, pullRequestID string, actorCanMerge bool
 			return MergeReadiness{}, impactErr
 		}
 		report.AssuranceImpact = projection
+		report.Blockers = append(report.Blockers, blockers...)
+	}
+	if s.provenanceReadiness != nil {
+		changes, changeErr := s.Changes(repositoryID, pullRequestID)
+		if changeErr != nil {
+			return MergeReadiness{}, changeErr
+		}
+		projection, blockers, provenanceErr := s.provenanceReadiness(p, changes)
+		if provenanceErr != nil {
+			return MergeReadiness{}, provenanceErr
+		}
+		report.ProvenanceReadiness = projection
 		report.Blockers = append(report.Blockers, blockers...)
 	}
 	report.Mergeable = len(report.Blockers) == 0

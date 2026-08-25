@@ -83,6 +83,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/propagationcampaigns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/protectionplans"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/provenanceassessments"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/provenancegraphs"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/provenancepolicies"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
@@ -1100,6 +1101,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	var assuranceProgramStore *assuranceprograms.Store
 	var provenancePolicyStore *provenancepolicies.Store
 	var provenanceGraphStore *provenancegraphs.Store
+	var provenanceAssessmentStore *provenanceassessments.Store
 	var assuranceEvidenceStore *assuranceevidence.Store
 	var assuranceImpactStore *assuranceimpact.Store
 	var assuranceAssessmentStore *assuranceassessments.Store
@@ -1261,6 +1263,8 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 			provenancePolicyStore = value
 		case *provenancegraphs.Store:
 			provenanceGraphStore = value
+		case *provenanceassessments.Store:
+			provenanceAssessmentStore = value
 		case *assuranceevidence.Store:
 			assuranceEvidenceStore = value
 		case *assuranceimpact.Store:
@@ -1431,6 +1435,29 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		if pullRequestStore != nil {
 			registerConflictWorkspaceRoutes(mux, store, repositoryCatalog, pullRequestStore, workspaceStore, authStore, organizationStore, checkRunStore)
 		}
+		if releaseStore != nil {
+			releaseStore.ConfigureProvenanceReadiness(func(candidate releases.Candidate) (bool, error) {
+				policies, err := provenancePolicyStore.List("repository", candidate.RepositoryID)
+				if err != nil {
+					return false, err
+				}
+				if len(policies) == 0 {
+					return true, nil
+				}
+				values, err := provenanceAssessmentStore.List(candidate.RepositoryID, func(a provenanceassessments.Assessment) provenanceassessments.Current {
+					return provenanceAssessmentCurrent(a, repositoryCatalog, provenanceGraphStore, provenancePolicyStore, pullRequestStore, changeStackStore, releaseStore, packageStore)
+				})
+				if err != nil {
+					return false, err
+				}
+				for _, a := range values {
+					if a.Candidate.Kind == "release_candidate" && a.Candidate.ID == candidate.ID && a.Candidate.Revision == candidate.CommitID && a.Ready {
+						return true, nil
+					}
+				}
+				return false, nil
+			})
+		}
 	}
 	if authStore != nil && repositoryCatalog != nil && explanationStore != nil {
 		registerExplanationRoutes(mux, store, repositoryCatalog, authStore, explanationStore, proposalStore, pullRequestStore, incidentStore, workspaceStore, checkRunStore, relationshipStore)
@@ -1479,6 +1506,44 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	}
 	if authStore != nil && repositoryCatalog != nil && store != nil && provenanceGraphStore != nil && provenancePolicyStore != nil {
 		registerProvenanceGraphRoutes(mux, store, repositoryCatalog, authStore, provenanceGraphStore, provenancePolicyStore)
+	}
+	if provenanceAssessmentStore == nil {
+		root := os.Getenv("PROVENANCE_ASSESSMENT_STORAGE_ROOT")
+		if root == "" {
+			root = "provenance-assessments"
+		}
+		provenanceAssessmentStore, _ = provenanceassessments.New(root)
+	}
+	if authStore != nil && repositoryCatalog != nil && provenanceAssessmentStore != nil && provenanceGraphStore != nil && provenancePolicyStore != nil {
+		registerProvenanceAssessmentRoutes(mux, repositoryCatalog, authStore, provenanceAssessmentStore, provenanceGraphStore, provenancePolicyStore, pullRequestStore, changeStackStore, releaseStore, packageStore)
+		if pullRequestStore != nil {
+			pullRequestStore.ConfigureProvenanceReadiness(func(p pullrequests.PullRequest, _ []pullrequests.FileChange) (any, []pullrequests.ReadinessBlocker, error) {
+				values, err := provenanceAssessmentStore.List(p.RepositoryID, func(a provenanceassessments.Assessment) provenanceassessments.Current {
+					return provenanceAssessmentCurrent(a, repositoryCatalog, provenanceGraphStore, provenancePolicyStore, pullRequestStore, changeStackStore, releaseStore, packageStore)
+				})
+				if err != nil {
+					return nil, nil, err
+				}
+				selected := []provenanceassessments.Assessment{}
+				blockers := []pullrequests.ReadinessBlocker{}
+				for _, a := range values {
+					if a.Candidate.Kind == "pull_request" && a.Candidate.ID == p.ID {
+						selected = append(selected, a)
+						if !a.Ready {
+							blockers = append(blockers, pullrequests.ReadinessBlocker{Code: "provenance_evidence_required", Message: "current provenance assessment has unresolved or stale blocking findings"})
+						}
+					}
+				}
+				policies, policyErr := provenancePolicyStore.List("repository", p.RepositoryID)
+				if policyErr != nil {
+					return nil, nil, policyErr
+				}
+				if len(policies) > 0 && len(selected) == 0 {
+					blockers = append(blockers, pullrequests.ReadinessBlocker{Code: "provenance_assessment_required", Message: "the repository provenance policy requires a current assessment for this exact pull revision"})
+				}
+				return selected, blockers, nil
+			})
+		}
 	}
 	if authStore != nil && repositoryCatalog != nil && userStore != nil && assuranceProgramStore != nil && assuranceEvidenceStore != nil && assuranceAssessmentStore != nil {
 		registerAssuranceAssessmentRoutes(mux, store, repositoryCatalog, authStore, userStore, assuranceProgramStore, assuranceEvidenceStore, assuranceAssessmentStore, proposalStore, pullRequestStore, releaseStore)
@@ -4889,6 +4954,10 @@ func registerReleaseRoutes(mux *http.ServeMux, gitStore *storage.Store, reposito
 		}
 		if err != nil || buildStore == nil {
 			writeAPIError(w, 500, "release_build_unavailable", "release build storage unavailable")
+			return
+		}
+		if ready, readyErr := releaseStore.ProvenanceReady(candidate); readyErr != nil || !ready {
+			writeAPIError(w, 409, "release_provenance_required", "current blocking-free provenance evidence is required before release builds")
 			return
 		}
 		repository, err := gitStore.Open(candidate.RepositoryID)
