@@ -712,6 +712,14 @@ export type LearningAssessment = {
   published_by: string;
   published_at: string;
 };
+export type LearningOutcomeReport = {
+  outcomes: { id: string; pathway_version: number; module_id?: string; kind: string; state: string; detail?: string; visibility: "private" | "maintainers" | "aggregate"; occurred_at: string }[];
+  aggregates: Record<string, number>;
+  aggregate_states: Record<string, Record<string, number>>;
+  suppression_threshold: number;
+  stale_completion_evidence: number;
+  current_pathway_version: number;
+};
 export type ContributionOpportunity = {
   id: string;
   repository_id: string;
