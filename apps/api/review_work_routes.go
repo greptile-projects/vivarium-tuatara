@@ -290,7 +290,13 @@ func registerReviewWorkRoutes(mux *http.ServeMux, git *storage.Store, catalog *r
 			return
 		}
 		value := reviewplans.FindingResolution{RequestID: in.RequestID, RepositoryID: repo.ID, PullRequestID: pull.ID, FindingID: finding.ID, FindingRevision: finding.SourceRevision, CandidateRevision: pull.SourceCommitID, ActorType: actorType, ActorID: actorID, Action: in.Action, Classification: in.Classification, Rationale: in.Rationale, Dissent: in.Dissent, SupersedesID: in.SupersedesID, DuplicateOfID: in.DuplicateOfID, Links: in.Links, Evidence: in.Evidence, ExpiresAt: expiry}
-		persist := func() error { value, err = plans.CreateFindingResolution(value); return err }
+		persist := func() error {
+			return pulls.WithSourceRevision(repo.ID, pull.ID, pull.SourceCommitID, func(current pullrequests.PullRequest) error {
+				value.CandidateRevision = current.SourceCommitID
+				value, err = plans.CreateFindingResolution(value)
+				return err
+			})
+		}
 		if actorType == "human" {
 			err = catalog.WithCurrentParticipant(actorID, repo.ID, persist)
 		} else {
@@ -301,6 +307,10 @@ func registerReviewWorkRoutes(mux *http.ServeMux, git *storage.Store, catalog *r
 			}
 		}
 		if err != nil {
+			if errors.Is(err, pullrequests.ErrSourceChanged) || errors.Is(err, pullrequests.ErrNotReady) {
+				writeAPIError(w, 409, "review_resolution_stale", "the pull source changed while the finding decision was published")
+				return
+			}
 			code := 422
 			if errors.Is(err, reviewplans.ErrResolutionConflict) {
 				code = 409
@@ -331,6 +341,9 @@ func projectFindingResolutions(work []reviewplans.WorkEntry, values []reviewplan
 		verified := false
 		for _, v := range events {
 			if v.CandidateRevision == current && slices.Contains([]string{"accept", "defer", "supersede", "resolved", "accepted_risk", "exception", "remains_applicable"}, v.Action) {
+				if v.Action == "exception" && (v.ExpiresAt == nil || !v.ExpiresAt.After(time.Now().UTC())) {
+					continue
+				}
 				state = v.Action
 				if v.Action == "resolved" {
 					verified = len(v.Evidence) > 0

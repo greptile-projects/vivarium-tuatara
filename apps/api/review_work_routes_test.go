@@ -2,6 +2,7 @@ package main
 
 import (
 	"testing"
+	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/checkruns"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/reviewplans"
@@ -61,5 +62,22 @@ func TestFindingResolutionProjectionPreservesStaleReasoningAndRequiresPassingCur
 	projected = projectFindingResolutions([]reviewplans.WorkEntry{finding}, values, current, nil, "repo", "pull")
 	if projected[0]["current_state"] != "remains_applicable" {
 		t.Fatalf("reaffirmed finding projection = %#v", projected[0])
+	}
+}
+
+func TestFindingResolutionProjectionDoesNotApplyExpiredException(t *testing.T) {
+	current := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	expired := time.Now().UTC().Add(-time.Minute)
+	future := time.Now().UTC().Add(time.Hour)
+	finding := reviewplans.WorkEntry{ID: "finding", Kind: "finding", SourceRevision: current}
+	values := []reviewplans.FindingResolution{{FindingID: "finding", CandidateRevision: current, Action: "exception", ExpiresAt: &expired}}
+	projected := projectFindingResolutions([]reviewplans.WorkEntry{finding}, values, current, nil, "repo", "pull")
+	if projected[0]["current_state"] != "applicable" {
+		t.Fatalf("expired exception = %#v", projected[0])
+	}
+	values = append(values, reviewplans.FindingResolution{FindingID: "finding", CandidateRevision: current, Action: "exception", ExpiresAt: &future})
+	projected = projectFindingResolutions([]reviewplans.WorkEntry{finding}, values, current, nil, "repo", "pull")
+	if projected[0]["current_state"] != "exception" {
+		t.Fatalf("live exception = %#v", projected[0])
 	}
 }
