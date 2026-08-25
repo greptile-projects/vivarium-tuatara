@@ -2368,6 +2368,24 @@ export type ReleaseCandidate = {
     contributor_ids: string[];
   };
 };
+export type ProvenanceBundle = {
+  id: string;
+  request_id: string;
+  claim: {
+    schema: string; repository_id: string; release_id: string; release_version: string;
+    revision: string; graph_id: string; graph_digest: string; assessment_id: string;
+    assessment_version: number; policy_id: string; policy_version: number;
+    audience: "public" | "repository" | "restricted";
+    artifacts: { id: string; name: string; version: string; sha256: string; content_type: string; size: number }[];
+    materials: { id: string; kind: string; name: string; revision?: string; sha256?: string; license?: string; obligations?: string[] }[];
+    licenses: string[]; notices: string[]; omissions: string[]; verification: string[];
+    dependencies: { name: string; constraint: string; package_id?: string; revision?: string; sha256?: string }[];
+    published_at: string; published_by: string;
+  };
+  payload: string; payload_sha256: string; signature: string; public_key: string;
+  algorithm: string; current: boolean; actionable_notices: number; verification_valid: boolean;
+  notices: { id: string; kind: string; severity: "warning" | "blocking"; summary: string; evidence: string; remediation_id?: string; propagation_campaign_id?: string; created_at: string }[];
+};
 export type PackageVersion = {
   id: string;
   name: string;

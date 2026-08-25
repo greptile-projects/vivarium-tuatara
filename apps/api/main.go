@@ -84,6 +84,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/protectionplans"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/provenanceassessments"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/provenancebundles"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/provenancegraphs"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/provenancepolicies"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
@@ -1102,6 +1103,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	var provenancePolicyStore *provenancepolicies.Store
 	var provenanceGraphStore *provenancegraphs.Store
 	var provenanceAssessmentStore *provenanceassessments.Store
+	var provenanceBundleStore *provenancebundles.Store
 	var assuranceEvidenceStore *assuranceevidence.Store
 	var assuranceImpactStore *assuranceimpact.Store
 	var assuranceAssessmentStore *assuranceassessments.Store
@@ -1265,6 +1267,8 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 			provenanceGraphStore = value
 		case *provenanceassessments.Store:
 			provenanceAssessmentStore = value
+		case *provenancebundles.Store:
+			provenanceBundleStore = value
 		case *assuranceevidence.Store:
 			assuranceEvidenceStore = value
 		case *assuranceimpact.Store:
@@ -1544,6 +1548,16 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 				return selected, blockers, nil
 			})
 		}
+	}
+	if provenanceBundleStore == nil {
+		root := os.Getenv("PROVENANCE_BUNDLE_STORAGE_ROOT")
+		if root == "" {
+			root = "provenance-bundles"
+		}
+		provenanceBundleStore, _ = provenancebundles.New(root)
+	}
+	if authStore != nil && repositoryCatalog != nil && provenanceBundleStore != nil && provenanceGraphStore != nil && provenanceAssessmentStore != nil && provenancePolicyStore != nil && releaseStore != nil && packageStore != nil {
+		registerProvenanceBundleRoutes(mux, repositoryCatalog, authStore, provenanceBundleStore, provenanceGraphStore, provenanceAssessmentStore, provenancePolicyStore, releaseStore, packageStore, propagationCampaignStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && userStore != nil && assuranceProgramStore != nil && assuranceEvidenceStore != nil && assuranceAssessmentStore != nil {
 		registerAssuranceAssessmentRoutes(mux, store, repositoryCatalog, authStore, userStore, assuranceProgramStore, assuranceEvidenceStore, assuranceAssessmentStore, proposalStore, pullRequestStore, releaseStore)
