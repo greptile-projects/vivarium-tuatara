@@ -159,7 +159,8 @@ export function CapacityObjectivesWorkspace({
     [requestID, setRequestID] = useState(""),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
-  const pendingCreateKey = `capacity-objective:${repositoryID}:pending-create`;
+  const pendingCreateKey = `capacity-objective:${repositoryID}:${user?.id ?? "unauthenticated"}:pending-create`;
+  const legacyPendingCreateKey = `capacity-objective:${repositoryID}:pending-create`;
   const current = selected?.revisions.at(-1);
   const load = useCallback(async () => {
     if (!token) return;
@@ -170,14 +171,20 @@ export function CapacityObjectivesWorkspace({
         token,
       );
       setItems(out.capacity_objectives);
+      window.localStorage.removeItem(legacyPendingCreateKey);
       const retained = window.localStorage.getItem(pendingCreateKey);
       if (retained) {
         try {
           const pending = JSON.parse(retained) as {
             request_id: string;
             draft: string;
+            owner_id: string;
           };
-          if (pending.request_id && pending.draft) {
+          if (
+            pending.owner_id === user?.id &&
+            pending.request_id &&
+            pending.draft
+          ) {
             setSelected(undefined);
             setRequestID(pending.request_id);
             setDraft(pending.draft);
@@ -207,7 +214,7 @@ export function CapacityObjectivesWorkspace({
           : "Capacity objectives could not be loaded.",
       );
     }
-  }, [pendingCreateKey, repositoryID, token, user?.id]);
+  }, [legacyPendingCreateKey, pendingCreateKey, repositoryID, token, user?.id]);
   useEffect(() => {
     void Promise.resolve().then(load);
   }, [load]);
@@ -221,7 +228,11 @@ export function CapacityObjectivesWorkspace({
     if (!selected) {
       window.localStorage.setItem(
         pendingCreateKey,
-        JSON.stringify({ request_id: stableRequestID, draft }),
+        JSON.stringify({
+          request_id: stableRequestID,
+          draft,
+          owner_id: user?.id,
+        }),
       );
     }
     try {

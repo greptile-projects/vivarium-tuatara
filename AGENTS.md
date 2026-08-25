@@ -16,7 +16,8 @@ not inferred proof. Publication requires repository-write scope and current part
 for every named owner; caller-stable request identities reconcile ambiguous create and
 revision retries and reject changed reuse, even after a reader refreshes to the retained
 version. Pending web creates retain their exact identity and draft across reloads until
-success or explicit cancellation. Repeated typed links pair by immutable link ID, so
+success or explicit cancellation, scoped to and owner-checked against the authenticated
+participant as well as the repository. Repeated typed links pair by immutable link ID, so
 label edits and ordering do not hide or manufacture commitment conflicts. Optimistic versions reject
 concurrent successors, old revisions remain readable, and these contracts grant no infrastructure, funding, release, scaling,
 repository, or operational authority.

@@ -27,8 +27,11 @@ Repeated links pair across revisions by an immutable link `id`, which must be un
 within a revision, so renaming or reordering same-kind commitments does not hide or
 create false gaps. Revision reconciliation scans retained request identities before its
 version check, including after a caller refreshes. The web persists an unresolved create's
-exact request identity and draft locally across reloads, locks that draft during recovery,
-and removes it only after success or explicit discard.
+exact request identity and draft locally across reloads under a repository-and-user key,
+validates the retained owner before restoration, locks that draft during recovery, and
+removes it only after success or explicit discard. It also clears the legacy repository-only
+key so switching accounts in one browser profile cannot reveal or publish another
+participant's unpublished contract.
 These are diagnostics, not validation shortcuts or evidence derived from linked systems.
 The repository `/capacity` workspace exposes the complete public JSON contract so no
 repeated entry is silently discarded when publishing a successor. Contracts coordinate
