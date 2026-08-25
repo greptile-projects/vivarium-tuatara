@@ -2441,8 +2441,8 @@ correction, or retention signal to the exact pathway revision's `/outcomes`
 route and chooses `private`, `maintainers`, or `aggregate` visibility. The
 service does not infer outcomes from page views or inspect unshared workspace
 state. Private records remain visible only to their learner and can never cite
-support for a maintainer finding; aggregate-only reports expose counts and
-states only after a cohort reaches three consented reports.
+support for a maintainer finding; aggregate-only reports expose each learner's
+latest state only after a cohort reaches three distinct consenting learners.
 
 Repository maintainers turn non-private outcome citations into immutable
 revision-bound findings and then into proposed documentation, exercise,

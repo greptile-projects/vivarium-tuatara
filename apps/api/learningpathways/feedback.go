@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -68,17 +69,20 @@ func (s *Store) feedbackDir(repo, slug string) string {
 func (s *Store) AddOutcome(o Outcome) (Outcome, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !validID(o.RepositoryID) || !validSlug(o.PathwaySlug) || !validID(o.ActorID) || !validRequestID(o.RequestID) || o.PathwayVersion < 1 || !oneOf(o.Kind, "module_completion", "recurring_question", "setup_failure", "assessment_gap", "mentor_load", "contribution_outcome", "reviewer_correction", "retention") || !oneOf(o.Visibility, "private", "maintainers", "aggregate") || !o.Consent || strings.TrimSpace(o.State) == "" || len(o.State) > 200 || len(o.Detail) > 1000 || credentialLike(o.State, o.Detail) {
+	if !validID(o.RepositoryID) || !validSlug(o.PathwaySlug) || !validID(o.ActorID) || !validRequestID(o.RequestID) {
 		return Outcome{}, ErrInvalid
 	}
 	items, _ := s.outcomes(o.RepositoryID, o.PathwaySlug)
 	for _, x := range items {
 		if x.ActorID == o.ActorID && x.RequestID == o.RequestID {
-			if x.Kind != o.Kind || x.State != o.State || x.PathwayVersion != o.PathwayVersion {
+			if !sameOutcomeRequest(x, o) {
 				return Outcome{}, ErrRequestChanged
 			}
 			return x, nil
 		}
+	}
+	if o.PathwayVersion < 1 || !oneOf(o.Kind, "module_completion", "recurring_question", "setup_failure", "assessment_gap", "mentor_load", "contribution_outcome", "reviewer_correction", "retention") || !oneOf(o.Visibility, "private", "maintainers", "aggregate") || !o.Consent || strings.TrimSpace(o.State) == "" || len(o.State) > 200 || len(o.Detail) > 1000 || credentialLike(o.State, o.Detail) {
+		return Outcome{}, ErrInvalid
 	}
 	o.ID = randomID()
 	o.OccurredAt = s.now().UTC()
@@ -116,31 +120,44 @@ func (s *Store) Outcomes(repo, slug string) ([]Outcome, error) {
 func (s *Store) AddFinding(f Finding) (Finding, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !validID(f.RepositoryID) || !validSlug(f.PathwaySlug) || !validRequestID(f.RequestID) || !validID(f.CreatedBy) || f.PathwayVersion < 1 || strings.TrimSpace(f.Summary) == "" || len(f.Summary) > 1000 || len(f.OutcomeIDs) == 0 || !oneOf(f.Kind, "completion", "questions", "setup", "assessment", "mentor_load", "contribution", "review_correction", "retention") || credentialLike("", f.Summary) {
+	if !validID(f.RepositoryID) || !validSlug(f.PathwaySlug) || !validRequestID(f.RequestID) || !validID(f.CreatedBy) {
+		return Finding{}, ErrInvalid
+	}
+	existing, _ := s.findings(f.RepositoryID, f.PathwaySlug)
+	for _, x := range existing {
+		if x.RequestID == f.RequestID {
+			if !sameFindingRequest(x, f) {
+				return Finding{}, ErrRequestChanged
+			}
+			return x, nil
+		}
+	}
+	if f.PathwayVersion < 1 || strings.TrimSpace(f.Summary) == "" || len(f.Summary) > 1000 || len(f.OutcomeIDs) == 0 || !oneOf(f.Kind, "completion", "questions", "setup", "assessment", "mentor_load", "contribution", "review_correction", "retention") || credentialLike("", f.Summary) {
+		return Finding{}, ErrInvalid
+	}
+	revisions, err := s.list(f.RepositoryID, f.PathwaySlug)
+	if err != nil || !slices.ContainsFunc(revisions, func(v Revision) bool { return v.Version == f.PathwayVersion }) {
 		return Finding{}, ErrInvalid
 	}
 	outcomes, _ := s.outcomes(f.RepositoryID, f.PathwaySlug)
 	allowed := map[string]bool{}
-	aggregateCounts := map[string]int{}
+	aggregateActors := map[string]map[string]bool{}
 	for _, x := range outcomes {
-		if x.Visibility == "aggregate" {
-			aggregateCounts[x.Kind]++
+		if x.Visibility == "aggregate" && x.PathwayVersion == f.PathwayVersion {
+			if aggregateActors[x.Kind] == nil {
+				aggregateActors[x.Kind] = map[string]bool{}
+			}
+			aggregateActors[x.Kind][x.ActorID] = true
 		}
 	}
 	for _, x := range outcomes {
-		if x.Visibility == "maintainers" || x.Visibility == "aggregate" && aggregateCounts[x.Kind] >= 3 {
+		if x.PathwayVersion == f.PathwayVersion && (x.Visibility == "maintainers" || x.Visibility == "aggregate" && len(aggregateActors[x.Kind]) >= 3) {
 			allowed[x.ID] = true
 		}
 	}
 	for _, id := range f.OutcomeIDs {
 		if !allowed[id] {
 			return Finding{}, ErrInvalid
-		}
-	}
-	existing, _ := s.findings(f.RepositoryID, f.PathwaySlug)
-	for _, x := range existing {
-		if x.RequestID == f.RequestID {
-			return x, nil
 		}
 	}
 	f.ID = randomID()
@@ -178,7 +195,19 @@ func (s *Store) Findings(repo, slug string) ([]Finding, error) {
 func (s *Store) AddProposal(p UpdateProposal) (UpdateProposal, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !validID(p.RepositoryID) || !validSlug(p.PathwaySlug) || !validRequestID(p.RequestID) || !validID(p.ProposedBy) || p.BaseVersion < 1 || !oneOf(p.TargetKind, "documentation", "exercise", "workspace", "pathway") || strings.TrimSpace(p.Summary) == "" || len(p.Summary) > 1000 || credentialLike("", p.Summary) {
+	if !validID(p.RepositoryID) || !validSlug(p.PathwaySlug) || !validRequestID(p.RequestID) || !validID(p.ProposedBy) {
+		return UpdateProposal{}, ErrInvalid
+	}
+	ps, _ := s.proposals(p.RepositoryID, p.PathwaySlug)
+	for _, x := range ps {
+		if x.RequestID == p.RequestID {
+			if !sameProposalRequest(x, p) {
+				return UpdateProposal{}, ErrRequestChanged
+			}
+			return x, nil
+		}
+	}
+	if p.BaseVersion < 1 || !oneOf(p.TargetKind, "documentation", "exercise", "workspace", "pathway") || strings.TrimSpace(p.Summary) == "" || len(p.Summary) > 1000 || credentialLike("", p.Summary) {
 		return UpdateProposal{}, ErrInvalid
 	}
 	fs, _ := s.findings(p.RepositoryID, p.PathwaySlug)
@@ -191,12 +220,6 @@ func (s *Store) AddProposal(p UpdateProposal) (UpdateProposal, error) {
 	if !found {
 		return UpdateProposal{}, ErrInvalid
 	}
-	ps, _ := s.proposals(p.RepositoryID, p.PathwaySlug)
-	for _, x := range ps {
-		if x.RequestID == p.RequestID {
-			return x, nil
-		}
-	}
 	p.ID = randomID()
 	p.Status = "proposed"
 	p.CreatedAt = s.now().UTC()
@@ -205,6 +228,18 @@ func (s *Store) AddProposal(p UpdateProposal) (UpdateProposal, error) {
 		return UpdateProposal{}, ErrInvalid
 	}
 	return p, nil
+}
+
+func sameOutcomeRequest(a, b Outcome) bool {
+	return a.RequestID == b.RequestID && a.RepositoryID == b.RepositoryID && a.PathwaySlug == b.PathwaySlug && a.PathwayVersion == b.PathwayVersion && a.ModuleID == b.ModuleID && a.ActorID == b.ActorID && a.Kind == b.Kind && a.State == b.State && a.Detail == b.Detail && a.Visibility == b.Visibility && a.Consent == b.Consent
+}
+
+func sameFindingRequest(a, b Finding) bool {
+	return a.RequestID == b.RequestID && a.RepositoryID == b.RepositoryID && a.PathwaySlug == b.PathwaySlug && a.PathwayVersion == b.PathwayVersion && a.Kind == b.Kind && a.Summary == b.Summary && slices.Equal(a.OutcomeIDs, b.OutcomeIDs) && a.CreatedBy == b.CreatedBy
+}
+
+func sameProposalRequest(a, b UpdateProposal) bool {
+	return a.RequestID == b.RequestID && a.RepositoryID == b.RepositoryID && a.PathwaySlug == b.PathwaySlug && a.BaseVersion == b.BaseVersion && a.FindingID == b.FindingID && a.TargetKind == b.TargetKind && a.TargetID == b.TargetID && a.Summary == b.Summary && a.MaterialRequirementChange == b.MaterialRequirementChange && a.ProposedBy == b.ProposedBy
 }
 func (s *Store) proposals(repo, slug string) ([]UpdateProposal, error) {
 	es, e := os.ReadDir(s.feedbackDir(repo, slug))

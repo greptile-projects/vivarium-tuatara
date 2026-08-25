@@ -271,6 +271,10 @@ func registerLearningPathwayRoutes(mux *http.ServeMux, git *storage.Store, repos
 			return
 		}
 		created, e := pathways.AddOutcome(in)
+		if errors.Is(e, learningpathways.ErrRequestChanged) {
+			writeAPIError(w, 409, "learning_outcome_request_changed", "request identity was already used with different outcome content")
+			return
+		}
 		if e != nil {
 			writeAPIError(w, 422, "learning_outcome_invalid", "consent, visibility, category, state, and a stable request identity are required")
 			return
@@ -296,17 +300,24 @@ func registerLearningPathwayRoutes(mux *http.ServeMux, git *storage.Store, repos
 		visible := []learningpathways.Outcome{}
 		counts := map[string]int{}
 		states := map[string]map[string]int{}
+		aggregateLatest := map[string]learningpathways.Outcome{}
 		for _, x := range items {
 			if x.Visibility == "aggregate" {
-				counts[x.Kind]++
-				if states[x.Kind] == nil {
-					states[x.Kind] = map[string]int{}
+				key := x.Kind + ":" + x.ActorID
+				if prior, exists := aggregateLatest[key]; !exists || x.OccurredAt.After(prior.OccurredAt) {
+					aggregateLatest[key] = x
 				}
-				states[x.Kind][x.State]++
 			}
 			if x.ActorID == actorID || maintainer && x.Visibility == "maintainers" {
 				visible = append(visible, x)
 			}
+		}
+		for _, x := range aggregateLatest {
+			counts[x.Kind]++
+			if states[x.Kind] == nil {
+				states[x.Kind] = map[string]int{}
+			}
+			states[x.Kind][x.State]++
 		}
 		for kind, n := range counts {
 			if n < 3 {
@@ -335,6 +346,10 @@ func registerLearningPathwayRoutes(mux *http.ServeMux, git *storage.Store, repos
 		}
 		in.ID, in.RepositoryID, in.PathwaySlug, in.CreatedBy = "", r.PathValue("id"), r.PathValue("slug"), actor.UserID
 		v, e := pathways.AddFinding(in)
+		if errors.Is(e, learningpathways.ErrRequestChanged) {
+			writeAPIError(w, 409, "learning_finding_request_changed", "request identity was already used with different finding content")
+			return
+		}
 		if e != nil {
 			writeAPIError(w, 422, "learning_finding_unsupported", "a finding must cite consented non-private outcomes at its exact pathway revision")
 			return
@@ -353,6 +368,10 @@ func registerLearningPathwayRoutes(mux *http.ServeMux, git *storage.Store, repos
 		}
 		in.ID, in.RepositoryID, in.PathwaySlug, in.ProposedBy = "", r.PathValue("id"), r.PathValue("slug"), actor.UserID
 		v, e := pathways.AddProposal(in)
+		if errors.Is(e, learningpathways.ErrRequestChanged) {
+			writeAPIError(w, 409, "learning_update_request_changed", "request identity was already used with different update content")
+			return
+		}
 		if e != nil {
 			writeAPIError(w, 422, "learning_update_unsupported", "the update must cite a supported finding and an exact base revision")
 			return
