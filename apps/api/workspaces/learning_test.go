@@ -241,3 +241,35 @@ func TestLearningGuidanceRejectsUnsharedExerciseState(t *testing.T) {
 		t.Fatalf("unknown checkpoint accepted: %v", err)
 	}
 }
+
+func TestLearningAgentGuidanceRechecksGuideLeaseUnderMutationLock(t *testing.T) {
+	s, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 25, 11, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return now }
+	w, err := s.Create(Workspace{RepositoryID: "repo", CommitID: "revision", CreatorID: "learner", LearningContext: &LearningContext{Guidance: LearningGuidance{Version: 1}}}, []byte("definition"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err = s.SetLearningAgent(w.ID, "learner", "agent", "active", "Only provide routing hints.", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err = s.SetControl(w.ID, "learner", "approved_agent", "agent", "guide", []string{"files"}, w.Control.Version, 60)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The route may have authorized this request against the live snapshot above;
+	// expiry does not advance the guidance version, so persistence must recheck it.
+	now = now.Add(time.Minute)
+	_, err = s.AddLearningGuidance(w.ID, "operator", "agent", "agent", "hint", "Inspect the router.", []LearningEvidenceCitation{{Path: "routes.go", Revision: "revision"}}, nil, nil, 2)
+	if err != ErrControl {
+		t.Fatalf("expired guide write = %v", err)
+	}
+	retained, err := s.Get(w.ID)
+	if err != nil || len(retained.LearningContext.Guidance.Entries) != 0 {
+		t.Fatalf("expired hint persisted: %#v, %v", retained.LearningContext.Guidance, err)
+	}
+}

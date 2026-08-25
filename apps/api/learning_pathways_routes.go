@@ -543,6 +543,10 @@ func registerLearningPathwayRoutes(mux *http.ServeMux, git *storage.Store, repos
 			writeAPIError(w, 403, "learning_mentor_access_revoked", "designated mentor access was revoked")
 			return
 		}
+		if errors.Is(err, workspaces.ErrControl) {
+			writeAPIError(w, 409, "learning_agent_paused", "agent guidance requires active learner approval and live guide control")
+			return
+		}
 		if err != nil {
 			writeAPIError(w, 422, "learning_guidance_invalid", "guidance could not be retained")
 			return

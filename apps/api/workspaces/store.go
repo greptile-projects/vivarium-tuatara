@@ -545,6 +545,9 @@ func (s *Store) AddLearningGuidance(id, actor, actorKind, agentID, kind, body st
 	if !validRole || strings.TrimSpace(body) == "" || len(body) > 4000 || (actorKind != "learner" && len(citations) == 0) || (actorKind != "learner" && (len(checkpoints) > 0 || len(outcomes) > 0)) {
 		return Workspace{}, ErrInvalid
 	}
+	if actorKind == "agent" && (w.LearningContext.Guidance.AgentID != agentID || w.LearningContext.Guidance.AgentState != "active" || w.Control.PrincipalKind != "approved_agent" || w.Control.PrincipalID != agentID || w.Control.Mode != "guide" || !w.Control.ExpiresAt.After(s.now())) {
+		return Workspace{}, ErrControl
+	}
 	validCP := map[string]bool{}
 	for _, cp := range w.LearningContext.Checkpoints {
 		validCP[cp.ID] = true
