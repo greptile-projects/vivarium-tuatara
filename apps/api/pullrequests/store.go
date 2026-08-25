@@ -2643,9 +2643,22 @@ func (s *Store) RecordStackMerge(repositoryID, pullRequestID, expectedSource, co
 		}
 		return PullRequest{}, ErrInvalid
 	}
-	if p.Status != Open || p.SourceCommitID != expectedSource {
+	if p.Status != Open {
 		return PullRequest{}, ErrNotReady
 	}
+	// The target may already contain the frozen candidate while a concurrent
+	// source synchronization won the following pull-metadata race. Prove the
+	// retained review revision is actually part of that candidate before
+	// restoring the ordinary pull identity to what was delivered.
+	repository, err := s.git.Open(repositoryID)
+	if err != nil {
+		return PullRequest{}, err
+	}
+	reachable, err := commitReachable(repository, expectedSource, commitID)
+	if err != nil || !reachable {
+		return PullRequest{}, ErrInvalid
+	}
+	p.SourceCommitID = expectedSource
 	now := s.now().Truncate(time.Microsecond)
 	mergedBy, mergedCommit := mergerID, commitID
 	p.Status, p.UpdatedAt, p.MergedAt, p.MergedBy, p.MergeCommitID = Merged, now, &now, &mergedBy, &mergedCommit
