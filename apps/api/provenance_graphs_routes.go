@@ -160,8 +160,24 @@ func deriveProvenanceDiagnostics(g provenancegraphs.Graph) []provenancegraphs.Di
 	out := []provenancegraphs.Diagnostic{}
 	incoming := map[string]int{}
 	licenses := map[string]map[string]bool{}
+	nodes := map[string]provenancegraphs.Node{}
+	for _, n := range g.Nodes {
+		nodes[n.ID] = n
+		if n.License != "" {
+			licenses[n.ID] = map[string]bool{strings.ToLower(strings.TrimSpace(n.License)): true}
+		}
+	}
 	for _, e := range g.Edges {
 		incoming[e.To]++
+		// A license node can make an additional claim about one exact material.
+		// Labels are deliberately excluded: they are presentation text and need
+		// not be unique. The edge provides the stable material identity.
+		if source, ok := nodes[e.From]; ok && source.Kind == "license" && source.License != "" {
+			if licenses[e.To] == nil {
+				licenses[e.To] = map[string]bool{}
+			}
+			licenses[e.To][strings.ToLower(strings.TrimSpace(source.License))] = true
+		}
 		if e.Confidence == "contradicted" {
 			out = append(out, provenancegraphs.Diagnostic{Kind: "contradictory_claim", Severity: "blocking", EdgeID: e.ID, Message: "The retained transformation has contradictory evidence.", AttributedTo: e.DeclaredBy})
 		}
@@ -173,17 +189,10 @@ func deriveProvenanceDiagnostics(g provenancegraphs.Graph) []provenancegraphs.Di
 		if n.Confidence == "unknown" {
 			out = append(out, provenancegraphs.Diagnostic{Kind: "unknown_origin", Severity: "blocking", NodeID: n.ID, Message: "The declaration retains unknown origin rather than inferring one.", AttributedTo: n.DeclaredBy})
 		}
-		if n.License != "" {
-			key := strings.ToLower(n.Label)
-			if licenses[key] == nil {
-				licenses[key] = map[string]bool{}
-			}
-			licenses[key][strings.ToLower(n.License)] = true
-		}
 	}
-	for label, values := range licenses {
+	for materialID, values := range licenses {
 		if len(values) > 1 {
-			out = append(out, provenancegraphs.Diagnostic{Kind: "contradictory_license", Severity: "blocking", Message: "Conflicting license claims remain for " + label + "."})
+			out = append(out, provenancegraphs.Diagnostic{Kind: "contradictory_license", Severity: "blocking", NodeID: materialID, Message: "Conflicting license claims remain for this exact material."})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Kind+out[i].NodeID < out[j].Kind+out[j].NodeID })
@@ -227,8 +236,9 @@ func projectProvenanceGraph(g provenancegraphs.Graph, actor string) provenancegr
 	_ = json.Unmarshal(raw, &projected)
 	g = projected
 	visible := map[string]bool{}
-	for i := range g.Nodes {
-		n := &g.Nodes[i]
+	hidden := map[string]provenancegraphs.Node{}
+	nodes := make([]provenancegraphs.Node, 0, len(g.Nodes))
+	for _, n := range g.Nodes {
 		allowed := n.Audience != "restricted"
 		for _, id := range n.AudienceIDs {
 			if id == actor {
@@ -237,22 +247,39 @@ func projectProvenanceGraph(g provenancegraphs.Graph, actor string) provenancegr
 		}
 		if allowed {
 			visible[n.ID] = true
+			nodes = append(nodes, n)
 			continue
 		}
-		n.Label = "Restricted provenance source"
-		n.Revision = ""
-		n.License = ""
-		n.Obligations = nil
-		n.Citations = nil
-		n.AudienceIDs = nil
-		n.Restricted = true
+		hidden[n.ID] = n
 	}
-	for i := range g.Edges {
-		e := &g.Edges[i]
-		if !visible[e.From] || !visible[e.To] {
-			e.Citation = provenancegraphs.Citation{}
-			e.ToolNodeID = ""
+	edges := make([]provenancegraphs.Edge, 0, len(g.Edges))
+	hiddenEdges := map[string]bool{}
+	for _, e := range g.Edges {
+		if visible[e.From] && visible[e.To] {
+			edges = append(edges, e)
+		} else {
+			hiddenEdges[e.ID] = true
 		}
 	}
+	diagnostics := make([]provenancegraphs.Diagnostic, 0, len(g.Diagnostics)+1)
+	for _, d := range g.Diagnostics {
+		if _, ok := hidden[d.NodeID]; ok || hiddenEdges[d.EdgeID] {
+			continue
+		}
+		sensitive := false
+		for _, n := range hidden {
+			if d.AttributedTo == n.DeclaredBy || n.Label != "" && strings.Contains(strings.ToLower(d.Message), strings.ToLower(n.Label)) {
+				sensitive = true
+				break
+			}
+		}
+		if !sensitive {
+			diagnostics = append(diagnostics, d)
+		}
+	}
+	if len(hidden) > 0 {
+		diagnostics = append(diagnostics, provenancegraphs.Diagnostic{Kind: "restricted_provenance", Severity: "warning", Message: "Some provenance evidence and its relationships are outside your audience."})
+	}
+	g.Nodes, g.Edges, g.Diagnostics = nodes, edges, diagnostics
 	return g
 }

@@ -25,9 +25,10 @@ func TestProvenanceAnalysisResolvesExactGitEvidenceAndRedactsRestrictedOrigin(t 
 	if citation.ResourceID != string(blob) || citation.Revision != string(commit) || citation.SHA256 != hex.EncodeToString(want[:]) {
 		t.Fatalf("server citation = %#v", citation)
 	}
+	g.Diagnostics = append(g.Diagnostics, provenancegraphs.Diagnostic{Kind: "private", NodeID: "private", Message: "embargoed-kit is missing", AttributedTo: "owner"})
 	reader := projectProvenanceGraph(g, "reader")
-	if reader.Nodes[0].Label != "Restricted provenance source" || reader.Nodes[0].License != "" || len(reader.Nodes[0].Citations) != 0 || reader.Edges[0].Citation.ResourceID != "" {
-		t.Fatalf("restricted evidence leaked: %#v %#v", reader.Nodes[0], reader.Edges[0])
+	if len(reader.Nodes) != 1 || reader.Nodes[0].ID != "output" || len(reader.Edges) != 0 || len(reader.Diagnostics) != 1 || reader.Diagnostics[0].Kind != "restricted_provenance" {
+		t.Fatalf("restricted evidence leaked: %#v", reader)
 	}
 	owner := projectProvenanceGraph(g, "owner")
 	if owner.Nodes[0].Label != "embargoed-kit" || owner.Edges[0].Citation.ResourceID != "private-command" {
@@ -35,16 +36,30 @@ func TestProvenanceAnalysisResolvesExactGitEvidenceAndRedactsRestrictedOrigin(t 
 	}
 }
 
-func TestProvenanceDiagnosticsKeepMissingAndContradictoryOriginExplicit(t *testing.T) {
+func TestProvenanceDiagnosticsUseExactMaterialIdentityForLicenseClaims(t *testing.T) {
 	g := provenancegraphs.Graph{CreatedBy: "actor", Nodes: []provenancegraphs.Node{{ID: "output", Kind: "fragment", Label: "copied", Confidence: "unknown"}, {ID: "left", Kind: "license", Label: "terms", License: "MIT"}, {ID: "right", Kind: "license", Label: "terms", License: "GPL-3.0"}}, Edges: []provenancegraphs.Edge{}}
 	ds := deriveProvenanceDiagnostics(g)
 	kinds := map[string]bool{}
 	for _, d := range ds {
 		kinds[d.Kind] = true
 	}
-	for _, kind := range []string{"missing_origin", "unknown_origin", "contradictory_license"} {
+	for _, kind := range []string{"missing_origin", "unknown_origin"} {
 		if !kinds[kind] {
 			t.Fatalf("missing %s: %#v", kind, ds)
 		}
+	}
+	if kinds["contradictory_license"] {
+		t.Fatalf("distinct same-label materials conflicted: %#v", ds)
+	}
+	g.Edges = []provenancegraphs.Edge{{ID: "left-claim", From: "left", To: "output", Transformation: "attested", Confidence: "verified"}, {ID: "right-claim", From: "right", To: "output", Transformation: "attested", Confidence: "verified"}}
+	ds = deriveProvenanceDiagnostics(g)
+	found := false
+	for _, d := range ds {
+		if d.Kind == "contradictory_license" && d.NodeID == "output" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("exact material conflict missing: %#v", ds)
 	}
 }
