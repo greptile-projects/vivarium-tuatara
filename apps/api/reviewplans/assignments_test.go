@@ -108,6 +108,27 @@ func TestAcceptanceRejectsCurrentOverloadInsideMutationLock(t *testing.T) {
 	}
 }
 
+func TestAcceptanceCountsActiveAssignmentsAcrossRepositoryPulls(t *testing.T) {
+	store, _ := New(t.TempDir())
+	for index := 0; index < 3; index++ {
+		_, err := store.CreateAssignment(Assignment{RequestID: fmt.Sprintf("other-pull-%d", index), RepositoryID: "repo", PullRequestID: fmt.Sprintf("pull-%d", index), PlanID: "plan", PlanVersion: 1, AreaID: "api", PrincipalType: "agent", PrincipalID: "agent", AgentGrantID: "grant", AssignedBy: "owner"})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	fourth, err := store.CreateAssignment(Assignment{RequestID: "fourth-pull", RepositoryID: "repo", PullRequestID: "pull-four", PlanID: "plan", PlanVersion: 1, AreaID: "api", PrincipalType: "agent", PrincipalID: "agent", AgentGrantID: "grant", AssignedBy: "owner"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.Transition("repo", "pull-four", fourth.ID, "agent", "accept", "", nil); !errors.Is(err, ErrConflict) {
+		t.Fatalf("cross-pull overloaded acceptance error = %v", err)
+	}
+	all, err := store.ListRepositoryAssignments("repo")
+	if err != nil || len(all) != 4 {
+		t.Fatalf("repository assignments = %#v, %v", all, err)
+	}
+}
+
 func TestReviewAssignmentRejectsChangedRetryAndOverlappingAccountability(t *testing.T) {
 	store, _ := New(t.TempDir())
 	base := Assignment{RequestID: "request-123", RepositoryID: "repo", PullRequestID: "pull", PlanID: "plan", PlanVersion: 1, AreaID: "api", PrincipalType: "human", PrincipalID: "one", AssignedBy: "owner"}

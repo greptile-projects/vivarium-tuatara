@@ -62,7 +62,12 @@ func registerReviewAssignmentRoutes(mux *http.ServeMux, catalog *repositories.St
 			writeAPIError(w, 500, "review_assignments_unavailable", "review assignments could not be read")
 			return
 		}
-		suggestions := deriveReviewerSuggestions(repo, p, plan, assignments, pulls, orgs)
+		repositoryAssignments, e := plans.ListRepositoryAssignments(repo.ID)
+		if e != nil {
+			writeAPIError(w, 500, "review_assignments_unavailable", "review assignment capacity could not be read")
+			return
+		}
+		suggestions := deriveReviewerSuggestions(repo, p, plan, repositoryAssignments, pulls, orgs)
 		assignments = projectReviewAssignments(assignments, repo, orgs)
 		writeJSON(w, 200, map[string]any{"plan_id": plan.ID, "plan_version": plan.Version, "suggestions": suggestions, "assignments": assignments, "viewer_id": actor.UserID})
 	})
@@ -90,7 +95,11 @@ func registerReviewAssignmentRoutes(mux *http.ServeMux, catalog *repositories.St
 		if !ok {
 			return
 		}
-		candidates, _ := plans.ListAssignments(repo.ID, p.ID)
+		candidates, e := plans.ListRepositoryAssignments(repo.ID)
+		if e != nil {
+			writeAPIError(w, 503, "review_capacity_unavailable", "reviewer capacity could not be resolved")
+			return
+		}
 		suggestion, eligible := findSuggestion(deriveReviewerSuggestions(repo, p, plan, candidates, pulls, orgs), in.PrincipalType, in.PrincipalID, in.AgentGrantID, area.ID)
 		if !eligible || !suggestion.Eligible {
 			writeAPIError(w, 422, "reviewer_ineligible", "reviewer is unavailable, conflicted, overloaded, revoked, or lacks permitted evidence")
@@ -156,7 +165,12 @@ func registerReviewAssignmentRoutes(mux *http.ServeMux, catalog *repositories.St
 				writeAPIError(w, 409, "review_plan_changed", "the exact review plan changed; reassess reviewer eligibility")
 				return
 			}
-			suggestion, found := findSuggestion(deriveReviewerSuggestions(repo, p, history[len(history)-1], values, pulls, orgs), in.PrincipalType, in.PrincipalID, in.AgentGrantID, current.AreaID)
+			repositoryAssignments, capacityErr := plans.ListRepositoryAssignments(repo.ID)
+			if capacityErr != nil {
+				writeAPIError(w, 503, "review_capacity_unavailable", "reviewer capacity could not be resolved")
+				return
+			}
+			suggestion, found := findSuggestion(deriveReviewerSuggestions(repo, p, history[len(history)-1], repositoryAssignments, pulls, orgs), in.PrincipalType, in.PrincipalID, in.AgentGrantID, current.AreaID)
 			if !found || !suggestion.Eligible {
 				writeAPIError(w, 422, "reviewer_ineligible", "replacement is unavailable, conflicted, overloaded, revoked, or lacks permitted evidence")
 				return

@@ -67,13 +67,24 @@ func (s *Store) ListAssignments(repo, pull string) ([]Assignment, error) {
 	return s.readAssignments(repo, pull)
 }
 
+func (s *Store) ListRepositoryAssignments(repo string) ([]Assignment, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lockAssignments(repo)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	return s.readRepositoryAssignments(repo)
+}
+
 func (s *Store) CreateAssignment(value Assignment) (Assignment, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !validRequestID(value.RequestID) || value.RepositoryID == "" || value.PullRequestID == "" || value.PlanID == "" || value.PlanVersion < 1 || value.AreaID == "" || !slices.Contains([]string{"human", "agent"}, value.PrincipalType) || value.PrincipalID == "" || value.AssignedBy == "" || (value.PrincipalType == "agent" && value.AgentGrantID == "") {
 		return Assignment{}, ErrInvalid
 	}
-	unlock, err := s.lockAssignments(value.RepositoryID, value.PullRequestID)
+	unlock, err := s.lockAssignments(value.RepositoryID)
 	if err != nil {
 		return Assignment{}, err
 	}
@@ -104,7 +115,7 @@ func (s *Store) CreateAssignment(value Assignment) (Assignment, error) {
 func (s *Store) Transition(repo, pull, id, actor, action, reason string, replacement *Assignment) (Assignment, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	unlock, err := s.lockAssignments(repo, pull)
+	unlock, err := s.lockAssignments(repo)
 	if err != nil {
 		return Assignment{}, err
 	}
@@ -123,8 +134,12 @@ func (s *Store) Transition(repo, pull, id, actor, action, reason string, replace
 		return Assignment{}, ErrConflict
 	}
 	if action == "accept" {
+		repositoryAssignments, loadErr := s.readRepositoryAssignments(repo)
+		if loadErr != nil {
+			return Assignment{}, loadErr
+		}
 		activeLoad := 0
-		for _, current := range values {
+		for _, current := range repositoryAssignments {
 			if current.PrincipalID == v.PrincipalID && (current.Status == "invited" || current.Status == "accepted") {
 				activeLoad++
 			}
@@ -167,12 +182,12 @@ func timesEqual(a, b *time.Time) bool {
 func (s *Store) assignmentPath(repo, pull string) string {
 	return filepath.Join(s.root, repo, pull+"-assignments.json")
 }
-func (s *Store) lockAssignments(repo, pull string) (func(), error) {
-	directory := filepath.Dir(s.assignmentPath(repo, pull))
+func (s *Store) lockAssignments(repo string) (func(), error) {
+	directory := filepath.Join(s.root, repo)
 	if err := os.MkdirAll(directory, 0700); err != nil {
 		return nil, err
 	}
-	lock, err := os.OpenFile(filepath.Join(directory, "."+pull+"-assignments.lock"), os.O_CREATE|os.O_RDWR, 0600)
+	lock, err := os.OpenFile(filepath.Join(directory, ".review-assignments.lock"), os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		return nil, err
 	}
@@ -184,6 +199,32 @@ func (s *Store) lockAssignments(repo, pull string) (func(), error) {
 		_ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
 		_ = lock.Close()
 	}, nil
+}
+func (s *Store) readRepositoryAssignments(repo string) ([]Assignment, error) {
+	directory := filepath.Join(s.root, repo)
+	entries, err := os.ReadDir(directory)
+	if errors.Is(err, os.ErrNotExist) {
+		return []Assignment{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	values := []Assignment{}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), "-assignments.json") {
+			continue
+		}
+		data, readErr := os.ReadFile(filepath.Join(directory, entry.Name()))
+		if readErr != nil {
+			return nil, readErr
+		}
+		var current []Assignment
+		if json.Unmarshal(data, &current) != nil {
+			return nil, ErrInvalid
+		}
+		values = append(values, current...)
+	}
+	return values, nil
 }
 func (s *Store) readAssignments(repo, pull string) ([]Assignment, error) {
 	data, err := os.ReadFile(s.assignmentPath(repo, pull))
