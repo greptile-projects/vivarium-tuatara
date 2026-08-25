@@ -128,10 +128,10 @@ func ProjectReadiness(plan *Plan, assignments []Assignment, work []WorkEntry, re
 
 func inspectedEvidenceKind(required string, area Area, inspected []WorkCitation) bool {
 	for _, citation := range inspected {
-		if citation.Kind == required || required == "checks" && citation.Kind == "check" {
-			return true
-		}
-		if strings.HasSuffix(required, "_evidence") && citation.Domain == strings.TrimSuffix(required, "_evidence") && citation.Domain == area.ID {
+		if strings.HasSuffix(required, "_evidence") {
+			if citation.Domain != strings.TrimSuffix(required, "_evidence") || citation.Domain != area.ID {
+				continue
+			}
 			covered := true
 			for _, path := range area.Paths {
 				covered = covered && slices.Contains(citation.CoveredPaths, path)
@@ -139,6 +139,10 @@ func inspectedEvidenceKind(required string, area Area, inspected []WorkCitation)
 			if covered && len(area.Paths) > 0 {
 				return true
 			}
+			continue
+		}
+		if citation.Kind == required || required == "checks" && citation.Kind == "check" {
+			return true
 		}
 	}
 	return false

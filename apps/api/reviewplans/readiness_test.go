@@ -30,9 +30,10 @@ func TestProjectReadinessRequiresDomainAndCompletePathScope(t *testing.T) {
 	assignment := []Assignment{{PlanID: "plan", AreaID: area.ID, Status: "accepted"}}
 	decision := WorkEntry{PlanID: "plan", AreaID: area.ID, SourceRevision: sha, TargetRevision: sha, ActorType: "human", ActorID: "owner", Kind: "decision", Body: "reviewed"}
 	for name, citation := range map[string]WorkCitation{
-		"generic":       {Kind: "check", Value: "unrelated"},
-		"wrong domain":  {Kind: "check", Value: "run", Domain: "privacy", CoveredPaths: area.Paths},
-		"partial scope": {Kind: "check", Value: "run", Domain: "security", CoveredPaths: []string{"auth.go"}},
+		"generic":                     {Kind: "check", Value: "unrelated"},
+		"direct specialized unscoped": {Kind: "security_evidence", Value: "claimed"},
+		"wrong domain":                {Kind: "check", Value: "run", Domain: "privacy", CoveredPaths: area.Paths},
+		"partial scope":               {Kind: "check", Value: "run", Domain: "security", CoveredPaths: []string{"auth.go"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			decision.Citations = []WorkCitation{citation}
