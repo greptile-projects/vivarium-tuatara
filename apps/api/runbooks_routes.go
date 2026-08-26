@@ -108,7 +108,10 @@ func registerRunbookRoutes(mux *http.ServeMux, git *storage.Store, catalog *repo
 			writeAPIError(w, 400, "invalid_runbook_execution", "a caller-stable exact context and explicit safety decisions are required")
 			return
 		}
-		out, err := store.StartExecution(book.ID, actor.UserID, in.RequestID, in.RunbookVersion, in.Context, in.Preconditions, in.CurrentAccess)
+		// Preconditions and resource access are caller observations, not authority.
+		// Until an authoritative adapter verifies them, retain the execution with
+		// explicit blockers instead of allowing request values to create readiness.
+		out, err := store.StartExecution(book.ID, actor.UserID, in.RequestID, in.RunbookVersion, in.Context, nil, nil)
 		switch {
 		case err == nil:
 			writeJSON(w, 201, out)

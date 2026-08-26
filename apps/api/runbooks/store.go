@@ -313,7 +313,7 @@ func (s *Store) StartExecution(id, actor, request string, version int, context E
 			return ErrInvalid
 		}
 		for _, old := range book.Executions {
-			if (old.Status == "ready" || old.Status == "blocked") && old.Context.OriginKind == context.OriginKind && old.Context.OriginID == context.OriginID && old.RunbookVersion == version {
+			if old.Status == "ready" && old.Context.OriginKind == context.OriginKind && old.Context.OriginID == context.OriginID && old.RunbookVersion == version {
 				return ErrConflict
 			}
 		}

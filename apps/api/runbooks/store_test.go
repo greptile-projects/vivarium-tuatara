@@ -81,6 +81,20 @@ func TestExecutionRetainsExplicitBlockersInsteadOfStartingUnsafeWork(t *testing.
 	if !kinds["unverified_procedure"] || !kinds["precondition_not_met"] || !kinds["access_unavailable"] {
 		t.Fatalf("blockers=%+v", execution.Blockers)
 	}
+	// A new caller-stable attempt may preserve the blocked audit record and
+	// re-evaluate corrected conditions instead of treating the block as active.
+	scenario := Scenario{ID: "corrected", Name: "Corrected", Failure: "checkout failure", Inputs: []RehearsalInput{{Kind: "service", ResourceID: "checkout", Revision: "v1", EvidenceKind: "synthetic", Digest: "sha256:x"}}, Steps: []StepOutcome{{StepID: "inspect", Output: "bounded", StartedAt: now, FinishedAt: now, Permissions: []string{"service:read"}, Outcome: "passed", DestructiveHandling: "not_applicable"}}, AchievedOutcome: "achieved"}
+	if _, err = s.Rehearse(created.ID, "human", "owner", "rehearse", 1, "isolated", "sandbox", "", []Scenario{scenario}); err != nil {
+		t.Fatal(err)
+	}
+	corrected, err := s.StartExecution(created.ID, "owner", "corrected-launch", 1, context, []Preconditions{{Condition: "Confirm signal", Status: "met", EvidenceDigest: "sha256:x"}}, []string{"service:read"})
+	if err != nil || corrected.Status != "ready" || corrected.ID == execution.ID {
+		t.Fatalf("corrected=%+v err=%v", corrected, err)
+	}
+	retained, _ := s.Get(created.ID)
+	if len(retained.Executions) != 2 || retained.Executions[0].Status != "blocked" {
+		t.Fatalf("retained executions=%+v", retained.Executions)
+	}
 }
 
 func TestRehearsalRejectsUnsafeChangingStepAndSecretOutput(t *testing.T) {

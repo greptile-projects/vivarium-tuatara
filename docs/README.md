@@ -36,10 +36,12 @@ human choice. Matching does not create an execution.
 `POST /repositories/{id}/runbooks/{runbook_id}/executions` caller-stably freezes the selected
 immutable revision, exact origin revision, affected resources, signal window, releases,
 environment snapshot, digest-addressed permitted evidence, source timeline references, and
-audience controls. It also retains explicit current precondition and access decisions. The
-record is `ready` only when the exact revision has current passing rehearsal evidence and no
-safety, precondition, or access blocker; otherwise the durable record is `blocked`. Duplicate
-active origin/revision launches conflict, while unchanged retries reconcile. Repository
+audience controls. Caller-reported precondition and access values do not establish readiness;
+without an authoritative verification adapter they are discarded and projected as explicit
+blockers. The record is `ready` only when the exact revision has current passing rehearsal
+evidence and trusted precondition/access verification; otherwise it is `blocked`. Duplicate
+ready origin/revision launches conflict, while unchanged retries reconcile and corrected
+attempts retain earlier blocked records as audit history. Repository
 participants can list the retained records through `GET /repositories/{id}/runbook-executions`.
 The record coordinates procedure and grants no access or operational authority.
 
