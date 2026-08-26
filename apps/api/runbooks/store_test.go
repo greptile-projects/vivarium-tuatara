@@ -157,6 +157,43 @@ func TestReadyExecutionRequiresSeparateApprovalAndExactAgentDelegation(t *testin
 	}
 }
 
+func TestExecutionRejectsInactiveDecisionBypass(t *testing.T) {
+	s, _ := New(t.TempDir())
+	r := validRevision("owner")
+	r.Steps[0].Authority.HumanApprovalRequired = true
+	r.Steps = append(r.Steps,
+		Step{ID: "choose", Position: 2, Kind: "decision", Title: "Choose", Purpose: "Choose the bounded branch", Instructions: "Evaluate retained evidence", Preconditions: []string{"inspection complete"}, ExpectedEvidence: []string{"decision evidence"}, OwnerIDs: []string{"owner"}, RequiredSkills: []string{"operations"}, Decision: &Decision{Condition: "health restored", IfTrueStepID: "after", IfFalseStepID: "after", HumanJudgment: "Confirm health"}, Authority: Authority{}},
+		Step{ID: "after", Position: 3, Kind: "communication", Title: "Communicate", Purpose: "Share status", Instructions: "Send the bounded update", Preconditions: []string{"decision complete"}, ExpectedEvidence: []string{"timeline update"}, OwnerIDs: []string{"owner"}, RequiredSkills: []string{"operations"}, Authority: Authority{}},
+	)
+	created, err := s.Create("repo", "owner", "create", r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	context := ExecutionContext{OriginKind: "alert", OriginID: "alert-decision", OriginRevision: "v1", Summary: "checkout failure", AffectedResources: []string{"checkout"}, WindowFrom: now, WindowTo: now, Evidence: []ExecutionEvidence{{Kind: "metric", ResourceID: "checkout", Revision: "v1", Digest: "sha256:x", Summary: "sanitized"}}}
+	execution, err := s.StartExecution(created.ID, "owner", "launch", 1, context, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Force only the unrelated launch-readiness concerns out of this state-machine
+	// regression; the current cursor remains on the approval-gated inspect step.
+	stored, _ := s.read(created.ID)
+	stored.Executions[0].Status = "ready"
+	stored.Executions[0].Blockers = nil
+	if err = s.write(stored); err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.Act(created.ID, execution.ID, "human", "owner", ExecutionAction{RequestID: "inactive-decision", ExpectedVersion: 1, Action: "decide", StepID: "choose", Decision: "true"})
+	if err != ErrConflict {
+		t.Fatalf("inactive decision err=%v", err)
+	}
+	retained, _ := s.Get(created.ID)
+	got := retained.Executions[0]
+	if got.CurrentStepID != "inspect" || len(got.Receipts) != 0 {
+		t.Fatalf("inactive decision mutated execution: %+v", got)
+	}
+}
+
 func TestRehearsalRejectsUnsafeChangingStepAndSecretOutput(t *testing.T) {
 	s, _ := New(t.TempDir())
 	r := validRevision("owner")

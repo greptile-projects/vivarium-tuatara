@@ -386,7 +386,12 @@ func (s *Store) StartExecution(id, actor, request string, version int, context E
 		candidate.Health, candidate.RollbackState = "unknown", "not_started"
 		if len(r.Steps) > 0 {
 			candidate.CurrentStepID = r.Steps[0].ID
-			candidate.PredictedNextAction = "perform " + r.Steps[0].Title
+			if r.Steps[0].Decision != nil {
+				candidate.PendingDecisions = []string{r.Steps[0].Decision.Condition}
+				candidate.PredictedNextAction = "record decision: " + r.Steps[0].Decision.Condition
+			} else {
+				candidate.PredictedNextAction = "perform " + r.Steps[0].Title
+			}
 		}
 		candidate.Blockers = blockers
 		candidate.Status = "ready"
@@ -470,7 +475,7 @@ func (s *Store) Act(id, executionID, actorType, actorID string, in ExecutionActi
 		if e.Status != "ready" && (in.Action == "approve" || in.Action == "decide" || in.Action == "perform" || in.Action == "analyze" || in.Action == "skip" || in.Action == "delegate" || in.Action == "handoff" || in.Action == "pause") {
 			return ErrConflict
 		}
-		if (in.Action == "perform" || in.Action == "analyze" || in.Action == "skip" || in.Action == "approve") && (!hasStep || in.StepID != e.CurrentStepID) {
+		if (in.Action == "perform" || in.Action == "analyze" || in.Action == "skip" || in.Action == "approve" || in.Action == "decide") && (!hasStep || in.StepID != e.CurrentStepID) {
 			return ErrConflict
 		}
 		if in.Action == "skip" && (step.Kind != "communication" || len(step.Authority.Changes) > 0) {
@@ -512,7 +517,7 @@ func (s *Store) Act(id, executionID, actorType, actorID string, in ExecutionActi
 		case "pause":
 			e.Status = "paused"
 		case "decide":
-			if !hasStep || step.Decision == nil || in.Decision == "" {
+			if !hasStep || step.Decision == nil || !containsString(e.PendingDecisions, step.Decision.Condition) || in.Decision == "" {
 				return ErrInvalid
 			}
 			next := step.Decision.IfFalseStepID
