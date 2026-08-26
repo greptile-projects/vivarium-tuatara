@@ -256,18 +256,22 @@ func (s *Store) Mutate(repo, id string, expected int, ev Event, evidence *Eviden
 			if evidence == nil || !validEvidence(*evidence) {
 				return ErrInvalid
 			}
+			if !sameStrings(p.DeploymentIDs, evidence.DeploymentIDs) || !sameStrings(p.DeployedRevisions, evidence.DeployedRevisions) {
+				return ErrInvalid
+			}
 			retained := normalizedEvidence(*evidence, stable(r.ID, ev.RequestID), p.ID, ev.ActorID, s.now())
 			r.Evidence = append(r.Evidence, retained)
-			p.DeploymentIDs = append([]string{}, evidence.DeploymentIDs...)
-			p.DeployedRevisions = append([]string{}, evidence.DeployedRevisions...)
 			p.Blockers = append([]string{}, retained.FailureKinds...)
 			if !retained.ObjectiveSatisfied {
 				p.State = "contained"
 				p.ThrottlePercent = 0
 				p.PredictedNextAction = containmentAction(retained.FailureKinds, ev.DecisionID)
-			} else {
+			} else if retained.ForecastValidated {
 				p.State = "verified"
 				p.PredictedNextAction = "advance to the next plan phase while evidence remains current"
+			} else {
+				p.State = "observing"
+				p.PredictedNextAction = "continue observing until production demand reaches the forecast validation threshold"
 			}
 		default:
 			return ErrInvalid
@@ -322,6 +326,17 @@ func contains(values []string, value string) bool {
 		}
 	}
 	return false
+}
+func sameStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }
 func containmentAction(kinds []string, decision string) string {
 	revisit := false

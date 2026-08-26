@@ -88,3 +88,32 @@ func TestCreateRejectsUnmatchedDeploymentRevisions(t *testing.T) {
 		t.Fatalf("unmatched deployment revisions = %v, want invalid", err)
 	}
 }
+
+func TestForecastValidationGatesVerification(t *testing.T) {
+	s, _ := New(t.TempDir())
+	r, _ := s.Create("repo", "operator", "create", fixture())
+	start := time.Now().Add(-time.Hour)
+	evidence := Evidence{Source: "production", ObservationStart: start, ObservationEnd: start.Add(time.Hour), DeploymentIDs: []string{"deployment"}, DeployedRevisions: []string{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, AllocatedCapacity: 120, UsableCapacity: 100, Load: 60, Unit: "rps", Cost: 20, Currency: "USD", ForecastDemand: 80}
+	r, err := s.Mutate("repo", r.ID, 1, Event{RequestID: "observe", Kind: "observe", PhaseID: "scale", ActorType: "human", ActorID: "operator", Reason: "production demand has not arrived"}, &evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Status != "in_progress" || r.Phases[0].State != "observing" || r.Evidence[0].ForecastValidated {
+		t.Fatalf("unvalidated forecast advanced: %#v", r)
+	}
+}
+
+func TestObservationCannotReplaceStagedDeploymentIdentity(t *testing.T) {
+	s, _ := New(t.TempDir())
+	r, _ := s.Create("repo", "operator", "create", fixture())
+	start := time.Now().Add(-time.Hour)
+	evidence := Evidence{Source: "production", ObservationStart: start, ObservationEnd: start.Add(time.Hour), DeploymentIDs: []string{"different-deployment"}, DeployedRevisions: []string{"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}, AllocatedCapacity: 120, UsableCapacity: 100, Load: 90, Unit: "rps", Cost: 20, Currency: "USD", ForecastDemand: 80}
+	_, err := s.Mutate("repo", r.ID, 1, Event{RequestID: "observe", Kind: "observe", PhaseID: "scale", ActorType: "human", ActorID: "operator", Reason: "substituted promotion"}, &evidence)
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("substituted deployment = %v, want invalid", err)
+	}
+	retained, _ := s.Get("repo", r.ID)
+	if retained.Phases[0].DeploymentIDs[0] != "deployment" || len(retained.Evidence) != 0 {
+		t.Fatalf("staged identity changed: %#v", retained)
+	}
+}
