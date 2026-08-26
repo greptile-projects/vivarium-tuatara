@@ -138,6 +138,12 @@ from bounded network-isolated previews for signal behavior, schema, units, corre
 sampling, redaction, access, overhead, failures, coverage, cost, authorship, and contract
 differences; all ordinary contribution and policy gates continue to apply.
 
+Accepted instrumentation advances through protected environments at
+`/repositories/{id}/signal-rollouts`. The Observability workspace progressively scopes collection
+by service, audience, region, and traffic, exposes production quality, privacy, pipeline, and cost
+evidence, and gives human operators pause, narrow, resume, and rollback controls. Unsafe payload,
+privacy, collector, skew, regression, or budget evidence is retained and contains collection.
+
 ## Getting started
 
 ```sh

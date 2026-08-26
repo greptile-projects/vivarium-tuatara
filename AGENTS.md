@@ -157,6 +157,18 @@ repositories, production data, and caller-supplied artifact display text fail cl
 Acceptance, delivery, and verification coordinate evidence and grant no repository,
 preview, check, agent, privacy, security, provenance, merge, or operational authority.
 
+Progressive telemetry collection at repository `/signal-rollouts` routes and the Observability
+workspace retains caller-stable rollouts beneath `$SIGNAL_ROLLOUT_STORAGE_ROOT` (`signal-rollouts`).
+Current human operators bind an accepted exact contract and successful exact instrumentation
+promotion to a protected environment, active controller, service, audience, region, traffic stage,
+and storage, query-cost, and cardinality budgets. Append-only observations expose signal health,
+coverage, latency, missingness, sampling bias, cardinality, storage, query cost, pipeline loss, and
+privacy controls. Operators may pause, narrow, resume, or roll back; budget breaches, malformed
+payloads, unexpected sensitive data, collector outages, skew, and service regressions retain their
+evidence and deterministically contain collection. Agents have no collection, data, or environment
+authority, and these records grant no repository, telemetry, disclosure, deployment, spending, or
+operational authority.
+
 Sensitive history remediations at `/repositories/{id}/history-remediations` and the repository
 `/history-remediation` workspace give current maintainers a private, retry-stable coordination boundary
 for a security finding, privacy incident, support case, or selected object. Records retain a bounded
