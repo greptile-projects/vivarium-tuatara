@@ -65,6 +65,72 @@ type Event struct {
 	Reason    string    `json:"reason,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 }
+type ContextBinding struct {
+	Kind       string     `json:"kind"`
+	ResourceID string     `json:"resource_id"`
+	Revision   string     `json:"revision"`
+	Summary    string     `json:"summary"`
+	WindowFrom time.Time  `json:"window_from"`
+	WindowTo   time.Time  `json:"window_to"`
+	Evidence   []Evidence `json:"evidence,omitempty"`
+}
+type WorkspaceEntry struct {
+	ID            string           `json:"id"`
+	RequestID     string           `json:"request_id"`
+	Kind          string           `json:"kind"`
+	ActorID       string           `json:"actor_id"`
+	Message       string           `json:"message"`
+	AudienceIDs   []string         `json:"audience_ids,omitempty"`
+	Context       []ContextBinding `json:"context,omitempty"`
+	CreatedAt     time.Time        `json:"created_at"`
+	RequestDigest string           `json:"request_digest"`
+}
+type DiagnosticRun struct {
+	ID           string    `json:"id"`
+	Name         string    `json:"name"`
+	State        string    `json:"state"`
+	OutputDigest string    `json:"output_digest"`
+	Summary      string    `json:"summary"`
+	ActorID      string    `json:"actor_id"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+type Investigation struct {
+	ID             string           `json:"id"`
+	AgentID        string           `json:"agent_id"`
+	Mandate        string           `json:"mandate"`
+	State          string           `json:"state"`
+	Context        []ContextBinding `json:"context"`
+	PermittedTools []string         `json:"permitted_tools"`
+	Budget         int              `json:"budget"`
+	CreatedBy      string           `json:"created_by"`
+	CreatedAt      time.Time        `json:"created_at"`
+}
+type Workspace struct {
+	Version        int              `json:"version"`
+	Classification string           `json:"classification,omitempty"`
+	ResponderID    string           `json:"responder_id,omitempty"`
+	ParticipantIDs []string         `json:"participant_ids"`
+	Context        []ContextBinding `json:"context"`
+	Timeline       []WorkspaceEntry `json:"timeline"`
+	Diagnostics    []DiagnosticRun  `json:"diagnostic_runs"`
+	Investigations []Investigation  `json:"investigations"`
+	IncidentID     string           `json:"incident_id,omitempty"`
+}
+type WorkspaceCommand struct {
+	RequestID       string           `json:"request_id"`
+	Kind            string           `json:"kind"`
+	Message         string           `json:"message"`
+	Classification  string           `json:"classification,omitempty"`
+	TargetUserID    string           `json:"target_user_id,omitempty"`
+	Context         []ContextBinding `json:"context,omitempty"`
+	DiagnosticName  string           `json:"diagnostic_name,omitempty"`
+	DiagnosticState string           `json:"diagnostic_state,omitempty"`
+	OutputDigest    string           `json:"output_digest,omitempty"`
+	AgentID         string           `json:"agent_id,omitempty"`
+	PermittedTools  []string         `json:"permitted_tools,omitempty"`
+	Budget          int              `json:"budget,omitempty"`
+	IncidentID      string           `json:"incident_id,omitempty"`
+}
 type Alert struct {
 	ID                string     `json:"id"`
 	RepositoryID      string     `json:"repository_id"`
@@ -89,6 +155,7 @@ type Alert struct {
 	ProhibitedActions []string   `json:"prohibited_actions"`
 	AudienceIDs       []string   `json:"audience_ids"`
 	UpdatedAt         time.Time  `json:"updated_at"`
+	Workspace         Workspace  `json:"workspace"`
 }
 type Store struct {
 	root string
@@ -184,7 +251,8 @@ func (s *Store) Create(repo, actor, request string, signal Signal, policy respon
 				diagnostics = append(diagnostics, "delivery_failed")
 			}
 		}
-		out = Alert{ID: id, RepositoryID: repo, RequestID: request, RequestDigest: digest, PolicyID: policy.ID, PolicyVersion: rev.Version, RuleID: rule.ID, TeamID: rule.AccountableTeamID, Signal: signal, FirstSeenAt: now, LastSeenAt: now, EventCount: 1, AcknowledgeBy: now.Add(time.Duration(rule.AcknowledgeSeconds) * time.Second), ResolveBy: now.Add(time.Duration(rule.ResolveSeconds) * time.Second), State: state, Routing: routing, Events: []Event{}, Diagnostics: diagnostics, ExpectedActions: rule.ExpectedActions, PermittedActions: rule.Authority.PermittedActions, ProhibitedActions: rule.Authority.ProhibitedActions, AudienceIDs: rule.CommunicationAudienceIDs, UpdatedAt: now}
+		participants := append([]string{}, recipients...)
+		out = Alert{ID: id, RepositoryID: repo, RequestID: request, RequestDigest: digest, PolicyID: policy.ID, PolicyVersion: rev.Version, RuleID: rule.ID, TeamID: rule.AccountableTeamID, Signal: signal, FirstSeenAt: now, LastSeenAt: now, EventCount: 1, AcknowledgeBy: now.Add(time.Duration(rule.AcknowledgeSeconds) * time.Second), ResolveBy: now.Add(time.Duration(rule.ResolveSeconds) * time.Second), State: state, Routing: routing, Events: []Event{}, Diagnostics: diagnostics, ExpectedActions: rule.ExpectedActions, PermittedActions: rule.Authority.PermittedActions, ProhibitedActions: rule.Authority.ProhibitedActions, AudienceIDs: rule.CommunicationAudienceIDs, UpdatedAt: now, Workspace: Workspace{Version: 1, ResponderID: first(participants), ParticipantIDs: unique(participants), Context: signalContext(signal), Timeline: []WorkspaceEntry{}, Diagnostics: []DiagnosticRun{}, Investigations: []Investigation{}}}
 		// Correlated events join the existing open alert without producing another page.
 		for _, v := range values {
 			if v.Signal.CorrelationKey != "" && v.Signal.CorrelationKey == signal.CorrelationKey && v.RuleID == rule.ID && v.State == "open" && v.PolicyID == policy.ID && v.PolicyVersion == rev.Version && v.TeamID == rule.AccountableTeamID {
@@ -205,6 +273,144 @@ func (s *Store) Create(repo, actor, request string, signal Signal, policy respon
 		return s.write(out)
 	})
 	return out, err
+}
+
+func (s *Store) ApplyWorkspace(id, actor string, cmd WorkspaceCommand, allowed bool) (Alert, error) {
+	var out Alert
+	err := s.lock(func() error {
+		v, err := s.read(id)
+		if err != nil {
+			return err
+		}
+		commandDigest := workspaceDigest(cmd)
+		for _, entry := range v.Workspace.Timeline {
+			if entry.RequestID == cmd.RequestID {
+				if entry.Kind != cmd.Kind || entry.ActorID != actor || entry.RequestDigest != commandDigest {
+					return ErrConflict
+				}
+				out = v
+				return nil
+			}
+		}
+		if !allowed || strings.TrimSpace(cmd.RequestID) == "" || strings.TrimSpace(cmd.Message) == "" {
+			return ErrForbidden
+		}
+		now := s.now()
+		entry := WorkspaceEntry{ID: stable(id, actor, cmd.RequestID), RequestID: cmd.RequestID, Kind: cmd.Kind, ActorID: actor, Message: strings.TrimSpace(cmd.Message), CreatedAt: now}
+		entry.RequestDigest = commandDigest
+		switch cmd.Kind {
+		case "classify":
+			if !validClassification(cmd.Classification) {
+				return ErrInvalid
+			}
+			v.Workspace.Classification = cmd.Classification
+		case "invite":
+			if cmd.TargetUserID == "" {
+				return ErrInvalid
+			}
+			v.Workspace.ParticipantIDs = unique(append(v.Workspace.ParticipantIDs, cmd.TargetUserID))
+		case "reassign":
+			if cmd.TargetUserID == "" {
+				return ErrInvalid
+			}
+			v.Workspace.ResponderID = cmd.TargetUserID
+			v.Workspace.ParticipantIDs = unique(append(v.Workspace.ParticipantIDs, cmd.TargetUserID))
+		case "observe", "action", "correlate", "escalate":
+			if len(cmd.Context) > 0 {
+				if !validContext(cmd.Context) {
+					return ErrInvalid
+				}
+				entry.Context = cmd.Context
+				v.Workspace.Context = mergeContext(v.Workspace.Context, cmd.Context)
+			}
+		case "suppress":
+			v.State = "suppressed"
+		case "diagnostic":
+			if !approvedDiagnostic(cmd.DiagnosticName) || (cmd.DiagnosticState != "passed" && cmd.DiagnosticState != "failed") || cmd.OutputDigest == "" {
+				return ErrInvalid
+			}
+			v.Workspace.Diagnostics = append(v.Workspace.Diagnostics, DiagnosticRun{ID: entry.ID, Name: cmd.DiagnosticName, State: cmd.DiagnosticState, OutputDigest: cmd.OutputDigest, Summary: entry.Message, ActorID: actor, CreatedAt: now})
+		case "delegate_agent":
+			if cmd.AgentID == "" || cmd.Budget < 1 || cmd.Budget > 100 || len(cmd.PermittedTools) == 0 || !validReadOnlyTools(cmd.PermittedTools) || !validContext(cmd.Context) {
+				return ErrInvalid
+			}
+			v.Workspace.Investigations = append(v.Workspace.Investigations, Investigation{ID: entry.ID, AgentID: cmd.AgentID, Mandate: entry.Message, State: "active", Context: cmd.Context, PermittedTools: unique(cmd.PermittedTools), Budget: cmd.Budget, CreatedBy: actor, CreatedAt: now})
+			entry.Context = cmd.Context
+		case "promote_incident":
+			if cmd.IncidentID == "" || v.Workspace.IncidentID != "" {
+				return ErrInvalid
+			}
+			v.Workspace.IncidentID = cmd.IncidentID
+		default:
+			return ErrInvalid
+		}
+		v.Workspace.Timeline = append(v.Workspace.Timeline, entry)
+		v.Workspace.Version++
+		v.UpdatedAt = now
+		out = v
+		return s.write(v)
+	})
+	return out, err
+}
+
+func signalContext(v Signal) []ContextBinding {
+	out := []ContextBinding{}
+	for _, e := range v.Evidence {
+		out = append(out, ContextBinding{Kind: e.Kind, ResourceID: e.ResourceID, Revision: e.Revision, Summary: e.Summary, WindowFrom: v.OccurredAt, WindowTo: v.OccurredAt, Evidence: []Evidence{e}})
+	}
+	return out
+}
+func validClassification(v string) bool {
+	return v == "actionable" || v == "false_positive" || v == "duplicate" || v == "needs_information" || v == "incident_candidate"
+}
+func validContext(v []ContextBinding) bool {
+	if len(v) == 0 || len(v) > 50 {
+		return false
+	}
+	kinds := map[string]bool{"release": true, "deployment": true, "code": true, "infrastructure": true, "dependency": true, "runbook": true, "evidence": true}
+	for _, x := range v {
+		if !kinds[x.Kind] || x.ResourceID == "" || x.Revision == "" || x.Summary == "" || x.WindowFrom.IsZero() || x.WindowTo.IsZero() || x.WindowTo.Before(x.WindowFrom) {
+			return false
+		}
+	}
+	return true
+}
+func mergeContext(a, b []ContextBinding) []ContextBinding {
+	for _, x := range b {
+		found := false
+		for i := range a {
+			if a[i].Kind == x.Kind && a[i].ResourceID == x.ResourceID && a[i].Revision == x.Revision {
+				found = true
+			}
+		}
+		if !found {
+			a = append(a, x)
+		}
+	}
+	return a
+}
+func approvedDiagnostic(v string) bool {
+	return v == "health_snapshot" || v == "release_diff" || v == "dependency_status" || v == "log_summary" || v == "runbook_check"
+}
+func validReadOnlyTools(v []string) bool {
+	allowed := map[string]bool{"read_context": true, "query_logs": true, "compare_releases": true, "inspect_dependencies": true, "read_runbook": true}
+	for _, x := range v {
+		if !allowed[x] {
+			return false
+		}
+	}
+	return true
+}
+func first(v []string) string {
+	if len(v) > 0 {
+		return v[0]
+	}
+	return ""
+}
+func workspaceDigest(v WorkspaceCommand) string {
+	b, _ := json.Marshal(v)
+	h := sha256.Sum256(b)
+	return hex.EncodeToString(h[:])
 }
 
 func (s *Store) Append(id, request, kind, actor, reason string, allowed bool) (Alert, error) {

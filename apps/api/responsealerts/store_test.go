@@ -157,6 +157,37 @@ func TestClosedCorrelatedRequestRetainsIdempotency(t *testing.T) {
 		})
 	}
 }
+
+func TestSharedWorkspaceSteersResponseWithoutOperationalAuthority(t *testing.T) {
+	s, _ := New(t.TempDir())
+	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return now }
+	policy := responsepolicies.Policy{ID: "policy", Revisions: []responsepolicies.Revision{{Version: 1, Rules: []responsepolicies.Rule{{ID: "rule", ResourceIDs: []string{"service"}, SignalClass: "reliability", Severity: "critical", AccountableTeamID: "ops", AcknowledgeSeconds: 60, ResolveSeconds: 600, Authority: responsepolicies.AuthorityBoundary{PermittedActions: []string{"investigate"}, ProhibitedActions: []string{"deploy"}}}}}}}
+	signal := Signal{SignalClass: "reliability", Severity: "critical", ResourceIDs: []string{"service"}, Summary: "latency", Uncertainty: "sampled", OccurredAt: now, SourceRevision: "commit-1", Evidence: []Evidence{{Kind: "release", ResourceID: "release-1", Revision: "v1", Digest: "sha256:a", Summary: "current release", Available: true}}}
+	alert, err := s.Create("repo", "source", "create", signal, policy, []string{"responder"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	window := []ContextBinding{{Kind: "deployment", ResourceID: "deploy-1", Revision: "commit-1", Summary: "production deployment", WindowFrom: now.Add(-time.Minute), WindowTo: now}}
+	classified, err := s.ApplyWorkspace(alert.ID, "responder", WorkspaceCommand{RequestID: "classify", Kind: "classify", Message: "user impact confirmed", Classification: "actionable"}, true)
+	if err != nil || classified.Workspace.Classification != "actionable" {
+		t.Fatalf("classification: %#v %v", classified, err)
+	}
+	delegated, err := s.ApplyWorkspace(alert.ID, "responder", WorkspaceCommand{RequestID: "agent", Kind: "delegate_agent", Message: "compare the exact release window", AgentID: "agent-1", Context: window, PermittedTools: []string{"read_context", "compare_releases"}, Budget: 10}, true)
+	if err != nil || len(delegated.Workspace.Investigations) != 1 || delegated.Workspace.Investigations[0].State != "active" {
+		t.Fatalf("delegation: %#v %v", delegated, err)
+	}
+	if _, err := s.ApplyWorkspace(alert.ID, "responder", WorkspaceCommand{RequestID: "write-agent", Kind: "delegate_agent", Message: "deploy", AgentID: "agent-1", Context: window, PermittedTools: []string{"deploy"}, Budget: 10}, true); err != ErrInvalid {
+		t.Fatalf("write-capable agent err=%v", err)
+	}
+	if _, err := s.ApplyWorkspace(alert.ID, "outsider", WorkspaceCommand{RequestID: "outsider", Kind: "observe", Message: "peek"}, false); err != ErrForbidden {
+		t.Fatalf("outsider err=%v", err)
+	}
+	retry, err := s.ApplyWorkspace(alert.ID, "responder", WorkspaceCommand{RequestID: "agent", Kind: "delegate_agent", Message: "compare the exact release window", AgentID: "agent-1", Context: window, PermittedTools: []string{"read_context", "compare_releases"}, Budget: 10}, true)
+	if err != nil || len(retry.Workspace.Investigations) != 1 {
+		t.Fatalf("retry duplicated delegation: %#v %v", retry, err)
+	}
+}
 func contains(v []string, w string) bool {
 	for _, x := range v {
 		if x == w {

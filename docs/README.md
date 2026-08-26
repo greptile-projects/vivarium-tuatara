@@ -90,6 +90,22 @@ deadlines, routing gaps, expected actions, and the policy's permitted/prohibited
 Alerts coordinate attention and grant no repository, secret, deployment, disclosure, incident,
 spending, governance, or operational authority.
 
+### Shared alert response workspace
+
+`POST /repositories/{id}/response-alerts/{alert_id}/workspace` appends a caller-stable command to
+the alert's durable shared response ledger. Routed responders and explicitly invited current
+repository participants can classify, correlate, reassign, suppress, escalate, invite an owner,
+or record an observation or action. Context entries bind a closed signal window to an exact
+`release`, `deployment`, `code`, `infrastructure`, `dependency`, `runbook`, or `evidence` identity
+and revision. Evidence embedded in those bindings retains the alert's reader-specific redaction.
+
+Approved diagnostics are restricted to health snapshots, release diffs, dependency status, log
+summaries, and runbook checks and retain only a digest-addressed result. Agent delegation freezes
+the mandate and context, permits only enumerated read-only tools, and requires a budget from 1 to
+100; deployment or other mutation tools are rejected. Repository-write scope remains required to
+promote an alert into the ordinary incident store. The resulting incident link is retained on the
+alert, but mitigation still uses the existing deployment and environment authorization paths.
+
 ## Collaborative capacity objectives
 
 Repository readers list and inspect immutable demand contracts through
