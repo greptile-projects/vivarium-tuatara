@@ -5,10 +5,12 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/activities"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/incidents"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/responsealerts"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/responsepolicies"
@@ -23,8 +25,110 @@ type responseAlertEventInput struct {
 	Kind      string `json:"kind"`
 	Reason    string `json:"reason"`
 }
+type responseOutcomeWork struct {
+	Kind         string    `json:"kind"`
+	Title        string    `json:"title"`
+	Outcome      string    `json:"outcome"`
+	AssigneeType string    `json:"assignee_type"`
+	AssigneeID   string    `json:"assignee_id"`
+	DueAt        time.Time `json:"due_at"`
+}
+type responseOutcomeInput struct {
+	responsealerts.OutcomeReviewInput
+	Work *responseOutcomeWork `json:"work,omitempty"`
+}
 
-func registerResponseAlertRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, policies *responsepolicies.Store, alerts *responsealerts.Store, incidentStore *incidents.Store, activity *activities.Store) {
+func registerResponseAlertRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, policies *responsepolicies.Store, alerts *responsealerts.Store, incidentStore *incidents.Store, activity *activities.Store, proposalStore *proposals.Store) {
+	mux.HandleFunc("POST /repositories/{id}/response-alerts/{alert_id}/responder-load-consents", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:read")
+		if !ok {
+			return
+		}
+		current, err := alerts.Get(r.PathValue("alert_id"))
+		if err != nil || current.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "response_alert_not_found", "response alert not found")
+			return
+		}
+		var in responsealerts.ResponderLoadConsentInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "an exact responder-authored load consent is required")
+			return
+		}
+		out, consentErr := alerts.ConsentResponderLoad(current.ID, actor.UserID, in, actor.UserID == current.Workspace.ResponderID)
+		writeResponseAlert(w, out, consentErr, 201)
+	})
+	mux.HandleFunc("GET /repositories/{id}/response-outcomes", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id"))
+		if !ok {
+			return
+		}
+		repo, err := catalog.GetByID(r.PathValue("id"))
+		if err != nil || repo.OwnerID != actor.UserID {
+			writeAPIError(w, 403, "response_outcomes_forbidden", "only a current repository owner can inspect response outcomes")
+			return
+		}
+		values, err := alerts.List(repo.ID)
+		if err != nil {
+			writeAPIError(w, 500, "response_outcomes_unavailable", "response outcomes could not be read")
+			return
+		}
+		writeJSON(w, 200, responseOutcomeReport(values, time.Now().UTC()))
+	})
+	mux.HandleFunc("POST /repositories/{id}/response-alerts/{alert_id}/outcomes", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		repo, err := catalog.GetByID(r.PathValue("id"))
+		if err != nil || repo.OwnerID != actor.UserID {
+			writeAPIError(w, 403, "response_outcomes_forbidden", "only a current repository owner can review response outcomes")
+			return
+		}
+		current, err := alerts.Get(r.PathValue("alert_id"))
+		if err != nil || current.RepositoryID != repo.ID {
+			writeAPIError(w, 404, "response_alert_not_found", "response alert not found")
+			return
+		}
+		var in responseOutcomeInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "a caller-stable attributable outcome review is required")
+			return
+		}
+		if responsealerts.ValidateOutcomeReview(in.OutcomeReviewInput) != nil {
+			writeAPIError(w, 400, "invalid_response_outcome", "the outcome review is incomplete or includes non-consented data")
+			return
+		}
+		out, reviewErr := alerts.ReviewOutcome(current.ID, actor.UserID, in.OutcomeReviewInput, true)
+		if reviewErr != nil {
+			writeResponseAlert(w, out, reviewErr, 201)
+			return
+		}
+		if in.Work != nil {
+			if proposalStore == nil || (in.Work.Kind != "reliability" && in.Work.Kind != "documentation" && in.Work.Kind != "automation" && in.Work.Kind != "staffing") {
+				writeAPIError(w, 400, "invalid_response_work", "linked work must be reliability, documentation, automation, or staffing work")
+				return
+			}
+			p, task, createErr := proposalStore.CreateCorrectiveWork(proposals.CorrectiveWorkInput{ResponseAlertID: current.ID, OperationID: in.RequestID, RepositoryID: repo.ID, ActorID: actor.UserID, ProposalTitle: in.Work.Title, ProposalBody: "Governed " + in.Work.Kind + " follow-up from response alert " + current.ID + ". This work grants no authority beyond ordinary proposal and task controls.", TaskTitle: in.Work.Title, Outcome: in.Work.Outcome, AssigneeType: in.Work.AssigneeType, AssigneeID: in.Work.AssigneeID, BaseRevision: current.Signal.SourceRevision, DueAt: in.Work.DueAt})
+			if createErr != nil {
+				writeAPIError(w, 409, "response_work_conflict", "ordinary linked work could not be reconciled")
+				return
+			}
+			out, reviewErr = alerts.LinkOutcomeWork(current.ID, actor.UserID, in.RequestID, p.ID, task.ID)
+			if reviewErr != nil {
+				writeResponseAlert(w, out, reviewErr, 201)
+				return
+			}
+		} else if proposalStore != nil {
+			if p, task, findErr := proposalStore.FindResponseCorrectiveWork(current.ID, in.RequestID); findErr == nil {
+				out, reviewErr = alerts.LinkOutcomeWork(current.ID, actor.UserID, in.RequestID, p.ID, task.ID)
+				if reviewErr != nil {
+					writeResponseAlert(w, out, reviewErr, 201)
+					return
+				}
+			}
+		}
+		writeResponseAlert(w, out, reviewErr, 201)
+	})
 	mux.HandleFunc("GET /repositories/{id}/response-alerts", func(w http.ResponseWriter, r *http.Request) {
 		actor, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id"))
 		if !ok {
@@ -41,7 +145,7 @@ func registerResponseAlertRoutes(mux *http.ServeMux, catalog *repositories.Store
 		visible := values[:0]
 		for _, v := range values {
 			if alertVisible(v, actor.UserID, owner) {
-				visible = append(visible, projectResponseAlert(v, actor.UserID, current))
+				visible = append(visible, projectResponseAlert(v, actor.UserID, current, owner))
 			}
 		}
 		writeJSON(w, 200, map[string]any{"response_alerts": visible})
@@ -59,7 +163,7 @@ func registerResponseAlertRoutes(mux *http.ServeMux, catalog *repositories.Store
 			return
 		}
 		current, _ := policies.List(r.PathValue("id"))
-		writeJSON(w, 200, projectResponseAlert(v, actor.UserID, current))
+		writeJSON(w, 200, projectResponseAlert(v, actor.UserID, current, owner))
 	})
 	mux.HandleFunc("POST /repositories/{id}/response-alerts", func(w http.ResponseWriter, r *http.Request) {
 		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
@@ -112,6 +216,7 @@ func registerResponseAlertRoutes(mux *http.ServeMux, catalog *repositories.Store
 			}
 		}
 		recipients = currentRecipients
+		backupRecipients := []string{}
 		for _, rotation := range rotations {
 			rr := rotation.Revisions[len(rotation.Revisions)-1]
 			if rr.PolicyID != policy.ID || rr.TeamID != teamID {
@@ -123,10 +228,22 @@ func registerResponseAlertRoutes(mux *http.ServeMux, catalog *repositories.Store
 					if owner := projected.EffectiveOwnerByShift[shift.ID]; owner != "" {
 						recipients = []string{owner}
 					}
+					for _, backup := range shift.BackupUserIDs {
+						if current[backup] {
+							backupRecipients = append(backupRecipients, backup)
+						}
+					}
 				}
 			}
 		}
-		out, err := alerts.Create(repo.ID, actor.UserID, in.RequestID, in.Signal, policy, recipients)
+		directive := alerts.RoutingDirective(repo.ID, responseAlertRuleID(rev, in.Signal))
+		if directive == "" {
+			directive = automaticResponseRoutingDirective(alerts, repo.ID, responseAlertRuleID(rev, in.Signal), len(backupRecipients) > 0, time.Now().UTC())
+		}
+		if directive == "backup" && len(backupRecipients) > 0 {
+			recipients = backupRecipients[:1]
+		}
+		out, err := alerts.CreateControlled(repo.ID, actor.UserID, in.RequestID, in.Signal, policy, recipients, directive)
 		if err == nil && activity != nil {
 			for _, delivery := range out.Routing {
 				if delivery.Status != "delivered" {
@@ -313,13 +430,23 @@ func alertVisible(v responsealerts.Alert, user string, repositoryOwner bool) boo
 			return true
 		}
 	}
-	if repositoryOwner && (responseAlertContains(v.Diagnostics, "delivery_failed") || v.State == "suppressed" || v.State == "maintenance") {
+	if repositoryOwner && (responseAlertContains(v.Diagnostics, "delivery_failed") || v.State == "suppressed" || v.State == "maintenance" || v.State == "routing_paused") {
 		return true
 	}
 	return false
 }
 
-func projectResponseAlert(v responsealerts.Alert, user string, current []responsepolicies.Policy) responsealerts.Alert {
+func projectResponseAlert(v responsealerts.Alert, user string, current []responsepolicies.Policy, owner bool) responsealerts.Alert {
+	if !owner {
+		v.OutcomeReviews = []responsealerts.OutcomeReview{}
+		consents := v.ResponderLoadConsents[:0]
+		for _, consent := range v.ResponderLoadConsents {
+			if consent.ResponderID == user {
+				consents = append(consents, consent)
+			}
+		}
+		v.ResponderLoadConsents = consents
+	}
 	for i := range v.Signal.Evidence {
 		evidence := &v.Signal.Evidence[i]
 		if len(evidence.AccessibleTo) > 0 && !responseAlertContains(evidence.AccessibleTo, user) {
@@ -350,6 +477,112 @@ func projectResponseAlert(v responsealerts.Alert, user string, current []respons
 		v.Diagnostics = append(v.Diagnostics, "policy_changed")
 	}
 	return v
+}
+
+func responseAlertRuleID(rev responsepolicies.Revision, signal responsealerts.Signal) string {
+	for _, rule := range rev.Rules {
+		if rule.SignalClass == signal.SignalClass && rule.Severity == signal.Severity && responseAlertIntersects(rule.ResourceIDs, signal.ResourceIDs) {
+			return rule.ID
+		}
+	}
+	return ""
+}
+
+func automaticResponseRoutingDirective(store *responsealerts.Store, repositoryID, ruleID string, hasBackup bool, now time.Time) string {
+	values, err := store.List(repositoryID)
+	if err != nil {
+		return ""
+	}
+	recentPages, missed := 0, 0
+	for _, alert := range values {
+		if alert.RuleID != ruleID {
+			continue
+		}
+		if now.Sub(alert.FirstSeenAt) <= 24*time.Hour && len(alert.Routing) > 0 {
+			recentPages++
+		}
+		acknowledged := false
+		for _, event := range alert.Events {
+			if event.Kind == "acknowledge" {
+				acknowledged = true
+				break
+			}
+		}
+		if !acknowledged && now.After(alert.AcknowledgeBy) {
+			missed++
+		}
+	}
+	if missed >= 2 && hasBackup {
+		return "backup"
+	}
+	if missed >= 2 || recentPages >= 3 {
+		return "pause"
+	}
+	return ""
+}
+
+func responseOutcomeReport(values []responsealerts.Alert, now time.Time) map[string]any {
+	volume, correlated, falsePositives, handoffs, escalations, missedAck, missedResolve, incidents, interruptions, agentCost := len(values), 0, 0, 0, 0, 0, 0, 0, 0, 0
+	ackSeconds, resolveSeconds := []int64{}, []int64{}
+	responderLoad := map[string]int{}
+	userOutcomes := []map[string]string{}
+	individual := []map[string]any{}
+	for _, alert := range values {
+		if alert.EventCount > 1 {
+			correlated += alert.EventCount - 1
+		}
+		var ack, resolved *time.Time
+		for i := range alert.Events {
+			event := &alert.Events[i]
+			if event.Kind == "acknowledge" && ack == nil {
+				ack = &event.CreatedAt
+			}
+			if event.Kind == "resolve" && resolved == nil {
+				resolved = &event.CreatedAt
+			}
+		}
+		if ack != nil {
+			ackSeconds = append(ackSeconds, int64(ack.Sub(alert.FirstSeenAt).Seconds()))
+		} else if now.After(alert.AcknowledgeBy) {
+			missedAck++
+		}
+		if resolved != nil {
+			resolveSeconds = append(resolveSeconds, int64(resolved.Sub(alert.FirstSeenAt).Seconds()))
+		} else if now.After(alert.ResolveBy) {
+			missedResolve++
+		}
+		for _, entry := range alert.Workspace.Timeline {
+			if entry.Kind == "reassign" || entry.Kind == "invite" {
+				handoffs++
+			}
+			if entry.Kind == "escalate" {
+				escalations++
+			}
+		}
+		if alert.Workspace.IncidentID != "" {
+			incidents++
+		}
+		for _, review := range alert.OutcomeReviews {
+			if review.Classification == "false_positive" {
+				falsePositives++
+			}
+			agentCost += review.AgentCost
+			if review.ResponderLoadConsent {
+				interruptions += review.InterruptionMinutes
+				for _, consent := range alert.ResponderLoadConsents {
+					if consent.ID == review.ResponderLoadConsentID {
+						responderLoad[consent.ResponderID] += review.InterruptionMinutes
+						break
+					}
+				}
+			}
+			if review.UserOutcomeConsent {
+				userOutcomes = append(userOutcomes, map[string]string{"alert_id": alert.ID, "outcome": review.UserOutcome})
+			}
+			individual = append(individual, map[string]any{"alert_id": alert.ID, "review_id": review.ID, "classification": review.Classification, "rationale": review.Rationale, "routing_action": review.RoutingAction, "proposal_id": review.ProposalID, "task_id": review.TaskID, "created_at": review.CreatedAt})
+		}
+	}
+	return map[string]any{"alert_volume": volume, "deduplicated_events": correlated, "false_positives": falsePositives, "handoffs": handoffs, "escalations": escalations, "missed_acknowledgements": missedAck, "missed_resolutions": missedResolve, "acknowledgement_seconds": ackSeconds, "resolution_seconds": resolveSeconds, "consented_interruption_minutes": interruptions, "consented_responder_load": responderLoad, "agent_cost": agentCost, "incidents": incidents, "consented_user_outcomes": userOutcomes, "individual_outcomes": individual}
 }
 func responseAlertContains(values []string, want string) bool {
 	for _, value := range values {

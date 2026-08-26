@@ -106,6 +106,27 @@ the mandate and context, permits only enumerated read-only tools, and requires a
 promote an alert into the ordinary incident store. The resulting incident link is retained on the
 alert, but mitigation still uses the existing deployment and environment authorization paths.
 
+### Governed response outcomes
+
+Current repository owners inspect `GET /repositories/{id}/response-outcomes` and append a
+caller-stable review through `POST /repositories/{id}/response-alerts/{alert_id}/outcomes`.
+The owner-only report derives acknowledgement and resolution latency, missed targets, handoffs,
+escalations, volume, deduplicated events, false positives, incidents, and declared agent cost from
+the immutable alert ledger. Interruption and responder-load measures appear only after explicit
+responder-load consent authored by that alert's exact assigned responder, and user outcomes are
+rejected unless their inclusion is explicitly consented. An owner cannot assert another responder's
+consent: outcome reviews must cite the responder-authored record and its exact minute value.
+Restricted alert evidence is not copied into the report.
+
+Reviews retain classification, rationale, signal or routing correction intent, and optional
+`pause`, `activate_backup`, or `resume` containment. A pause prevents a new affected alert from
+routing; backup activation selects only a current backup declared by the exact active rotation.
+Neither control adds a participant or capability. Policy and authority changes still require an
+ordinary response-policy successor, while reliability, documentation, automation, and staffing
+follow-ups become retry-stable ordinary proposals and human- or agent-assigned tasks with no new
+access. The Response coverage workspace shows owner-visible metrics and individual review controls
+without turning missed pages into acceptable averages or exposing non-consented worker telemetry.
+
 ## Collaborative capacity objectives
 
 Repository readers list and inspect immutable demand contracts through

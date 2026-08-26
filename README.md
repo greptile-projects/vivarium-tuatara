@@ -59,6 +59,10 @@ Routed responders use the alert's shared workspace to classify and steer respons
 reassign current owners, retain exact operational context and observations, run approved
 read-only diagnostics, delegate a budgeted read-only agent investigation, and connect a qualifying
 alert to an ordinary incident. The workspace never grants mitigation or environment authority.
+Repository owners use the same surface to inspect consent-aware response outcomes, missed targets,
+noise, handoffs, escalation, responder interruption, agent cost, incidents, and user results. They
+can retain attributable reviews, pause noisy or unsafe routing, activate only declared backups, and
+open ordinary human- or agent-owned improvement work without changing policy or operational authority.
 
 Repository participants and scoped read-only agents can turn an exact objective into
 an immutable, permission-aware capacity model at `/repositories/{id}/capacity-models`.

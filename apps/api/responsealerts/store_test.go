@@ -196,3 +196,150 @@ func contains(v []string, w string) bool {
 	}
 	return false
 }
+
+func testPolicy(now time.Time) responsepolicies.Policy {
+	return responsepolicies.Policy{ID: "policy", RepositoryID: "repo", Revisions: []responsepolicies.Revision{{Version: 1, Rules: []responsepolicies.Rule{{ID: "critical", ResourceIDs: []string{"service"}, SignalClass: "reliability", Severity: "critical", AccountableTeamID: "ops", AcknowledgeSeconds: 60, ResolveSeconds: 600}}}}}
+}
+
+func testSignal(at time.Time) Signal {
+	return Signal{SignalClass: "reliability", Severity: "critical", ResourceIDs: []string{"service"}, Summary: "latency elevated", Uncertainty: "sampled", OccurredAt: at, SourceRevision: "0123456789012345678901234567890123456789", CorrelationKey: at.String(), Evidence: []Evidence{{Kind: "check", ResourceID: "check", Revision: "run", Digest: "sha256:test", Summary: "failed", Available: true}}}
+}
+
+func TestOutcomeReviewConsentRetryAndRoutingContainment(t *testing.T) {
+	s, _ := New(t.TempDir())
+	now := time.Date(2026, 8, 26, 9, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return now }
+	policy := testPolicy(now)
+	alert, err := s.Create("repo", "source", "signal", testSignal(now), policy, []string{"responder"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	consented, err := s.ConsentResponderLoad(alert.ID, "responder", ResponderLoadConsentInput{RequestID: "load-consent", InterruptionMinutes: 12}, true)
+	if err != nil || len(consented.ResponderLoadConsents) != 1 {
+		t.Fatalf("consent=%#v err=%v", consented, err)
+	}
+	in := OutcomeReviewInput{RequestID: "review", Classification: "false_positive", InterruptionMinutes: 12, ResponderLoadConsentID: consented.ResponderLoadConsents[0].ID, AgentCost: 7, CorrectionKind: "routing", RoutingAction: "pause", Rationale: "Repeated paging has no actionable evidence"}
+	reviewed, err := s.ReviewOutcome(alert.ID, "owner", in, true)
+	if err != nil || len(reviewed.OutcomeReviews) != 1 || s.RoutingDirective("repo", alert.RuleID) != "pause" {
+		t.Fatalf("review=%#v err=%v", reviewed, err)
+	}
+	retry, err := s.ReviewOutcome(alert.ID, "owner", in, true)
+	if err != nil || len(retry.OutcomeReviews) != 1 {
+		t.Fatalf("retry duplicated: %#v %v", retry, err)
+	}
+	reusedConsent := in
+	reusedConsent.RequestID = "second-review"
+	if _, err = s.ReviewOutcome(alert.ID, "owner", reusedConsent, true); err != ErrInvalid {
+		t.Fatalf("reused consent err=%v", err)
+	}
+	changed := in
+	changed.AgentCost++
+	if _, err = s.ReviewOutcome(alert.ID, "owner", changed, true); err != ErrConflict {
+		t.Fatalf("changed retry err=%v", err)
+	}
+	withoutConsent := OutcomeReviewInput{RequestID: "private", Classification: "actionable", UserOutcome: "customer recovered", Rationale: "outcome"}
+	if _, err = s.ReviewOutcome(alert.ID, "owner", withoutConsent, true); err != ErrInvalid {
+		t.Fatalf("unconsented outcome err=%v", err)
+	}
+	withoutLoadConsent := OutcomeReviewInput{RequestID: "load-private", Classification: "actionable", InterruptionMinutes: 4, Rationale: "load"}
+	if _, err = s.ReviewOutcome(alert.ID, "owner", withoutLoadConsent, true); err != ErrInvalid {
+		t.Fatalf("unconsented load err=%v", err)
+	}
+	if _, err = s.ConsentResponderLoad(alert.ID, "owner", ResponderLoadConsentInput{RequestID: "forged", InterruptionMinutes: 4}, true); err != ErrForbidden {
+		t.Fatalf("owner-forged consent err=%v", err)
+	}
+	paused, err := s.CreateControlled("repo", "source", "next", testSignal(now.Add(time.Minute)), policy, []string{"responder"}, s.RoutingDirective("repo", alert.RuleID))
+	if err != nil || paused.State != "routing_paused" || len(paused.Routing) != 0 || !contains(paused.Diagnostics, "routing_paused") {
+		t.Fatalf("paused=%#v err=%v", paused, err)
+	}
+}
+
+func TestRoutingDirectiveUsesNewestRoutingReviewAcrossAlerts(t *testing.T) {
+	s, _ := New(t.TempDir())
+	now := time.Date(2026, 8, 26, 9, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return now }
+	p := testPolicy(now)
+	older, _ := s.Create("repo", "source", "older", testSignal(now), p, []string{"responder"})
+	_, _ = s.ReviewOutcome(older.ID, "owner", OutcomeReviewInput{RequestID: "pause", Classification: "actionable", RoutingAction: "pause", Rationale: "pause"}, true)
+	now = now.Add(time.Minute)
+	newer, _ := s.Create("repo", "source", "newer", testSignal(now), p, []string{"responder"})
+	_, _ = s.ReviewOutcome(newer.ID, "owner", OutcomeReviewInput{RequestID: "resume", Classification: "actionable", RoutingAction: "resume", Rationale: "resume"}, true)
+	now = now.Add(time.Minute)
+	_, _ = s.ReviewOutcome(older.ID, "owner", OutcomeReviewInput{RequestID: "note", Classification: "actionable", Rationale: "unrelated later review"}, true)
+	if got := s.RoutingDirective("repo", older.RuleID); got != "" {
+		t.Fatalf("stale directive won: %q", got)
+	}
+}
+
+func TestRoutingDirectiveUsesCausalSequenceAtSameTimestamp(t *testing.T) {
+	s, _ := New(t.TempDir())
+	now := time.Date(2026, 8, 26, 9, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return now }
+	p := testPolicy(now)
+	older, _ := s.Create("repo", "source", "older-same-time", testSignal(now), p, []string{"responder"})
+	_, _ = s.ReviewOutcome(older.ID, "owner", OutcomeReviewInput{RequestID: "z-pause", Classification: "actionable", RoutingAction: "pause", Rationale: "pause"}, true)
+	newer, _ := s.Create("repo", "source", "newer-same-time", testSignal(now.Add(time.Nanosecond)), p, []string{"responder"})
+	resumed, err := s.ReviewOutcome(newer.ID, "owner", OutcomeReviewInput{RequestID: "a-resume", Classification: "actionable", RoutingAction: "resume", Rationale: "resume"}, true)
+	if err != nil || resumed.OutcomeReviews[0].Sequence != 2 {
+		t.Fatalf("resume=%#v err=%v", resumed, err)
+	}
+	if got := s.RoutingDirective("repo", older.RuleID); got != "" {
+		t.Fatalf("same-time resume lost: %q", got)
+	}
+}
+
+func TestRoutingDirectiveBackfillsLegacyTieByPersistedOrder(t *testing.T) {
+	s, _ := New(t.TempDir())
+	now := time.Date(2026, 8, 26, 9, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return now }
+	p := testPolicy(now)
+	pause, _ := s.Create("repo", "source", "legacy-pause", testSignal(now), p, []string{"responder"})
+	_, _ = s.ReviewOutcome(pause.ID, "owner", OutcomeReviewInput{RequestID: "pause", Classification: "actionable", RoutingAction: "pause", Rationale: "pause"}, true)
+	resume, _ := s.Create("repo", "source", "legacy-resume", testSignal(now.Add(time.Nanosecond)), p, []string{"responder"})
+	_, _ = s.ReviewOutcome(resume.ID, "owner", OutcomeReviewInput{RequestID: "resume", Classification: "actionable", RoutingAction: "resume", Rationale: "resume"}, true)
+	pause, _ = s.read(pause.ID)
+	resume, _ = s.read(resume.ID)
+	pause.OutcomeReviews[0].Sequence, resume.OutcomeReviews[0].Sequence = 0, 0
+	pause.OutcomeReviews[0].CreatedAt, resume.OutcomeReviews[0].CreatedAt = now, now
+	if err := s.write(pause); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(time.Millisecond)
+	if err := s.write(resume); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.RoutingDirective("repo", pause.RuleID); got != "" {
+		t.Fatalf("legacy persisted resume lost: %q", got)
+	}
+	migrated, _ := s.read(resume.ID)
+	if migrated.OutcomeReviews[0].Sequence != 2 {
+		t.Fatalf("legacy sequence was not persisted: %#v", migrated.OutcomeReviews)
+	}
+}
+
+func TestOutcomeReviewPrecedesRetryStableWorkLink(t *testing.T) {
+	s, _ := New(t.TempDir())
+	now := time.Now().UTC()
+	s.now = func() time.Time { return now }
+	alert, _ := s.Create("repo", "source", "signal", testSignal(now), testPolicy(now), []string{"responder"})
+	in := OutcomeReviewInput{RequestID: "review", Classification: "actionable", Rationale: "follow up"}
+	if _, err := s.ReviewOutcome(alert.ID, "owner", in, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.LinkOutcomeWork(alert.ID, "owner", "review", "proposal", "task"); err != nil {
+		t.Fatal(err)
+	}
+	retry, err := s.LinkOutcomeWork(alert.ID, "owner", "review", "proposal", "task")
+	if err != nil || retry.OutcomeReviews[0].ProposalID != "proposal" {
+		t.Fatalf("retry=%#v err=%v", retry, err)
+	}
+	changed := in
+	changed.Rationale = "changed"
+	if _, err = s.ReviewOutcome(alert.ID, "owner", changed, true); err != ErrConflict {
+		t.Fatalf("changed identity err=%v", err)
+	}
+	values, _ := s.List("repo")
+	if len(values[0].OutcomeReviews) != 1 {
+		t.Fatal("conflict created another review")
+	}
+}

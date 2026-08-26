@@ -227,6 +227,26 @@ func TestCorrectiveWorkPublishesAtomicallyAndDeduplicatesRetry(t *testing.T) {
 	}
 }
 
+func TestResponseAlertCorrectiveWorkRetainsAgentBoundary(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := CorrectiveWorkInput{ResponseAlertID: strings.Repeat("a", 32), OperationID: strings.Repeat("b", 32), RepositoryID: strings.Repeat("c", 32), ActorID: strings.Repeat("d", 32), ProposalTitle: "Repair noisy routing", ProposalBody: "Review the exact signal under ordinary controls.", TaskTitle: "Audit signal", Outcome: "Demonstrate useful routing without expanding access.", AssigneeID: strings.Repeat("e", 32), AssigneeType: "agent", BaseRevision: strings.Repeat("f", 40), DueAt: time.Now().UTC().Add(24 * time.Hour).Truncate(time.Second)}
+	proposal, task, err := store.CreateCorrectiveWork(input)
+	if err != nil || proposal.ID == "" || task.Assignment == nil || task.Assignment.AssigneeType != "agent" || task.Assignment.Access.Branch != "no new access; existing collaborator authority only" {
+		t.Fatalf("proposal=%#v task=%#v err=%v", proposal, task, err)
+	}
+	retryProposal, retryTask, err := store.CreateCorrectiveWork(input)
+	if err != nil || retryProposal.ID != proposal.ID || retryTask.ID != task.ID {
+		t.Fatalf("retry=%#v %#v %v", retryProposal, retryTask, err)
+	}
+	foundProposal, foundTask, err := store.FindResponseCorrectiveWork(input.ResponseAlertID, input.OperationID)
+	if err != nil || foundProposal.ID != proposal.ID || foundTask.ID != task.ID {
+		t.Fatalf("find=%#v %#v %v", foundProposal, foundTask, err)
+	}
+}
+
 func TestConcurrentCommentsAreNotLostAcrossStores(t *testing.T) {
 	root := t.TempDir()
 	first, _ := New(root)
