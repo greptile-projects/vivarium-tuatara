@@ -3,6 +3,19 @@
 Notes on how this project fits together. Mostly empty for now — things get
 written down here as they're decided, not before.
 
+## Operational runbooks
+
+`GET|POST /repositories/{id}/runbooks` and
+`POST /repositories/{id}/runbooks/{runbook_id}/revisions` expose immutable,
+caller-stable operational procedures. A complete revision binds a service,
+environment, dependency, or signal to explicit preconditions, ordered diagnostic,
+action, decision, and communication steps, evidence, rollback, owners, skills,
+escalations, policy references, and reviewed command, workflow, documentation, or
+approved-agent revisions. Reads preserve history and preview inspection/change
+authority while retaining attributable safety, ownership, access, secret, review,
+agent-approval, and policy gaps. The record coordinates response and grants none of
+the referenced operational authority.
+
 ## Versioned urgent-response coverage
 
 Repository readers inspect immutable response policies through
