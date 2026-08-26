@@ -51,6 +51,23 @@ func TestRunbookAPI(t *testing.T) {
 	if len(result.Runbooks) != 1 {
 		t.Fatalf("list=%+v", result)
 	}
+	now := time.Now().UTC()
+	context := runbooks.ExecutionContext{OriginKind: "manual_observation", OriginID: "observation-1", OriginRevision: "v1", Summary: "checkout unavailable", AffectedResources: []string{"checkout"}, WindowFrom: now, WindowTo: now, Evidence: []runbooks.ExecutionEvidence{{Kind: "observation", ResourceID: "checkout", Revision: "v1", Digest: "sha256:evidence", Summary: "bounded evidence"}}}
+	launch, _ := json.Marshal(map[string]any{"request_id": "client-assertions", "runbook_version": 1, "context": context, "preconditions": []runbooks.Preconditions{{Condition: "signal confirmed", Status: "met", EvidenceDigest: "sha256:evidence"}}, "current_access": []string{"service:read"}})
+	launchResp := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/runbooks/"+created.ID+"/executions", string(launch), owner.Credential.Token, http.StatusCreated)
+	var execution runbooks.Execution
+	_ = json.NewDecoder(launchResp.Body).Decode(&execution)
+	launchResp.Body.Close()
+	if execution.Status != "blocked" || len(execution.CurrentAccess) != 0 || len(execution.Preconditions) != 0 {
+		t.Fatalf("client assertions established readiness: %+v", execution)
+	}
+	kinds := map[string]bool{}
+	for _, blocker := range execution.Blockers {
+		kinds[blocker.Kind] = true
+	}
+	if !kinds["precondition_not_met"] || !kinds["access_unavailable"] {
+		t.Fatalf("blockers=%+v", execution.Blockers)
+	}
 }
 
 func TestRunbookAgentGrantRequiresCurrentUndeniedRepositoryAuthority(t *testing.T) {

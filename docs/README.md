@@ -27,6 +27,24 @@ excluded. A successor runbook, changed scoped service/dependency revision, moved
 or expired frozen credential marks only the affected proof stale; failed and historical
 evidence remains visible and never becomes live operational authority.
 
+`POST /repositories/{id}/runbook-recommendations` evaluates bounded live context from an
+alert, incident, deployment, failed workflow, service objective, support thread, or manual
+observation against current runbook scopes. Results explain resource, signal, or environment
+matches, expose unsafe or unverified revisions, and mark equal top matches as requiring a
+human choice. Matching does not create an execution.
+
+`POST /repositories/{id}/runbooks/{runbook_id}/executions` caller-stably freezes the selected
+immutable revision, exact origin revision, affected resources, signal window, releases,
+environment snapshot, digest-addressed permitted evidence, source timeline references, and
+audience controls. Caller-reported precondition and access values do not establish readiness;
+without an authoritative verification adapter they are discarded and projected as explicit
+blockers. The record is `ready` only when the exact revision has current passing rehearsal
+evidence and trusted precondition/access verification; otherwise it is `blocked`. Duplicate
+ready origin/revision launches conflict, while unchanged retries reconcile and corrected
+attempts retain earlier blocked records as audit history. Repository
+participants can list the retained records through `GET /repositories/{id}/runbook-executions`.
+The record coordinates procedure and grants no access or operational authority.
+
 ## Versioned urgent-response coverage
 
 Repository readers inspect immutable response policies through

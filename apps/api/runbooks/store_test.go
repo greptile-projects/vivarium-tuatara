@@ -36,6 +36,67 @@ func TestRehearsalRetainsBoundedEvidenceAndBecomesStale(t *testing.T) {
 	}
 }
 
+func TestRecommendAndStartExecutionRetainExactContextAndSafetyChoices(t *testing.T) {
+	s, _ := New(t.TempDir())
+	created, err := s.Create("repo", "owner", "create", validRevision("owner"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	scenario := Scenario{ID: "live-shape", Name: "Degraded checkout", Failure: "latency", Inputs: []RehearsalInput{{Kind: "service", ResourceID: "checkout", Revision: "v1", EvidenceKind: "synthetic", Digest: "sha256:input"}}, Steps: []StepOutcome{{StepID: "inspect", Output: "bounded output", StartedAt: now, FinishedAt: now, Artifacts: []Artifact{}, CostCents: 0, Permissions: []string{"service:read"}, Outcome: "passed", DestructiveHandling: "not_applicable"}}, AchievedOutcome: "achieved"}
+	if _, err = s.Rehearse(created.ID, "human", "owner", "rehearse", 1, "isolated", "sandbox", "", []Scenario{scenario}); err != nil {
+		t.Fatal(err)
+	}
+	context := ExecutionContext{OriginKind: "alert", OriginID: "alert-1", OriginRevision: "alert-v3", Summary: "checkout latency", AffectedResources: []string{"checkout"}, SignalClass: "reliability", WindowFrom: now.Add(-time.Minute), WindowTo: now, ReleaseIDs: []string{"release-7"}, EnvironmentID: "production", EnvironmentRevision: "snapshot-2", Evidence: []ExecutionEvidence{{Kind: "metric", ResourceID: "checkout", Revision: "metric-v1", Digest: "sha256:evidence", Summary: "bounded latency evidence"}}, TimelineRefs: []string{"alert-1:event-3"}, AudienceIDs: []string{"owner"}}
+	recommendations, err := s.Recommend("repo", context)
+	if err != nil || len(recommendations) != 1 || !recommendations[0].Eligible || recommendations[0].Score != 100 {
+		t.Fatalf("recommendations=%+v err=%v", recommendations, err)
+	}
+	execution, err := s.StartExecution(created.ID, "owner", "launch", 1, context, []Preconditions{{Condition: "Confirm signal", Status: "met", EvidenceDigest: "sha256:evidence"}}, []string{"service:read"})
+	if err != nil || execution.Status != "ready" || execution.Context.OriginRevision != "alert-v3" || len(execution.Blockers) != 0 {
+		t.Fatalf("execution=%+v err=%v", execution, err)
+	}
+	retry, err := s.StartExecution(created.ID, "owner", "launch", 1, context, []Preconditions{{Condition: "Confirm signal", Status: "met", EvidenceDigest: "sha256:evidence"}}, []string{"service:read"})
+	if err != nil || retry.ID != execution.ID {
+		t.Fatalf("retry=%+v err=%v", retry, err)
+	}
+	if _, err = s.StartExecution(created.ID, "owner", "duplicate", 1, context, []Preconditions{{Condition: "Confirm signal", Status: "met"}}, []string{"service:read"}); err != ErrConflict {
+		t.Fatalf("duplicate err=%v", err)
+	}
+}
+
+func TestExecutionRetainsExplicitBlockersInsteadOfStartingUnsafeWork(t *testing.T) {
+	s, _ := New(t.TempDir())
+	created, _ := s.Create("repo", "owner", "create", validRevision("owner"))
+	now := time.Now().UTC()
+	context := ExecutionContext{OriginKind: "manual_observation", OriginID: "observation-1", OriginRevision: "v1", Summary: "checkout failure", AffectedResources: []string{"checkout"}, WindowFrom: now, WindowTo: now, Evidence: []ExecutionEvidence{{Kind: "observation", ResourceID: "checkout", Revision: "v1", Digest: "sha256:x", Summary: "sanitized"}}}
+	execution, err := s.StartExecution(created.ID, "owner", "launch", 1, context, []Preconditions{{Condition: "Confirm signal", Status: "unknown"}}, nil)
+	if err != nil || execution.Status != "blocked" {
+		t.Fatalf("execution=%+v err=%v", execution, err)
+	}
+	kinds := map[string]bool{}
+	for _, blocker := range execution.Blockers {
+		kinds[blocker.Kind] = true
+	}
+	if !kinds["unverified_procedure"] || !kinds["precondition_not_met"] || !kinds["access_unavailable"] {
+		t.Fatalf("blockers=%+v", execution.Blockers)
+	}
+	// A new caller-stable attempt may preserve the blocked audit record and
+	// re-evaluate corrected conditions instead of treating the block as active.
+	scenario := Scenario{ID: "corrected", Name: "Corrected", Failure: "checkout failure", Inputs: []RehearsalInput{{Kind: "service", ResourceID: "checkout", Revision: "v1", EvidenceKind: "synthetic", Digest: "sha256:x"}}, Steps: []StepOutcome{{StepID: "inspect", Output: "bounded", StartedAt: now, FinishedAt: now, Permissions: []string{"service:read"}, Outcome: "passed", DestructiveHandling: "not_applicable"}}, AchievedOutcome: "achieved"}
+	if _, err = s.Rehearse(created.ID, "human", "owner", "rehearse", 1, "isolated", "sandbox", "", []Scenario{scenario}); err != nil {
+		t.Fatal(err)
+	}
+	corrected, err := s.StartExecution(created.ID, "owner", "corrected-launch", 1, context, []Preconditions{{Condition: "Confirm signal", Status: "met", EvidenceDigest: "sha256:x"}}, []string{"service:read"})
+	if err != nil || corrected.Status != "ready" || corrected.ID == execution.ID {
+		t.Fatalf("corrected=%+v err=%v", corrected, err)
+	}
+	retained, _ := s.Get(created.ID)
+	if len(retained.Executions) != 2 || retained.Executions[0].Status != "blocked" {
+		t.Fatalf("retained executions=%+v", retained.Executions)
+	}
+}
+
 func TestRehearsalRejectsUnsafeChangingStepAndSecretOutput(t *testing.T) {
 	s, _ := New(t.TempDir())
 	r := validRevision("owner")

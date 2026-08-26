@@ -164,6 +164,62 @@ type Diagnostic struct {
 	ResourceID   string `json:"resource_id,omitempty"`
 	AttributedTo string `json:"attributed_to"`
 }
+type ExecutionEvidence struct {
+	Kind       string `json:"kind"`
+	ResourceID string `json:"resource_id"`
+	Revision   string `json:"revision"`
+	Digest     string `json:"digest"`
+	Summary    string `json:"summary"`
+}
+type ExecutionContext struct {
+	OriginKind          string              `json:"origin_kind"`
+	OriginID            string              `json:"origin_id"`
+	OriginRevision      string              `json:"origin_revision"`
+	Summary             string              `json:"summary"`
+	AffectedResources   []string            `json:"affected_resources"`
+	SignalClass         string              `json:"signal_class,omitempty"`
+	WindowFrom          time.Time           `json:"window_from"`
+	WindowTo            time.Time           `json:"window_to"`
+	ReleaseIDs          []string            `json:"release_ids"`
+	EnvironmentID       string              `json:"environment_id"`
+	EnvironmentRevision string              `json:"environment_revision"`
+	Evidence            []ExecutionEvidence `json:"evidence"`
+	TimelineRefs        []string            `json:"timeline_refs"`
+	AudienceIDs         []string            `json:"audience_ids"`
+}
+type Preconditions struct {
+	Condition      string `json:"condition"`
+	Status         string `json:"status"`
+	EvidenceDigest string `json:"evidence_digest,omitempty"`
+}
+type ExecutionBlocker struct {
+	Kind    string `json:"kind"`
+	Message string `json:"message"`
+}
+type Execution struct {
+	ID             string             `json:"id"`
+	RequestID      string             `json:"request_id"`
+	RequestDigest  string             `json:"request_digest"`
+	RunbookID      string             `json:"runbook_id"`
+	RunbookVersion int                `json:"runbook_version"`
+	Context        ExecutionContext   `json:"context"`
+	Preconditions  []Preconditions    `json:"preconditions"`
+	CurrentAccess  []string           `json:"current_access"`
+	Blockers       []ExecutionBlocker `json:"blockers"`
+	Status         string             `json:"status"`
+	StartedBy      string             `json:"started_by"`
+	CreatedAt      time.Time          `json:"created_at"`
+}
+type Recommendation struct {
+	RunbookID      string             `json:"runbook_id"`
+	RunbookVersion int                `json:"runbook_version"`
+	Title          string             `json:"title"`
+	Eligible       bool               `json:"eligible"`
+	Score          int                `json:"score"`
+	Reasons        []string           `json:"reasons"`
+	Blockers       []ExecutionBlocker `json:"blockers"`
+	ChoiceRequired bool               `json:"choice_required"`
+}
 type Runbook struct {
 	ID             string       `json:"id"`
 	RepositoryID   string       `json:"repository_id"`
@@ -175,6 +231,196 @@ type Runbook struct {
 	CreatedAt      time.Time    `json:"created_at"`
 	UpdatedAt      time.Time    `json:"updated_at"`
 	Rehearsals     []Rehearsal  `json:"rehearsals"`
+	Executions     []Execution  `json:"executions"`
+}
+
+func (s *Store) Recommend(repo string, context ExecutionContext) ([]Recommendation, error) {
+	if !validExecutionContext(context) {
+		return nil, ErrInvalid
+	}
+	books, err := s.List(repo)
+	if err != nil {
+		return nil, err
+	}
+	out := []Recommendation{}
+	for _, book := range books {
+		r := book.Revisions[book.CurrentVersion-1]
+		score := 0
+		reasons := []string{}
+		for _, resource := range context.AffectedResources {
+			if resource == r.Scope.ResourceID {
+				score += 100
+				reasons = append(reasons, "affected resource matches runbook scope")
+			}
+		}
+		if r.Scope.Kind == "signal" && (r.Scope.ResourceID == context.SignalClass || r.Scope.Name == context.SignalClass) {
+			score += 80
+			reasons = append(reasons, "signal class matches runbook scope")
+		}
+		if r.Scope.Kind == "environment" && r.Scope.ResourceID == context.EnvironmentID {
+			score += 90
+			reasons = append(reasons, "environment matches runbook scope")
+		}
+		if score == 0 {
+			continue
+		}
+		blockers := executionSafetyBlockers(book, r, nil, nil)
+		eligibleBlockers := blockers[:0]
+		for _, blocker := range blockers {
+			if blocker.Kind != "precondition_not_met" && blocker.Kind != "access_unavailable" {
+				eligibleBlockers = append(eligibleBlockers, blocker)
+			}
+		}
+		blockers = eligibleBlockers
+		out = append(out, Recommendation{RunbookID: book.ID, RunbookVersion: book.CurrentVersion, Title: r.Title, Eligible: len(blockers) == 0, Score: score, Reasons: reasons, Blockers: blockers})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Score == out[j].Score {
+			return out[i].Title < out[j].Title
+		}
+		return out[i].Score > out[j].Score
+	})
+	if len(out) > 1 && out[0].Score == out[1].Score {
+		for i := range out {
+			if out[i].Score == out[0].Score {
+				out[i].ChoiceRequired = true
+				out[i].Blockers = append(out[i].Blockers, ExecutionBlocker{Kind: "ambiguous_match", Message: "Multiple runbooks match equally; a responder must choose explicitly."})
+			}
+		}
+	}
+	return out, nil
+}
+
+func (s *Store) StartExecution(id, actor, request string, version int, context ExecutionContext, preconditions []Preconditions, access []string) (Execution, error) {
+	var out Execution
+	err := s.lock(func() error {
+		book, err := s.read(id)
+		if err != nil {
+			return err
+		}
+		candidate := Execution{RunbookID: id, RunbookVersion: version, Context: context, Preconditions: preconditions, CurrentAccess: uniqueStrings(access)}
+		d := executionDigest(candidate)
+		for _, old := range book.Executions {
+			if old.RequestID == request {
+				if old.RequestDigest != d || old.StartedBy != actor {
+					return ErrConflict
+				}
+				out = old
+				return nil
+			}
+		}
+		if request == "" || version < 1 || version > book.CurrentVersion || !validExecutionContext(context) {
+			return ErrInvalid
+		}
+		for _, old := range book.Executions {
+			if old.Status == "ready" && old.Context.OriginKind == context.OriginKind && old.Context.OriginID == context.OriginID && old.RunbookVersion == version {
+				return ErrConflict
+			}
+		}
+		r := book.Revisions[version-1]
+		blockers := executionSafetyBlockers(project(book), r, preconditions, access)
+		now := s.now()
+		candidate.ID = stableID(id, actor, request)
+		candidate.RequestID = request
+		candidate.RequestDigest = d
+		candidate.StartedBy = actor
+		candidate.CreatedAt = now
+		candidate.Blockers = blockers
+		candidate.Status = "ready"
+		if len(blockers) > 0 {
+			candidate.Status = "blocked"
+		}
+		book.Executions = append(book.Executions, candidate)
+		book.UpdatedAt = now
+		out = candidate
+		return s.write(book)
+	})
+	return out, err
+}
+
+func validExecutionContext(c ExecutionContext) bool {
+	kinds := map[string]bool{"alert": true, "incident": true, "deployment": true, "failed_workflow": true, "service_objective": true, "support_thread": true, "manual_observation": true}
+	if !kinds[c.OriginKind] || c.OriginID == "" || c.OriginRevision == "" || c.Summary == "" || len(c.Summary) > 4000 || len(c.AffectedResources) == 0 || c.WindowFrom.IsZero() || c.WindowTo.Before(c.WindowFrom) || len(c.Evidence) > 20 || secretPattern.MatchString(string(mustJSON(c))) {
+		return false
+	}
+	for _, e := range c.Evidence {
+		if e.Kind == "" || e.ResourceID == "" || e.Revision == "" || e.Digest == "" || e.Summary == "" || len(e.Summary) > 2000 {
+			return false
+		}
+	}
+	return true
+}
+func executionSafetyBlockers(book Runbook, r Revision, checks []Preconditions, access []string) []ExecutionBlocker {
+	out := []ExecutionBlocker{}
+	if r.Version != book.CurrentVersion {
+		out = append(out, ExecutionBlocker{Kind: "stale_runbook", Message: "A newer runbook revision exists; choose whether to use the retained revision."})
+	}
+	for _, d := range book.Diagnostics {
+		if d.Severity == "blocking" {
+			out = append(out, ExecutionBlocker{Kind: d.Kind, Message: d.Message})
+		}
+	}
+	passing := false
+	for _, rehearsal := range book.Rehearsals {
+		if rehearsal.RunbookVersion == r.Version && rehearsal.Status == "passed" && !rehearsal.Stale {
+			passing = true
+		}
+	}
+	if !passing {
+		out = append(out, ExecutionBlocker{Kind: "unverified_procedure", Message: "This exact runbook revision has no current passing rehearsal."})
+	}
+	states := map[string]Preconditions{}
+	for _, c := range checks {
+		if c.Condition == "" || (c.Status != "met" && c.Status != "unmet" && c.Status != "unknown") {
+			out = append(out, ExecutionBlocker{Kind: "invalid_precondition_decision", Message: "Precondition decisions must be met, unmet, or unknown."})
+		}
+		if _, exists := states[c.Condition]; exists {
+			out = append(out, ExecutionBlocker{Kind: "invalid_precondition_decision", Message: "Each precondition must have one explicit current decision."})
+		}
+		states[c.Condition] = c
+	}
+	for _, required := range r.Preconditions {
+		c, ok := states[required]
+		if !ok || c.Status != "met" {
+			out = append(out, ExecutionBlocker{Kind: "precondition_not_met", Message: "Precondition requires an explicit current decision: " + required})
+		}
+	}
+	granted := map[string]bool{}
+	for _, a := range access {
+		granted[a] = true
+	}
+	for _, step := range r.Steps {
+		for _, required := range step.Authority.RequiredAccess {
+			if !granted[required] {
+				out = append(out, ExecutionBlocker{Kind: "access_unavailable", Message: "Current access is unavailable for " + required + "."})
+			}
+		}
+	}
+	return uniqueBlockers(out)
+}
+func uniqueBlockers(xs []ExecutionBlocker) []ExecutionBlocker {
+	seen := map[string]bool{}
+	out := []ExecutionBlocker{}
+	for _, x := range xs {
+		k := x.Kind + "\x00" + x.Message
+		if !seen[k] {
+			seen[k] = true
+			out = append(out, x)
+		}
+	}
+	return out
+}
+func executionDigest(v Execution) string {
+	v.ID = ""
+	v.RequestID = ""
+	v.RequestDigest = ""
+	v.Blockers = nil
+	v.Status = ""
+	v.StartedBy = ""
+	v.CreatedAt = time.Time{}
+	b, _ := json.Marshal(v)
+	h := sha256.Sum256(b)
+	return hex.EncodeToString(h[:])
 }
 
 func (s *Store) Rehearse(id, actorType, actorID, request string, version int, environmentKind, environmentID, policyApproval string, scenarios []Scenario) (Runbook, error) {
