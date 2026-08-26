@@ -34,6 +34,7 @@ type runbookExecutionInput struct {
 	Preconditions  []runbooks.Preconditions  `json:"preconditions"`
 	CurrentAccess  []string                  `json:"current_access"`
 }
+type runbookExecutionActionInput = runbooks.ExecutionAction
 
 func registerRunbookRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, store *runbooks.Store, workflows *workflowcomponents.Store, orgs *organizations.Store) {
 	mux.HandleFunc("POST /repositories/{id}/runbook-recommendations", func(w http.ResponseWriter, r *http.Request) {
@@ -70,6 +71,86 @@ func registerRunbookRoutes(mux *http.ServeMux, git *storage.Store, catalog *repo
 			executions = append(executions, book.Executions...)
 		}
 		writeJSON(w, 200, map[string]any{"executions": executions})
+	})
+	mux.HandleFunc("GET /repositories/{id}/runbook-executions/{execution_id}", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:read"); !ok {
+			return
+		}
+		books, err := store.List(r.PathValue("id"))
+		if err == nil {
+			for _, book := range books {
+				for _, execution := range book.Executions {
+					if execution.ID == r.PathValue("execution_id") {
+						writeJSON(w, 200, execution)
+						return
+					}
+				}
+			}
+		}
+		writeAPIError(w, 404, "runbook_execution_not_found", "runbook execution not found")
+	})
+	mux.HandleFunc("POST /repositories/{id}/runbook-executions/{execution_id}/actions", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:read")
+		if !ok {
+			return
+		}
+		var in runbookExecutionActionInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_runbook_action", "a caller-stable version-bound action is required")
+			return
+		}
+		books, err := store.List(r.PathValue("id"))
+		var bookID string
+		for _, book := range books {
+			for _, execution := range book.Executions {
+				if execution.ID == r.PathValue("execution_id") {
+					bookID = book.ID
+				}
+			}
+		}
+		if bookID == "" {
+			writeAPIError(w, 404, "runbook_execution_not_found", "runbook execution not found")
+			return
+		}
+		actorType, actorID := "human", actor.UserID
+		if actor.AgentID != "" {
+			actorType, actorID = "agent", actor.AgentID
+		}
+		persist := func() error {
+			var e error
+			_, e = store.Act(bookID, r.PathValue("execution_id"), actorType, actorID, in)
+			return e
+		}
+		if actorType == "agent" {
+			if orgs == nil {
+				err = organizations.ErrNotFound
+			} else {
+				err = orgs.WithCurrentAgentGrant(actor.OrganizationID, actor.AccessGrantID, actor.AgentID, r.PathValue("id"), persist)
+			}
+		} else {
+			err = catalog.WithCurrentParticipant(actor.UserID, r.PathValue("id"), persist)
+		}
+		if err == nil {
+			books, _ = store.List(r.PathValue("id"))
+			for _, book := range books {
+				for _, execution := range book.Executions {
+					if execution.ID == r.PathValue("execution_id") {
+						writeJSON(w, 201, execution)
+						return
+					}
+				}
+			}
+		}
+		switch {
+		case errors.Is(err, runbooks.ErrNotFound):
+			writeAPIError(w, 404, "runbook_execution_not_found", "runbook execution not found")
+		case errors.Is(err, runbooks.ErrConflict):
+			writeAPIError(w, 409, "runbook_action_conflict", "the execution moved, the retry changed, or the actor lacks exact control/delegation")
+		case errors.Is(err, runbooks.ErrInvalid):
+			writeAPIError(w, 400, "invalid_runbook_action", "the action, step, target, cost, or optional-step policy is invalid")
+		default:
+			writeAPIError(w, 403, "runbook_action_forbidden", "current participation or an exact current agent grant is required")
+		}
 	})
 	mux.HandleFunc("GET /repositories/{id}/runbooks", func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id")); !ok {

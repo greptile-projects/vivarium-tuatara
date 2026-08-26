@@ -97,6 +97,66 @@ func TestExecutionRetainsExplicitBlockersInsteadOfStartingUnsafeWork(t *testing.
 	}
 }
 
+func TestExecutionActionsAreVersionBoundDelegatedAndReceipted(t *testing.T) {
+	s, _ := New(t.TempDir())
+	r := validRevision("owner")
+	r.Steps[0].Authority.HumanApprovalRequired = true
+	created, _ := s.Create("repo", "owner", "create", r)
+	now := time.Now().UTC()
+	context := ExecutionContext{OriginKind: "alert", OriginID: "alert-actions", OriginRevision: "v1", Summary: "checkout failure", AffectedResources: []string{"checkout"}, WindowFrom: now, WindowTo: now, Evidence: []ExecutionEvidence{{Kind: "metric", ResourceID: "checkout", Revision: "v1", Digest: "sha256:x", Summary: "sanitized"}}}
+	execution, err := s.StartExecution(created.ID, "owner", "launch", 1, context, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Blocked launch context cannot be converted into operational authority.
+	if _, err = s.Act(created.ID, execution.ID, "human", "owner", ExecutionAction{RequestID: "unsafe", ExpectedVersion: execution.Version, Action: "perform", StepID: "inspect"}); err != ErrConflict {
+		t.Fatalf("blocked perform err=%v", err)
+	}
+	joined, err := s.Act(created.ID, execution.ID, "human", "reviewer", ExecutionAction{RequestID: "join", ExpectedVersion: execution.Version, Action: "join"})
+	if err != nil || len(joined.Receipts) != 1 || joined.Version != 2 {
+		t.Fatalf("joined=%+v err=%v", joined, err)
+	}
+	retry, err := s.Act(created.ID, execution.ID, "human", "reviewer", ExecutionAction{RequestID: "join", ExpectedVersion: execution.Version, Action: "join"})
+	if err != nil || retry.Version != joined.Version || len(retry.Receipts) != 1 {
+		t.Fatalf("retry=%+v err=%v", retry, err)
+	}
+	if _, err = s.Act(created.ID, execution.ID, "human", "reviewer", ExecutionAction{RequestID: "stale", ExpectedVersion: 1, Action: "discuss", Message: "observation"}); err != ErrConflict {
+		t.Fatalf("stale err=%v", err)
+	}
+}
+
+func TestReadyExecutionRequiresSeparateApprovalAndExactAgentDelegation(t *testing.T) {
+	s, _ := New(t.TempDir())
+	r := validRevision("owner")
+	r.Steps[0].Authority.HumanApprovalRequired = true
+	created, _ := s.Create("repo", "owner", "create", r)
+	now := time.Now().UTC()
+	scenario := Scenario{ID: "case", Name: "case", Failure: "failure", Inputs: []RehearsalInput{{Kind: "service", ResourceID: "checkout", Revision: "v1", EvidenceKind: "synthetic", Digest: "sha256:i"}}, Steps: []StepOutcome{{StepID: "inspect", Output: "ok", StartedAt: now, FinishedAt: now, Permissions: []string{"service:read"}, Outcome: "passed", DestructiveHandling: "not_applicable"}}, AchievedOutcome: "achieved"}
+	if _, err := s.Rehearse(created.ID, "human", "owner", "rehearse", 1, "isolated", "box", "", []Scenario{scenario}); err != nil {
+		t.Fatal(err)
+	}
+	context := ExecutionContext{OriginKind: "alert", OriginID: "alert-ready", OriginRevision: "v1", Summary: "failure", AffectedResources: []string{"checkout"}, WindowFrom: now, WindowTo: now, Evidence: []ExecutionEvidence{{Kind: "metric", ResourceID: "checkout", Revision: "v1", Digest: "sha256:x", Summary: "safe"}}}
+	execution, err := s.StartExecution(created.ID, "owner", "launch", 1, context, []Preconditions{{Condition: "Confirm signal", Status: "met"}}, []string{"service:read"})
+	if err != nil || execution.Status != "ready" {
+		t.Fatalf("execution=%+v err=%v", execution, err)
+	}
+	delegated, err := s.Act(created.ID, execution.ID, "human", "owner", ExecutionAction{RequestID: "delegate", ExpectedVersion: 1, Action: "delegate", StepID: "inspect", TargetID: "agent-1", DelegatedActions: []string{"analyze", "perform"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Act(created.ID, execution.ID, "agent", "agent-2", ExecutionAction{RequestID: "wrong-agent", ExpectedVersion: 2, Action: "analyze", StepID: "inspect"}); err != ErrConflict {
+		t.Fatalf("wrong agent err=%v", err)
+	}
+	approved, err := s.Act(created.ID, execution.ID, "human", "reviewer", ExecutionAction{RequestID: "approve", ExpectedVersion: delegated.Version, Action: "approve", StepID: "inspect", Message: "evidence supports bounded action"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	completed, err := s.Act(created.ID, execution.ID, "agent", "agent-1", ExecutionAction{RequestID: "perform", ExpectedVersion: approved.Version, Action: "perform", StepID: "inspect", Evidence: []ExecutionEvidence{{Kind: "result", ResourceID: "checkout", Revision: "v1", Digest: "sha256:result", Summary: "healthy"}}, CostCents: 7})
+	if err != nil || completed.Status != "completed" || completed.CostCents != 7 || len(completed.Receipts) != 3 {
+		t.Fatalf("completed=%+v err=%v", completed, err)
+	}
+}
+
 func TestRehearsalRejectsUnsafeChangingStepAndSecretOutput(t *testing.T) {
 	s, _ := New(t.TempDir())
 	r := validRevision("owner")

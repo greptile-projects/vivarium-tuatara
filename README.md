@@ -88,6 +88,11 @@ trusted precondition decisions, and current access. Caller assertions cannot est
 readiness; ambiguity, staleness, duplicate ready launches, unverified procedures, and
 unavailable authority remain visible rather than starting work, while corrected attempts
 preserve earlier blocked audit records.
+Ready executions become shared guided-response records in the same workspace. Participants
+can join and discuss while one explicit controller steers exact steps through version-bound,
+caller-stable actions; approvals, evidence, decisions, cost, health, blockers, rollback, and
+predicted next work remain visible as immutable receipts. Human handoff and bounded agent
+delegation preserve separation of duties without granting operational access.
 
 Repository participants and scoped read-only agents can turn an exact objective into
 an immutable, permission-aware capacity model at `/repositories/{id}/capacity-models`.
