@@ -198,7 +198,12 @@ func registerRunbookRoutes(mux *http.ServeMux, git *storage.Store, catalog *repo
 				return
 			}
 		}
-		out, err := store.Assess(book.ID, execution.ID, actor.UserID, in)
+		var out runbooks.Execution
+		err := catalog.WithCurrentParticipant(actor.UserID, book.RepositoryID, func() error {
+			var persistErr error
+			out, persistErr = store.Assess(book.ID, execution.ID, actor.UserID, in)
+			return persistErr
+		})
 		switch {
 		case err == nil:
 			writeJSON(w, 201, out)
@@ -206,6 +211,8 @@ func registerRunbookRoutes(mux *http.ServeMux, git *storage.Store, catalog *repo
 			writeAPIError(w, 409, "runbook_assessment_conflict", "the execution is not terminal, moved, or was already assessed differently")
 		case errors.Is(err, runbooks.ErrInvalid):
 			writeAPIError(w, 400, "invalid_runbook_assessment", "declared criteria, supported findings, deviations, and participant feedback must be complete and evidence-bound")
+		case errors.Is(err, repositories.ErrInvalidCollaborator), errors.Is(err, repositories.ErrNotFound):
+			writeAPIError(w, 403, "runbook_assessment_forbidden", "current repository participation is required through assessment persistence")
 		default:
 			writeAPIError(w, 500, "runbooks_unavailable", "the assessment could not be retained")
 		}
@@ -241,14 +248,46 @@ func registerRunbookRoutes(mux *http.ServeMux, git *storage.Store, catalog *repo
 			writeAPIError(w, 400, "invalid_runbook_improvement", "work must cite one supported retained finding and preserve its change kind")
 			return
 		}
-		p, task, err := proposalStore.CreateCorrectiveWork(proposals.CorrectiveWorkInput{RunbookExecutionID: execution.ID, OperationID: in.RequestID, RepositoryID: book.RepositoryID, ActorID: actor.UserID, ProposalTitle: in.Title, ProposalBody: "Governed " + in.Kind + " improvement from runbook execution " + execution.ID + " and finding " + finding.ID + ". Ordinary review and delivery authority still apply.", TaskTitle: in.Title, Outcome: in.Outcome, AssigneeType: in.AssigneeType, AssigneeID: in.AssigneeID, BaseRevision: in.BaseRevision, DueAt: in.DueAt})
+		var p proposals.Proposal
+		var task proposals.Task
+		var out runbooks.Execution
+		err := catalog.WithCurrentParticipant(actor.UserID, book.RepositoryID, func() error {
+			reserved, reserveErr := store.ReserveImprovement(book.ID, execution.ID, actor.UserID, in.RequestID, in.FindingID, in.Kind)
+			if reserveErr != nil {
+				return reserveErr
+			}
+			for _, retained := range reserved.Assessment.Findings {
+				if retained.ID == in.FindingID && retained.ProposalID != "" {
+					var readErr error
+					p, readErr = proposalStore.Get(book.RepositoryID, retained.ProposalID)
+					if readErr != nil {
+						return readErr
+					}
+					task, readErr = proposalStore.GetTask(book.RepositoryID, retained.ProposalID, retained.TaskID)
+					if readErr != nil {
+						return readErr
+					}
+					out = reserved
+					return nil
+				}
+			}
+			var createErr error
+			p, task, createErr = proposalStore.CreateCorrectiveWork(proposals.CorrectiveWorkInput{RunbookExecutionID: execution.ID, OperationID: in.RequestID, RepositoryID: book.RepositoryID, ActorID: actor.UserID, ProposalTitle: in.Title, ProposalBody: "Governed " + in.Kind + " improvement from runbook execution " + execution.ID + " and finding " + finding.ID + ". Ordinary review and delivery authority still apply.", TaskTitle: in.Title, Outcome: in.Outcome, AssigneeType: in.AssigneeType, AssigneeID: in.AssigneeID, BaseRevision: in.BaseRevision, DueAt: in.DueAt})
+			if createErr != nil {
+				if errors.Is(createErr, proposals.ErrInvalid) {
+					_ = store.ReleaseImprovementReservation(book.ID, execution.ID, actor.UserID, in.RequestID, in.FindingID)
+				}
+				return createErr
+			}
+			out, createErr = store.LinkImprovement(book.ID, execution.ID, actor.UserID, runbooks.ImprovementLink{RequestID: in.RequestID, FindingID: in.FindingID, Kind: in.Kind, ProposalID: p.ID, TaskID: task.ID})
+			return createErr
+		})
 		if err != nil {
-			writeAPIError(w, 409, "runbook_improvement_conflict", "ordinary linked work could not be reconciled")
-			return
-		}
-		out, err := store.LinkImprovement(book.ID, execution.ID, actor.UserID, runbooks.ImprovementLink{RequestID: in.RequestID, FindingID: in.FindingID, Kind: in.Kind, ProposalID: p.ID, TaskID: task.ID})
-		if err != nil {
-			writeAPIError(w, 409, "runbook_improvement_conflict", "the finding changed or is already linked differently")
+			if errors.Is(err, repositories.ErrInvalidCollaborator) || errors.Is(err, repositories.ErrNotFound) {
+				writeAPIError(w, 403, "runbook_improvement_forbidden", "current repository participation is required through corrective-work creation and finding linkage")
+			} else {
+				writeAPIError(w, 409, "runbook_improvement_conflict", "the finding is reserved, changed, already linked, or ordinary work could not be reconciled")
+			}
 			return
 		}
 		writeJSON(w, 201, map[string]any{"execution": out, "proposal": p, "task": task})

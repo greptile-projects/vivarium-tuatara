@@ -249,12 +249,21 @@ type ParticipantFeedback struct {
 	Summary         string `json:"summary"`
 }
 type ExecutionFinding struct {
-	ID              string   `json:"id"`
-	Kind            string   `json:"kind"`
-	Summary         string   `json:"summary"`
-	EvidenceDigests []string `json:"evidence_digests"`
-	ProposalID      string   `json:"proposal_id,omitempty"`
-	TaskID          string   `json:"task_id,omitempty"`
+	ID                     string                  `json:"id"`
+	Kind                   string                  `json:"kind"`
+	Summary                string                  `json:"summary"`
+	EvidenceDigests        []string                `json:"evidence_digests"`
+	ProposalID             string                  `json:"proposal_id,omitempty"`
+	TaskID                 string                  `json:"task_id,omitempty"`
+	ImprovementRequestID   string                  `json:"improvement_request_id,omitempty"`
+	ImprovementActorID     string                  `json:"improvement_actor_id,omitempty"`
+	ImprovementReservation *ImprovementReservation `json:"improvement_reservation,omitempty"`
+}
+type ImprovementReservation struct {
+	RequestID string    `json:"request_id"`
+	ActorID   string    `json:"actor_id"`
+	Kind      string    `json:"kind"`
+	CreatedAt time.Time `json:"created_at"`
 }
 type ExecutionAssessment struct {
 	RequestID             string                `json:"request_id"`
@@ -670,6 +679,10 @@ func (s *Store) Assess(id, executionID, actorID string, in AssessmentInput) (Exe
 		e.PredictedNextAction = "review findings and linked improvement work"
 		e.Version++
 		if in.SuspendCurrentUse {
+			fallback, fallbackErr := s.read(in.FallbackRunbookID)
+			if fallbackErr != nil || !validFallback(project(fallback), book, in) {
+				return ErrInvalid
+			}
 			book.UseStatus, book.SuspensionReason = "suspended", "terminal execution "+executionID+" found repeated failure or unsafe drift"
 			book.FallbackRunbookID, book.FallbackRunbookVersion = in.FallbackRunbookID, in.FallbackRunbookVersion
 		}
@@ -678,6 +691,18 @@ func (s *Store) Assess(id, executionID, actorID string, in AssessmentInput) (Exe
 		return s.write(book)
 	})
 	return out, err
+}
+
+func validFallback(fallback, current Runbook, in AssessmentInput) bool {
+	if fallback.ID == current.ID || fallback.RepositoryID != current.RepositoryID || fallback.CurrentVersion != in.FallbackRunbookVersion || fallback.UseStatus == "suspended" {
+		return false
+	}
+	for _, rehearsal := range fallback.Rehearsals {
+		if rehearsal.RunbookVersion == in.FallbackRunbookVersion && rehearsal.Status == "passed" && !rehearsal.Stale {
+			return true
+		}
+	}
+	return false
 }
 
 func validAssessment(in AssessmentInput, revision Revision, execution Execution) bool {
@@ -783,7 +808,12 @@ func (s *Store) LinkImprovement(id, executionID, actorID string, link Improvemen
 					}
 					return ErrConflict
 				}
+				if f.Kind != link.Kind || f.ImprovementReservation == nil || f.ImprovementReservation.RequestID != link.RequestID || f.ImprovementReservation.ActorID != actorID || f.ImprovementReservation.Kind != link.Kind {
+					return ErrConflict
+				}
 				f.ProposalID, f.TaskID = link.ProposalID, link.TaskID
+				f.ImprovementRequestID, f.ImprovementActorID = link.RequestID, actorID
+				f.ImprovementReservation = nil
 				e.Version++
 				book.UpdatedAt = s.now()
 				out = *e
@@ -794,6 +824,90 @@ func (s *Store) LinkImprovement(id, executionID, actorID string, link Improvemen
 		return ErrNotFound
 	})
 	return out, err
+}
+
+// ReserveImprovement caller-stably claims one finding before ordinary work is
+// created, preventing competing requests from leaving unlinked assigned work.
+func (s *Store) ReserveImprovement(id, executionID, actorID, requestID, findingID, kind string) (Execution, error) {
+	var out Execution
+	if actorID == "" || requestID == "" || findingID == "" || kind == "" {
+		return out, ErrInvalid
+	}
+	err := s.lock(func() error {
+		book, err := s.read(id)
+		if err != nil {
+			return err
+		}
+		for i := range book.Executions {
+			e := &book.Executions[i]
+			if e.ID != executionID {
+				continue
+			}
+			if e.Assessment == nil {
+				return ErrConflict
+			}
+			for n := range e.Assessment.Findings {
+				f := &e.Assessment.Findings[n]
+				if f.ID != findingID {
+					continue
+				}
+				if f.Kind != kind {
+					return ErrConflict
+				}
+				if f.ProposalID != "" {
+					if f.ImprovementRequestID == requestID && f.ImprovementActorID == actorID {
+						out = *e
+						return nil
+					}
+					return ErrConflict
+				}
+				if f.ImprovementReservation != nil {
+					if f.ImprovementReservation.RequestID == requestID && f.ImprovementReservation.ActorID == actorID && f.ImprovementReservation.Kind == kind {
+						out = *e
+						return nil
+					}
+					return ErrConflict
+				}
+				f.ImprovementReservation = &ImprovementReservation{RequestID: requestID, ActorID: actorID, Kind: kind, CreatedAt: s.now()}
+				e.Version++
+				book.UpdatedAt = s.now()
+				out = *e
+				return s.write(book)
+			}
+			return ErrNotFound
+		}
+		return ErrNotFound
+	})
+	return out, err
+}
+
+func (s *Store) ReleaseImprovementReservation(id, executionID, actorID, requestID, findingID string) error {
+	return s.lock(func() error {
+		book, err := s.read(id)
+		if err != nil {
+			return err
+		}
+		for i := range book.Executions {
+			e := &book.Executions[i]
+			if e.ID != executionID || e.Assessment == nil {
+				continue
+			}
+			for n := range e.Assessment.Findings {
+				f := &e.Assessment.Findings[n]
+				if f.ID != findingID {
+					continue
+				}
+				if f.ProposalID != "" || f.ImprovementReservation == nil || f.ImprovementReservation.RequestID != requestID || f.ImprovementReservation.ActorID != actorID {
+					return ErrConflict
+				}
+				f.ImprovementReservation = nil
+				e.Version++
+				book.UpdatedAt = s.now()
+				return s.write(book)
+			}
+		}
+		return ErrNotFound
+	})
 }
 func executionStep(r Revision, id string) (Step, bool) {
 	for _, s := range r.Steps {
