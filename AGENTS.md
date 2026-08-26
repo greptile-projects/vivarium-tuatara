@@ -27,6 +27,19 @@ missing qualifications, overlapping schedules, uncovered intervals, exceeded wor
 missed handoffs as actionable escalation. Duty coordinates response and grants no repository,
 secret, deployment, disclosure, incident, spending, governance, or operational authority.
 
+Revision-bound response alerts at repository `/response-alerts` routes and the Response
+coverage workspace evaluate repository-defined reliability, deployment, security, privacy,
+dependency, workflow, and user-impact signals against exactly one rule in the newest immutable
+response policy. Alerts freeze source revision, evidence provenance and audience, uncertainty,
+affected resources/users, exact policy revision, deadlines, routing attempts, and authority
+boundaries. Stable requests reconcile retries; correlation keys append related events without
+duplicating pages. Active exact-policy rotations narrow delivery to the effective shift owner.
+Suppression, maintenance, stale or inaccessible evidence, policy movement, and delivery failure
+remain visible. Successful delivery creates a stable actionable-inbox item but never
+acknowledges response; only an explicitly routed current participant can acknowledge or resolve.
+Alerts coordinate attention and grant no repository, secret, deployment, disclosure, incident,
+spending, governance, or operational authority.
+
 Collaborative capacity contracts at repository `/capacity-objectives` routes and the
 repository `/capacity` workspace retain immutable complete revisions beneath
 `$CAPACITY_OBJECTIVE_STORAGE_ROOT` (`capacity-objectives`). Current repository

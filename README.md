@@ -50,6 +50,11 @@ The same workspace publishes policy-bound response rotations with time zones, av
 qualifications, backups, workload and absence constraints; responders can acknowledge duty
 and explicitly accept context-preserving swaps, delegations, and overrides. Membership,
 schedule, qualification, workload, and handoff gaps remain actionable without minting access.
+Repository-defined revision-bound signals become correlated alerts at
+`/repositories/{id}/response-alerts`. Exact active-policy routing, duty ownership, permitted
+evidence, uncertainty, user impact, response deadlines, delivery attempts, and explicit human
+acknowledgement are visible in Response coverage and the actionable inbox; suppression,
+maintenance, stale or inaccessible evidence, policy movement, and delivery failure remain gaps.
 
 Repository participants and scoped read-only agents can turn an exact objective into
 an immutable, permission-aware capacity model at `/repositories/{id}/capacity-models`.

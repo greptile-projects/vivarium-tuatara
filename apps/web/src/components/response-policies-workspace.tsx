@@ -96,6 +96,13 @@ type Rotation = {
   diagnostics: Array<{ kind: string; severity: string; message: string; shift_id?: string; user_id?: string; escalation: string }>;
   effective_owner_by_shift: Record<string, string>;
 };
+type Alert = {
+  id: string; policy_id: string; policy_version: number; rule_id: string;
+  signal: { signal_class: string; severity: string; summary: string; uncertainty: string; resource_ids: string[]; affected_user_count: number; affected_user_groups: string[]; evidence: Array<{ kind: string; resource_id: string; revision: string; summary: string; available: boolean }> };
+  first_seen_at: string; last_seen_at: string; event_count: number; acknowledge_by: string; resolve_by: string; state: string;
+  routing: Array<{ id: string; recipient_id: string; channel: string; status: string; failure?: string }>;
+  diagnostics: string[]; expected_actions: string[]; permitted_actions: string[]; prohibited_actions: string[];
+};
 const template = (owner = ""): Revision => ({
   title: "Urgent response coverage",
   summary: "Accountability before an alert arrives",
@@ -167,6 +174,7 @@ function ScopedResponsePoliciesWorkspace({
     [selected, setSelected] = useState<Policy>(),
     [draft, setDraft] = useState(""),
     [rotations, setRotations] = useState<Rotation[]>([]),
+    [alerts, setAlerts] = useState<Alert[]>([]),
     [rotationDraft, setRotationDraft] = useState(""),
     [error, setError] = useState(""),
     [publishing, setPublishing] = useState(false);
@@ -184,6 +192,8 @@ function ScopedResponsePoliciesWorkspace({
       setDraft(JSON.stringify(template(user?.id), null, 2));
       const rotationOut = await api<{ response_rotations: Rotation[] }>(`/repositories/${repositoryID}/response-rotations`, {}, token);
       setRotations(rotationOut.response_rotations);
+      const alertOut = await api<{ response_alerts: Alert[] }>(`/repositories/${repositoryID}/response-alerts`, {}, token);
+      setAlerts(alertOut.response_alerts);
     } catch (e) {
       setError(
         e instanceof Error
@@ -237,6 +247,7 @@ function ScopedResponsePoliciesWorkspace({
   }
   async function publishRotation(e: FormEvent) { e.preventDefault(); if (!token) return; try { const out = await api<Rotation>(`/repositories/${repositoryID}/response-rotations`, { method: "POST", body: JSON.stringify({ request_id: crypto.randomUUID(), revision: JSON.parse(rotationDraft) }) }, token); setRotations((v) => [out, ...v]); setRotationDraft(""); setError(""); } catch (x) { setError(x instanceof Error ? x.message : "Rotation could not be published"); } }
   async function duty(rotation: Rotation, body: object, eventID?: string) { if (!token) return; try { const out = await api<Rotation>(eventID ? `/repositories/${repositoryID}/response-rotations/${rotation.id}/duty-events/${eventID}/accept` : `/repositories/${repositoryID}/response-rotations/${rotation.id}/duty-events`, { method: "POST", body: JSON.stringify(body) }, token); setRotations((v) => v.map((x) => x.id === out.id ? out : x)); setError(""); } catch (x) { setError(x instanceof Error ? x.message : "Duty could not be updated"); } }
+  async function actOnAlert(alert: Alert, kind: "acknowledge" | "resolve") { if (!token) return; try { const out = await api<Alert>(`/repositories/${repositoryID}/response-alerts/${alert.id}/events`, { method: "POST", body: JSON.stringify({ request_id: crypto.randomUUID(), kind, reason: kind === "resolve" ? "Response work completed" : "Accepted response responsibility" }) }, token); setAlerts((values) => values.map((value) => value.id === out.id ? out : value)); setError(""); } catch (x) { setError(x instanceof Error ? x.message : "Alert could not be updated"); } }
   async function transfer(rotation: Rotation, shiftID: string, kind: "swap" | "delegate" | "override") { const recipient = window.prompt("Exact recipient user ID"); if (!recipient) return; const reason = window.prompt("Reason for this duty transfer"); if (!reason) return; const resource = window.prompt("Active context resource ID"); const revision = window.prompt("Exact context revision"); const summary = window.prompt("Bounded handoff summary"); if (!resource || !revision || !summary) return; await duty(rotation, { request_id: crypto.randomUUID(), expected_version: rotation.event_version, kind, shift_id: shiftID, to_user_id: recipient, reason, context: [{ kind: "active_response", resource_id: resource, revision, summary }] }); }
   const current = selected?.revisions.at(-1);
   return (
@@ -363,6 +374,16 @@ function ScopedResponsePoliciesWorkspace({
           </p>
         </Card>
       </div>
+      <section className="space-y-4" aria-labelledby="alerts-heading">
+        <div><h2 id="alerts-heading" className="text-xl font-semibold">Actionable alerts</h2><p className="mt-1 text-sm text-[var(--muted)]">Correlated signals retain exact policy, evidence, delivery, uncertainty, and deadline context. Delivery never counts as acknowledgement.</p></div>
+        {alerts.length === 0 && <Card className="p-5 text-sm text-[var(--muted)]">No alerts are currently routed to you or an audience you belong to.</Card>}
+        {alerts.map((alert) => <Card className="p-5" key={alert.id}><div className="flex flex-wrap items-start justify-between gap-3"><div><div className="flex gap-2"><Badge tone={alert.signal.severity === "critical" ? "danger" : "warning"}>{alert.signal.severity}</Badge><Badge>{alert.signal.signal_class}</Badge><Badge tone={alert.state === "open" ? "warning" : alert.state === "resolved" ? "success" : "neutral"}>{alert.state}</Badge></div><h3 className="mt-3 font-semibold">{alert.signal.summary}</h3><p className="mt-1 text-sm text-[var(--muted)]">{alert.event_count} correlated event(s) · policy {alert.policy_id} v{alert.policy_version} · rule {alert.rule_id}</p></div><div className="text-right text-xs"><p>Acknowledge by {new Date(alert.acknowledge_by).toLocaleString()}</p><p className="mt-1">Resolve by {new Date(alert.resolve_by).toLocaleString()}</p></div></div>
+          <p className="mt-3 text-sm">Uncertainty: {alert.signal.uncertainty} · {alert.signal.affected_user_count} affected user(s) {alert.signal.affected_user_groups.join(", ")}</p>
+          <div className="mt-3 grid gap-2 md:grid-cols-2">{alert.signal.evidence.map((evidence) => <div className="rounded-lg border p-3 text-xs" key={`${evidence.kind}-${evidence.resource_id}-${evidence.revision}`}><Badge tone={evidence.available ? "success" : "warning"}>{evidence.available ? "available" : "inaccessible"}</Badge><p className="mt-2 font-medium">{evidence.kind} · {evidence.resource_id}@{evidence.revision}</p><p className="mt-1 text-[var(--muted)]">{evidence.summary}</p></div>)}</div>
+          {alert.diagnostics.length > 0 && <p className="mt-3 text-sm text-[var(--danger)]">Attention gaps: {alert.diagnostics.join(", ")}</p>}<p className="mt-3 text-sm">Expected: {alert.expected_actions.join(" · ")}</p><p className="mt-1 text-xs text-[var(--muted)]">Permitted: {alert.permitted_actions.join(", ")}. Prohibited: {alert.prohibited_actions.join(", ")}.</p>
+          <div className="mt-4 flex gap-2">{alert.state === "open" && <Button onClick={() => void actOnAlert(alert, "acknowledge")}>Acknowledge response</Button>}{alert.state === "acknowledged" && <Button onClick={() => void actOnAlert(alert, "resolve")}>Mark resolved</Button>}</div>
+        </Card>)}
+      </section>
       <section className="space-y-4" aria-labelledby="duty-heading">
         <div className="flex flex-wrap items-end justify-between gap-3"><div><h2 id="duty-heading" className="text-xl font-semibold">Current and upcoming duty</h2><p className="mt-1 text-sm text-[var(--muted)]">Published shifts recheck membership, qualifications, workload, gaps, and handoffs on every read.</p></div><Button variant="secondary" onClick={newRotation}>Publish a rotation</Button></div>
         {rotationDraft && <Card className="p-5"><form onSubmit={publishRotation}><textarea aria-label="Response rotation JSON" rows={24} className="w-full rounded-lg border bg-slate-950 p-4 font-mono text-xs text-slate-100" value={rotationDraft} onChange={(e) => setRotationDraft(e.target.value)}/><Button className="mt-3">Publish immutable schedule</Button></form></Card>}
