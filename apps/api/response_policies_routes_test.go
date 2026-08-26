@@ -27,7 +27,7 @@ func TestResponsePolicyAPI(t *testing.T) {
 	var repo repositories.Repository
 	_ = json.NewDecoder(response.Body).Decode(&repo)
 	response.Body.Close()
-	revision := responsepolicies.Revision{Title: "Coverage", Summary: "before alerts", ChangeReason: "initial", Resources: []responsepolicies.Resource{{ID: "repo", Kind: "repository", Name: "coverage", OwnerTeamIDs: []string{"owners"}}}, Teams: []responsepolicies.Team{{ID: "owners", Name: "Owners", MemberIDs: []string{owner.User.ID}, Skills: []string{"operations"}, Contact: "#owners"}}, Rules: []responsepolicies.Rule{{ID: "critical", ResourceIDs: []string{"repo"}, SignalClass: "reliability", Severity: "critical", AccountableTeamID: "owners", RequiredSkills: []string{"operations"}, AcknowledgeSeconds: 300, ResolveSeconds: 3600, ExpectedActions: []string{"assess"}, CommunicationAudienceIDs: []string{"support"}, IncidentCriteria: []string{"user impact"}, Authority: responsepolicies.AuthorityBoundary{PermittedActions: []string{"investigate"}, ProhibitedActions: []string{"deploy"}}}}, Exceptions: []responsepolicies.Exception{{ID: "gap", RuleID: "critical", Reason: "transition", FollowUpID: "task", ExpiresAt: time.Now().Add(24 * time.Hour)}}}
+	revision := responsepolicies.Revision{Title: "Coverage", Summary: "before alerts", ChangeReason: "initial", Resources: []responsepolicies.Resource{{ID: "repo", Kind: "repository", Name: "coverage", OwnerTeamIDs: []string{"owners"}}}, Teams: []responsepolicies.Team{{ID: "owners", Name: "Owners", MemberIDs: []string{owner.User.ID}, Skills: []string{"operations"}, Contact: "#owners"}}, Rules: []responsepolicies.Rule{{ID: "critical", ResourceIDs: []string{"repo"}, SignalClass: "reliability", Severity: "critical", AccountableTeamID: "owners", RequiredSkills: []string{"operations"}, AcknowledgeSeconds: 300, ResolveSeconds: 3600, ExpectedActions: []string{"assess"}, CommunicationAudienceIDs: []string{"support"}, IncidentCriteria: []string{"user impact"}, Authority: responsepolicies.AuthorityBoundary{RequiredAccess: []string{"repository:read"}, PermittedActions: []string{"investigate"}, ProhibitedActions: []string{"deploy"}}}}, Exceptions: []responsepolicies.Exception{{ID: "gap", RuleID: "critical", Reason: "transition", FollowUpID: "task", ExpiresAt: time.Now().Add(24 * time.Hour)}}}
 	payload, _ := json.Marshal(map[string]any{"request_id": "create-1", "revision": revision})
 	createdResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/response-policies", string(payload), owner.Credential.Token, http.StatusCreated)
 	var created responsepolicies.Policy
@@ -49,4 +49,14 @@ func TestResponsePolicyAPI(t *testing.T) {
 	payload, _ = json.Marshal(map[string]any{"request_id": "rev-1", "expected_version": 1, "revision": revision})
 	authenticatedRequest(t, http.MethodPost, url, string(payload), owner.Credential.Token, http.StatusOK).Body.Close()
 	authenticatedRequest(t, http.MethodPost, url, string(payload), owner.Credential.Token, http.StatusOK).Body.Close()
+	invalid := revision
+	invalid.Rules = append([]responsepolicies.Rule(nil), revision.Rules...)
+	invalid.Rules[0].Authority = responsepolicies.AuthorityBoundary{}
+	payload, _ = json.Marshal(map[string]any{"request_id": "missing-authority", "revision": invalid})
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/response-policies", string(payload), owner.Credential.Token, http.StatusBadRequest).Body.Close()
+	invalid = revision
+	invalid.Rules = append([]responsepolicies.Rule(nil), revision.Rules...)
+	invalid.Rules[0].Escalations = []responsepolicies.Escalation{{AfterSeconds: 900, TeamID: "owners", ExpectedAction: "coordinate"}}
+	payload, _ = json.Marshal(map[string]any{"request_id": "missing-escalation-audience", "revision": invalid})
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/response-policies", string(payload), owner.Credential.Token, http.StatusBadRequest).Body.Close()
 }

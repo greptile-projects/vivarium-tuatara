@@ -311,7 +311,7 @@ func validate(r Revision) error {
 	ruleIDs := map[string]bool{}
 	severities := map[string]bool{"low": true, "medium": true, "high": true, "critical": true}
 	for _, x := range r.Rules {
-		if blank(x.ID) || ruleIDs[x.ID] || len(x.ResourceIDs) == 0 || blank(x.SignalClass) || !severities[x.Severity] || !teamIDs[x.AccountableTeamID] || len(x.ExpectedActions) == 0 || len(x.CommunicationAudienceIDs) == 0 || len(x.IncidentCriteria) == 0 {
+		if blank(x.ID) || ruleIDs[x.ID] || len(x.ResourceIDs) == 0 || blank(x.SignalClass) || !severities[x.Severity] || !teamIDs[x.AccountableTeamID] || len(x.ExpectedActions) == 0 || len(x.CommunicationAudienceIDs) == 0 || len(x.IncidentCriteria) == 0 || len(x.Authority.RequiredAccess) == 0 || len(x.Authority.PermittedActions) == 0 || len(x.Authority.ProhibitedActions) == 0 {
 			return ErrInvalid
 		}
 		for _, id := range x.ResourceIDs {
@@ -320,7 +320,7 @@ func validate(r Revision) error {
 			}
 		}
 		for _, e := range x.Escalations {
-			if !teamIDs[e.TeamID] || blank(e.ExpectedAction) {
+			if !teamIDs[e.TeamID] || len(e.AudienceIDs) == 0 || blank(e.ExpectedAction) {
 				return ErrInvalid
 			}
 		}

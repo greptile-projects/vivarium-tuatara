@@ -41,7 +41,7 @@ func TestVersionedProjectionAndRetry(t *testing.T) {
 		t.Fatalf("changed retry=%v", err)
 	}
 	next := fixture(now)
-	next.Rules = append(next.Rules, Rule{ID: "journey", ResourceIDs: []string{"checkout"}, SignalClass: "security", Severity: "critical", AccountableTeamID: "platform", RequiredSkills: []string{"security"}, AcknowledgeSeconds: 0, ResolveSeconds: 0, ExpectedActions: []string{"contain"}, CommunicationAudienceIDs: []string{"security"}, IncidentCriteria: []string{"confirmed compromise"}})
+	next.Rules = append(next.Rules, Rule{ID: "journey", ResourceIDs: []string{"checkout"}, SignalClass: "security", Severity: "critical", AccountableTeamID: "platform", RequiredSkills: []string{"security"}, AcknowledgeSeconds: 0, ResolveSeconds: 0, ExpectedActions: []string{"contain"}, CommunicationAudienceIDs: []string{"security"}, IncidentCriteria: []string{"confirmed compromise"}, Authority: AuthorityBoundary{RequiredAccess: []string{"security:read"}, PermittedActions: []string{"investigate"}, ProhibitedActions: []string{"deploy"}}})
 	p, err = s.Revise(p.ID, 1, "alice", "rev-1", next)
 	if err != nil {
 		t.Fatal(err)
@@ -61,5 +61,19 @@ func TestRejectsDanglingCoverage(t *testing.T) {
 	r.Rules[0].ResourceIDs = []string{"missing"}
 	if _, err := s.Create("repo", "alice", "x", r); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestRejectsIncompleteAuthorityAndEscalationAudience(t *testing.T) {
+	s, _ := New(t.TempDir())
+	r := fixture(time.Now())
+	r.Rules[0].Authority = AuthorityBoundary{}
+	if _, err := s.Create("repo", "alice", "authority", r); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("empty authority err=%v", err)
+	}
+	r = fixture(time.Now())
+	r.Rules[0].Escalations[0].AudienceIDs = nil
+	if _, err := s.Create("repo", "alice", "audience", r); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("empty escalation audience err=%v", err)
 	}
 }
