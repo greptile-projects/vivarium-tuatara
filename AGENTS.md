@@ -574,6 +574,8 @@ decision points, and exit strategies. All named owners remain current participan
 Delivery freezes the default-branch revision and creates one ordinary human- or
 agent-owned proposal task per phase; existing sessions, workspaces, contribution pulls,
 reviews, checks, queues, releases, and environment controls retain their own authority.
+Deterministic proposal/task identities are retained as a pending link before ordinary
+work publication, retries converge, and the approved phase dependency graph is preserved.
 Plan approval grants no spending, provider, quota, repository, secret, merge, release,
 deployment, environment, scaling, or operational authority.
   CAS-versioned bounded trials resolve an existing attested release or exact readable commit, scope

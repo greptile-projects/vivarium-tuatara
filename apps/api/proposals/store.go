@@ -162,6 +162,7 @@ type Task struct {
 type ImplementationTaskInput struct {
 	ID, Title, Outcome, Risk, VerificationPlan, AssigneeType, AssigneeID string
 	DependsOnPrevious                                                    bool
+	DependencyIDs                                                        []string
 }
 
 type ImplementationInput struct {
@@ -526,7 +527,11 @@ func (s *Store) CreateImplementation(input ImplementationInput) (Proposal, []Tas
 			}
 			for i, task := range r.Tasks {
 				value := input.Tasks[i]
-				if task.Title != strings.TrimSpace(value.Title) || task.Outcome != strings.TrimSpace(value.Outcome) || task.Risk != strings.TrimSpace(value.Risk) || task.VerificationPlan != strings.TrimSpace(value.VerificationPlan) || task.Assignment == nil || task.Assignment.AssigneeType != value.AssigneeType || task.Assignment.AssigneeID != value.AssigneeID || (i > 0 && value.DependsOnPrevious != (len(task.DependencyIDs) == 1 && task.DependencyIDs[0] == r.Tasks[i-1].ID)) {
+				expectedDependencies := cloneStrings(value.DependencyIDs)
+				if len(expectedDependencies) == 0 && value.DependsOnPrevious && i > 0 {
+					expectedDependencies = []string{r.Tasks[i-1].ID}
+				}
+				if task.Title != strings.TrimSpace(value.Title) || task.Outcome != strings.TrimSpace(value.Outcome) || task.Risk != strings.TrimSpace(value.Risk) || task.VerificationPlan != strings.TrimSpace(value.VerificationPlan) || task.Assignment == nil || task.Assignment.AssigneeType != value.AssigneeType || task.Assignment.AssigneeID != value.AssigneeID || !slices.Equal(task.DependencyIDs, expectedDependencies) {
 					return Proposal{}, nil, ErrImplementationConflict
 				}
 			}
@@ -586,9 +591,18 @@ func (s *Store) CreateImplementation(input ImplementationInput) (Proposal, []Tas
 		if idErr != nil {
 			return Proposal{}, nil, idErr
 		}
-		dependencies := []string{}
-		if value.DependsOnPrevious && index > 0 {
+		dependencies := cloneStrings(value.DependencyIDs)
+		if len(dependencies) == 0 && value.DependsOnPrevious && index > 0 {
 			dependencies = []string{tasks[index-1].ID}
+		}
+		for _, dependencyID := range dependencies {
+			found := false
+			for _, prior := range tasks {
+				found = found || prior.ID == dependencyID
+			}
+			if !found || dependencyID == taskID {
+				return Proposal{}, nil, ErrInvalid
+			}
 		}
 		scopes, branch := []string{}, "no new access; existing collaborator authority only"
 		if value.AssigneeType == "agent" {

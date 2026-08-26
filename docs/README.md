@@ -105,7 +105,10 @@ tasks use the existing scoped session, workspace, contribution pull, review, che
 merge-queue, release, and environment paths. The handoff preserves capacity-plan and
 phase reasoning but bypasses none of their authorization or readiness checks. Stable
 plan requests and delivery publication reconcile retries without duplicating programs
-or ordinary work. Storage defaults beneath `$CAPACITY_PLAN_STORAGE_ROOT`
+or ordinary work. Delivery first retains deterministic proposal/task identities as a
+visible `pending` linkage, creates or recovers that exact ordinary work, and then marks
+the linkage `created`, so a cross-store failure cannot leave untracked tasks. Declared
+phase dependencies are copied exactly rather than linearized. Storage defaults beneath `$CAPACITY_PLAN_STORAGE_ROOT`
 (`capacity-plans`). Plan approval is coordination only and grants no spending, provider,
 quota, repository, secret, merge, release, deployment, or environment authority.
 

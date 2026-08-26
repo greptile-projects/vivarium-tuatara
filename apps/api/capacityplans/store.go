@@ -43,6 +43,7 @@ type Delivery struct {
 	ProposalID   string    `json:"proposal_id"`
 	TaskIDs      []string  `json:"task_ids"`
 	BaseRevision string    `json:"base_revision"`
+	Status       string    `json:"status"`
 	CreatedAt    time.Time `json:"created_at"`
 }
 type Plan struct {
@@ -107,6 +108,13 @@ func (s *Store) Create(repositoryID, actor, request string, p Plan) (Plan, error
 	return out, err
 }
 func (s *Store) LinkDelivery(repositoryID, id string, d Delivery) (Plan, error) {
+	p, err := s.ReserveDelivery(repositoryID, id, d)
+	if err != nil {
+		return p, err
+	}
+	return s.FinalizeDelivery(repositoryID, id, d)
+}
+func (s *Store) ReserveDelivery(repositoryID, id string, d Delivery) (Plan, error) {
 	var out Plan
 	err := s.lock(func() error {
 		p, e := s.read(id)
@@ -114,6 +122,7 @@ func (s *Store) LinkDelivery(repositoryID, id string, d Delivery) (Plan, error) 
 			return ErrNotFound
 		}
 		if p.Delivery != nil {
+			d.Status = p.Delivery.Status
 			d.CreatedAt = p.Delivery.CreatedAt
 			if digest(*p.Delivery) != digest(d) {
 				return ErrConflict
@@ -124,12 +133,42 @@ func (s *Store) LinkDelivery(repositoryID, id string, d Delivery) (Plan, error) 
 		if d.ProposalID == "" || len(d.TaskIDs) != len(p.Phases) || len(d.BaseRevision) != 40 {
 			return ErrInvalid
 		}
+		d.Status = "pending"
 		d.CreatedAt = s.now()
 		p.Delivery = &d
 		out = p
 		return s.write(p)
 	})
 	return out, err
+}
+func (s *Store) FinalizeDelivery(repositoryID, id string, d Delivery) (Plan, error) {
+	var out Plan
+	err := s.lock(func() error {
+		p, e := s.read(id)
+		if e != nil || p.RepositoryID != repositoryID || p.Delivery == nil {
+			return ErrNotFound
+		}
+		d.Status, d.CreatedAt = p.Delivery.Status, p.Delivery.CreatedAt
+		if digest(*p.Delivery) != digest(d) {
+			return ErrConflict
+		}
+		if p.Delivery.Status == "created" {
+			out = p
+			return nil
+		}
+		p.Delivery.Status = "created"
+		out = p
+		return s.write(p)
+	})
+	return out, err
+}
+func DeliveryIdentities(plan Plan) (string, []string) {
+	proposalID := stable(plan.ID, "delivery")
+	tasks := make([]string, len(plan.Phases))
+	for i, phase := range plan.Phases {
+		tasks[i] = stable(plan.ID, "phase", phase.ID)
+	}
+	return proposalID, tasks
 }
 func (s *Store) Get(repositoryID, id string) (Plan, error) {
 	var p Plan
@@ -180,9 +219,15 @@ func valid(p Plan) bool {
 		ids[x.ID] = true
 		sum += x.Budget
 	}
-	for _, x := range p.Phases {
+	for i, x := range p.Phases {
 		for _, d := range x.DependsOn {
-			if !ids[d] || d == x.ID {
+			dependencyPosition := -1
+			for j := 0; j < i; j++ {
+				if p.Phases[j].ID == d {
+					dependencyPosition = j
+				}
+			}
+			if !ids[d] || d == x.ID || dependencyPosition < 0 {
 				return false
 			}
 		}

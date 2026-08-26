@@ -45,3 +45,22 @@ func TestRejectsBrokenOrderAndBudget(t *testing.T) {
 		t.Fatalf("bad budget=%v", e)
 	}
 }
+
+func TestDeliveryReservationIsVisibleAndRetryable(t *testing.T) {
+	s, _ := New(t.TempDir())
+	p, _ := s.Create("repo", "owner", "reserve", fixture())
+	proposalID, taskIDs := DeliveryIdentities(p)
+	d := Delivery{ProposalID: proposalID, TaskIDs: taskIDs, BaseRevision: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+	pending, err := s.ReserveDelivery("repo", p.ID, d)
+	if err != nil || pending.Delivery == nil || pending.Delivery.Status != "pending" {
+		t.Fatalf("pending=%+v err=%v", pending, err)
+	}
+	again, err := s.ReserveDelivery("repo", p.ID, d)
+	if err != nil || again.Delivery.ProposalID != proposalID {
+		t.Fatalf("reservation retry=%+v err=%v", again, err)
+	}
+	created, err := s.FinalizeDelivery("repo", p.ID, d)
+	if err != nil || created.Delivery.Status != "created" {
+		t.Fatalf("created=%+v err=%v", created, err)
+	}
+}

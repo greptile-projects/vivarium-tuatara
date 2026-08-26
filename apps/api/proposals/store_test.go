@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -625,6 +626,25 @@ func TestPropagationImplementationRetainsOrderedLocalReasoning(t *testing.T) {
 	changed.Tasks[0].Outcome = "Different"
 	if _, _, err = store.CreateImplementation(changed); !errors.Is(err, ErrImplementationConflict) {
 		t.Fatalf("want conflict, got %v", err)
+	}
+}
+
+func TestCapacityImplementationPreservesExplicitDependencies(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	repositoryID, authorID := strings.Repeat("1", 32), strings.Repeat("2", 32)
+	firstID, secondID, thirdID := strings.Repeat("a", 32), strings.Repeat("b", 32), strings.Repeat("c", 32)
+	origin := ReasoningOrigin{CapacityPlanID: strings.Repeat("d", 32), Revision: strings.Repeat("e", 40), SelectedItemIDs: []string{"phase-a"}, Items: []ReasoningItem{{ID: "phase-a", Kind: "capacity_phase", Summary: "phase", Status: "approved"}}, AnalysisStatus: "approved_capacity_plan"}
+	in := ImplementationInput{RepositoryID: repositoryID, ActorID: authorID, Title: "Deliver capacity", Body: "Preserve the approved dependency graph", Origin: origin, Tasks: []ImplementationTaskInput{{ID: firstID, Title: "A", Outcome: "A done", AssigneeType: "human", AssigneeID: authorID}, {ID: secondID, Title: "B", Outcome: "B done", AssigneeType: "human", AssigneeID: authorID}, {ID: thirdID, Title: "C", Outcome: "C done", AssigneeType: "human", AssigneeID: authorID, DependencyIDs: []string{firstID}}}}
+	_, tasks, err := store.CreateImplementation(in)
+	if err != nil || len(tasks[0].DependencyIDs) != 0 || len(tasks[1].DependencyIDs) != 0 || !slices.Equal(tasks[2].DependencyIDs, []string{firstID}) {
+		t.Fatalf("tasks=%+v err=%v", tasks, err)
+	}
+	_, retried, err := store.CreateImplementation(in)
+	if err != nil || !slices.Equal(retried[2].DependencyIDs, []string{firstID}) {
+		t.Fatalf("retry=%+v err=%v", retried, err)
 	}
 }
 

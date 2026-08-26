@@ -78,7 +78,7 @@ func registerCapacityPlanRoutes(mux *http.ServeMux, git *storage.Store, catalog 
 		}
 		test, x := tests.Get(r.PathValue("id"), in.Plan.TestID)
 		proven := false
-		if x == nil {
+		if x == nil && test.ObjectiveID == in.Plan.ObjectiveID && test.ObjectiveVersion == in.Plan.ObjectiveVersion && test.ModelID == in.Plan.ModelID && test.ModelVersion == in.Plan.ModelVersion {
 			cmp, _ := tests.Compare(r.PathValue("id"), test.ID)
 			for _, id := range cmp.ProvenCandidateIDs {
 				proven = proven || id == in.Plan.CandidateID
@@ -143,6 +143,11 @@ func registerCapacityPlanRoutes(mux *http.ServeMux, git *storage.Store, catalog 
 			return
 		}
 		tasks := make([]proposals.ImplementationTaskInput, len(p.Phases))
+		proposalID, taskIDs := capacityplans.DeliveryIdentities(p)
+		phasePositions := map[string]int{}
+		for i, phase := range p.Phases {
+			phasePositions[phase.ID] = i
+		}
 		items := make([]proposals.ReasoningItem, len(p.Phases))
 		participants := []string{c.UserID}
 		for i, phase := range p.Phases {
@@ -150,7 +155,11 @@ func registerCapacityPlanRoutes(mux *http.ServeMux, git *storage.Store, catalog 
 				writeAPIError(w, 422, "capacity_delivery_invalid", "tasks must preserve phase order and accountable owner")
 				return
 			}
-			tasks[i] = proposals.ImplementationTaskInput{Title: phase.Name, Outcome: strings.Join(phase.AcceptanceCriteria, "; "), Risk: "Decision point: " + phase.DecisionPoint + " Exit strategy: " + phase.ExitStrategy, VerificationPlan: "Prove the phase criteria through ordinary checks, reviews, approvals, queues, release, and environment controls.", AssigneeType: in.Tasks[i].AssigneeType, AssigneeID: in.Tasks[i].AssigneeID, DependsOnPrevious: i > 0}
+			dependencyIDs := make([]string, len(phase.DependsOn))
+			for j, dependencyPhaseID := range phase.DependsOn {
+				dependencyIDs[j] = taskIDs[phasePositions[dependencyPhaseID]]
+			}
+			tasks[i] = proposals.ImplementationTaskInput{ID: taskIDs[i], Title: phase.Name, Outcome: strings.Join(phase.AcceptanceCriteria, "; "), Risk: "Decision point: " + phase.DecisionPoint + " Exit strategy: " + phase.ExitStrategy, VerificationPlan: "Prove the phase criteria through ordinary checks, reviews, approvals, queues, release, and environment controls.", AssigneeType: in.Tasks[i].AssigneeType, AssigneeID: in.Tasks[i].AssigneeID, DependencyIDs: dependencyIDs}
 			items[i] = proposals.ReasoningItem{ID: phase.ID, Kind: "capacity_phase", Summary: fmt.Sprintf("%s (%g %s)", phase.Name, phase.Budget, phase.Currency), Status: "approved"}
 			if in.Tasks[i].AssigneeType == "human" {
 				participants = append(participants, in.Tasks[i].AssigneeID)
@@ -163,16 +172,16 @@ func registerCapacityPlanRoutes(mux *http.ServeMux, git *storage.Store, catalog 
 		var proposal proposals.Proposal
 		var made []proposals.Task
 		publish := func() error {
+			delivery := capacityplans.Delivery{ProposalID: proposalID, TaskIDs: taskIDs, BaseRevision: revision}
+			if _, reserveErr := plans.ReserveDelivery(repo.ID, p.ID, delivery); reserveErr != nil {
+				return reserveErr
+			}
 			var x error
-			proposal, made, x = proposalStore.CreateImplementation(proposals.ImplementationInput{RepositoryID: repo.ID, ActorID: c.UserID, Title: in.Title, Body: in.Body, Origin: origin, Tasks: tasks})
+			proposal, made, x = proposalStore.CreateImplementation(proposals.ImplementationInput{RepositoryID: repo.ID, ActorID: c.UserID, ProposalID: proposalID, Title: in.Title, Body: in.Body, Origin: origin, Tasks: tasks})
 			if x != nil {
 				return x
 			}
-			ids := make([]string, len(made))
-			for i := range made {
-				ids[i] = made[i].ID
-			}
-			_, x = plans.LinkDelivery(repo.ID, p.ID, capacityplans.Delivery{ProposalID: proposal.ID, TaskIDs: ids, BaseRevision: revision})
+			_, x = plans.FinalizeDelivery(repo.ID, p.ID, delivery)
 			return x
 		}
 		e = catalog.WithCurrentParticipants(participants, repo.ID, func() error { return bare.WithReferenceTarget("refs/heads/"+repo.DefaultBranch, revision, publish) })
