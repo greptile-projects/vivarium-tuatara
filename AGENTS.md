@@ -16,6 +16,16 @@ resources, conflicting ownership, unavailable skills, impossible targets, and ex
 or expired exceptions. All declared team members must remain current repository
 participants at publication. Policies coordinate response only and grant no repository,
 secret, deployment, disclosure, incident, spending, governance, or operational authority.
+Response duty rotations at repository `/response-rotations` routes and the same Response
+coverage workspace bind an exact current policy team to immutable schedule revisions beneath
+the response-policy storage root. Revisions declare IANA time zones, local availability,
+qualifications, handoff windows, backup layers, workload limits, absence rules, and exact
+shifts. Participants acknowledge their own duty; current team members propose retry-stable
+swap, delegation, or override events with frozen active-context references, and only the
+named current recipient can accept the transfer. Reads re-project removed participants,
+missing qualifications, overlapping schedules, uncovered intervals, exceeded workload, and
+missed handoffs as actionable escalation. Duty coordinates response and grants no repository,
+secret, deployment, disclosure, incident, spending, governance, or operational authority.
 
 Collaborative capacity contracts at repository `/capacity-objectives` routes and the
 repository `/capacity` workspace retain immutable complete revisions beneath

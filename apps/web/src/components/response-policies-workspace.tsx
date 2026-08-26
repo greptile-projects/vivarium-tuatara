@@ -77,6 +77,24 @@ type Policy = {
   diagnostics: Diagnostic[];
   updated_at: string;
 };
+type Rotation = {
+  id: string;
+  current_version: number;
+  event_version: number;
+  revisions: Array<{
+    name: string;
+    policy_id: string;
+    team_id: string;
+    time_zone: string;
+    handoff_window_minutes: number;
+    responders: Array<{ user_id: string; qualifications: string[]; availability: Array<{ weekdays: string[]; start_local: string; end_local: string }>; max_shifts_per_week: number }>;
+    absence_rules: Array<{ kind: string; notice_hours: number; action: string }>;
+    shifts: Array<{ id: string; starts_at: string; ends_at: string; primary_user_id: string; backup_user_ids: string[]; required_qualifications: string[] }>;
+    change_reason: string;
+  }>;
+  events: Array<{ id: string; kind: string; shift_id: string; from_user_id: string; to_user_id: string; status: string; reason?: string; context: Array<{ kind: string; resource_id: string; revision: string; summary: string }> }>;
+  diagnostics: Array<{ kind: string; severity: string; message: string; shift_id?: string; user_id?: string; escalation: string }>;
+};
 const template = (owner = ""): Revision => ({
   title: "Urgent response coverage",
   summary: "Accountability before an alert arrives",
@@ -147,6 +165,8 @@ function ScopedResponsePoliciesWorkspace({
   const [items, setItems] = useState<Policy[]>([]),
     [selected, setSelected] = useState<Policy>(),
     [draft, setDraft] = useState(""),
+    [rotations, setRotations] = useState<Rotation[]>([]),
+    [rotationDraft, setRotationDraft] = useState(""),
     [error, setError] = useState(""),
     [publishing, setPublishing] = useState(false);
   const publishingRef = useRef(false);
@@ -161,6 +181,8 @@ function ScopedResponsePoliciesWorkspace({
       setItems(out.response_policies);
       setSelected(out.response_policies[0]);
       setDraft(JSON.stringify(template(user?.id), null, 2));
+      const rotationOut = await api<{ response_rotations: Rotation[] }>(`/repositories/${repositoryID}/response-rotations`, {}, token);
+      setRotations(rotationOut.response_rotations);
     } catch (e) {
       setError(
         e instanceof Error
@@ -207,6 +229,14 @@ function ScopedResponsePoliciesWorkspace({
       setPublishing(false);
     }
   }
+  function newRotation() {
+    const policy = selected ?? items[0], revision = policy?.revisions.at(-1), member = revision?.teams[0]?.member_ids[0] ?? user?.id ?? "", backup = revision?.teams[0]?.member_ids.find((id) => id !== member) ?? "replace-with-backup-user-id";
+    const start = new Date(Date.now() + 3600000), end = new Date(start.getTime() + 8 * 3600000);
+    setRotationDraft(JSON.stringify({ name: "Primary response rotation", policy_id: policy?.id ?? "response-policy-id", team_id: revision?.teams[0]?.id ?? "team-id", time_zone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC", handoff_window_minutes: 30, responders: [{ user_id: member, qualifications: ["service operations"], availability: [{ weekdays: ["monday", "tuesday", "wednesday", "thursday", "friday"], start_local: "09:00", end_local: "17:00" }], max_shifts_per_week: 5 }, { user_id: backup, qualifications: ["service operations"], availability: [{ weekdays: ["monday", "tuesday", "wednesday", "thursday", "friday"], start_local: "09:00", end_local: "17:00" }], max_shifts_per_week: 5 }], absence_rules: [{ kind: "planned", notice_hours: 24, action: "Offer duty to the first qualified backup" }], shifts: [{ id: "upcoming-primary", starts_at: start.toISOString(), ends_at: end.toISOString(), primary_user_id: member, backup_user_ids: [backup], required_qualifications: ["service operations"] }], change_reason: "Publish accountable duty" }, null, 2));
+  }
+  async function publishRotation(e: FormEvent) { e.preventDefault(); if (!token) return; try { const out = await api<Rotation>(`/repositories/${repositoryID}/response-rotations`, { method: "POST", body: JSON.stringify({ request_id: crypto.randomUUID(), revision: JSON.parse(rotationDraft) }) }, token); setRotations((v) => [out, ...v]); setRotationDraft(""); setError(""); } catch (x) { setError(x instanceof Error ? x.message : "Rotation could not be published"); } }
+  async function duty(rotation: Rotation, body: object, eventID?: string) { if (!token) return; try { const out = await api<Rotation>(eventID ? `/repositories/${repositoryID}/response-rotations/${rotation.id}/duty-events/${eventID}/accept` : `/repositories/${repositoryID}/response-rotations/${rotation.id}/duty-events`, { method: "POST", body: JSON.stringify(body) }, token); setRotations((v) => v.map((x) => x.id === out.id ? out : x)); setError(""); } catch (x) { setError(x instanceof Error ? x.message : "Duty could not be updated"); } }
+  async function transfer(rotation: Rotation, shiftID: string, kind: "swap" | "delegate" | "override") { const recipient = window.prompt("Exact recipient user ID"); if (!recipient) return; const reason = window.prompt("Reason for this duty transfer"); if (!reason) return; const resource = window.prompt("Active context resource ID"); const revision = window.prompt("Exact context revision"); const summary = window.prompt("Bounded handoff summary"); if (!resource || !revision || !summary) return; await duty(rotation, { request_id: crypto.randomUUID(), expected_version: rotation.event_version, kind, shift_id: shiftID, to_user_id: recipient, reason, context: [{ kind: "active_response", resource_id: resource, revision, summary }] }); }
   const current = selected?.revisions.at(-1);
   return (
     <main className="mx-auto w-full max-w-6xl space-y-7 px-6 py-8">
@@ -332,6 +362,16 @@ function ScopedResponsePoliciesWorkspace({
           </p>
         </Card>
       </div>
+      <section className="space-y-4" aria-labelledby="duty-heading">
+        <div className="flex flex-wrap items-end justify-between gap-3"><div><h2 id="duty-heading" className="text-xl font-semibold">Current and upcoming duty</h2><p className="mt-1 text-sm text-[var(--muted)]">Published shifts recheck membership, qualifications, workload, gaps, and handoffs on every read.</p></div><Button variant="secondary" onClick={newRotation}>Publish a rotation</Button></div>
+        {rotationDraft && <Card className="p-5"><form onSubmit={publishRotation}><textarea aria-label="Response rotation JSON" rows={24} className="w-full rounded-lg border bg-slate-950 p-4 font-mono text-xs text-slate-100" value={rotationDraft} onChange={(e) => setRotationDraft(e.target.value)}/><Button className="mt-3">Publish immutable schedule</Button></form></Card>}
+        {rotations.length === 0 && !rotationDraft && <Card className="p-5 text-sm text-[var(--muted)]">No duty rotation is published. Coverage is not yet assigned to a current responder.</Card>}
+        {rotations.map((rotation) => { const revision = rotation.revisions.at(-1)!; return <Card key={rotation.id} className="p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="font-semibold">{revision.name}</h3><p className="mt-1 text-xs text-[var(--muted)]">{revision.time_zone} · {revision.handoff_window_minutes} minute handoff · schedule v{rotation.current_version}</p></div><Badge tone={rotation.diagnostics.some((d) => d.severity === "blocking") ? "danger" : "success"}>{rotation.diagnostics.length ? `${rotation.diagnostics.length} escalation(s)` : "covered"}</Badge></div>
+          <div className="mt-4 grid gap-3 md:grid-cols-2">{revision.shifts.map((shift) => <article key={shift.id} className="rounded-lg border p-3"><p className="font-medium">{new Date(shift.starts_at).toLocaleString()} → {new Date(shift.ends_at).toLocaleString()}</p><p className="mt-1 text-sm">Primary {shift.primary_user_id} · backup {shift.backup_user_ids.join(", ")}</p><p className="mt-1 text-xs text-[var(--muted)]">Requires {shift.required_qualifications.join(", ")}</p>{user?.id === shift.primary_user_id && <Button className="mt-3" variant="secondary" onClick={() => void duty(rotation, { request_id: crypto.randomUUID(), expected_version: rotation.event_version, kind: "acknowledge", shift_id: shift.id, context: [] })}>Acknowledge my duty</Button>} {revision.responders.some((responder) => responder.user_id === user?.id) && <span className="mt-3 inline-flex flex-wrap gap-2"><Button variant="quiet" onClick={() => void transfer(rotation, shift.id, "swap")}>Swap</Button><Button variant="quiet" onClick={() => void transfer(rotation, shift.id, "delegate")}>Delegate</Button><Button variant="quiet" onClick={() => void transfer(rotation, shift.id, "override")}>Override</Button></span>}</article>)}</div>
+          {rotation.events.map((event) => <div key={event.id} className="mt-3 rounded-lg border p-3 text-sm"><Badge tone={event.status === "accepted" ? "success" : "warning"}>{event.kind} {event.status}</Badge><span className="ml-2">{event.from_user_id} → {event.to_user_id}</span>{event.context.map((item) => <p key={`${item.kind}-${item.resource_id}-${item.revision}`} className="mt-2 text-xs">{item.kind} {item.resource_id}@{item.revision}: {item.summary}</p>)}{event.status === "pending" && event.to_user_id === user?.id && <Button className="ml-3" variant="secondary" onClick={() => void duty(rotation, { expected_version: rotation.event_version }, event.id)}>Accept exact handoff</Button>}</div>)}
+          {rotation.diagnostics.map((diagnostic, index) => <p className="mt-3 text-sm" key={`${diagnostic.kind}-${index}`}><Badge tone={diagnostic.severity === "blocking" ? "danger" : "warning"}>{diagnostic.kind.replaceAll("_", " ")}</Badge> {diagnostic.message} <span className="text-[var(--muted)]">{diagnostic.escalation}</span></p>)}
+          <p className="mt-4 text-xs text-[var(--muted)]">Duty coordinates response only. It grants no repository, secret, deployment, disclosure, incident, spending, governance, or operational authority.</p></Card>; })}
+      </section>
     </main>
   );
 }

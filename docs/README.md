@@ -30,6 +30,32 @@ diagnostics, and authority boundary. A policy coordinates attention only and gra
 repository, secret, deployment, disclosure, incident, spending, governance, or
 operational authority.
 
+## Accountable response-duty rotations
+
+Repository readers inspect current and upcoming duty through
+`GET /repositories/{id}/response-rotations` and its rotation detail route. Repository writers
+publish a rotation or immutable optimistic successor bound to an exact response policy and
+accountable team. Each schedule declares an IANA time zone, responder local availability and
+role qualifications, handoff window, primary and layered backups, per-person weekly workload
+limit, absence behavior, and exact shift intervals. Stable request identities reconcile
+unchanged publication retries; changed reuse and concurrent successors conflict. Rotation
+files live in the `rotations` directory beneath `$RESPONSE_POLICY_STORAGE_ROOT`.
+
+Current participants acknowledge their own assigned shift through the duty-event route.
+Current rotation members can propose `swap`, `delegate`, or `override` events, but the duty
+owner changes only when the exact named current recipient accepts. The proposed event freezes
+typed active-context resource identities, revisions, and bounded summaries, preserving what
+must cross the handoff without copying credentials or granting access. Events are append-only,
+CAS-versioned, and caller-stable.
+
+Every read rechecks current repository participation and derives unavailable responders,
+missing qualifications, overlapping shifts, uncovered intervals, workload-limit breaches,
+and ended shifts without an accepted handoff. Each diagnostic includes a concrete accountable-
+team escalation. The Response coverage web workspace renders schedules, personal
+acknowledgement and pending recipient acceptance alongside policy coverage. Scheduling and
+duty transfer coordinate attention only and grant no repository, secret, deployment,
+disclosure, incident, spending, governance, or operational authority.
+
 ## Collaborative capacity objectives
 
 Repository readers list and inspect immutable demand contracts through
