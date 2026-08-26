@@ -102,7 +102,13 @@ type BranchDecision struct {
 	StepID         string `json:"step_id"`
 	Condition      string `json:"condition"`
 	SelectedStepID string `json:"selected_step_id"`
+	EvidenceStepID string `json:"evidence_step_id"`
 	Rationale      string `json:"rationale"`
+}
+type ConditionAssertion struct {
+	Condition      string `json:"condition"`
+	Met            bool   `json:"met"`
+	EvidenceDigest string `json:"evidence_digest"`
 }
 type Artifact struct {
 	Name      string `json:"name"`
@@ -110,17 +116,18 @@ type Artifact struct {
 	MediaType string `json:"media_type"`
 }
 type StepOutcome struct {
-	StepID              string     `json:"step_id"`
-	Command             string     `json:"command,omitempty"`
-	Output              string     `json:"output"`
-	StartedAt           time.Time  `json:"started_at"`
-	FinishedAt          time.Time  `json:"finished_at"`
-	Artifacts           []Artifact `json:"artifacts"`
-	CostCents           int        `json:"cost_cents"`
-	Permissions         []string   `json:"permissions"`
-	Outcome             string     `json:"outcome"`
-	ManualGaps          []string   `json:"manual_gaps"`
-	DestructiveHandling string     `json:"destructive_handling"`
+	StepID              string               `json:"step_id"`
+	Command             string               `json:"command,omitempty"`
+	Output              string               `json:"output"`
+	StartedAt           time.Time            `json:"started_at"`
+	FinishedAt          time.Time            `json:"finished_at"`
+	Artifacts           []Artifact           `json:"artifacts"`
+	CostCents           int                  `json:"cost_cents"`
+	Permissions         []string             `json:"permissions"`
+	Outcome             string               `json:"outcome"`
+	ManualGaps          []string             `json:"manual_gaps"`
+	DestructiveHandling string               `json:"destructive_handling"`
+	Assertions          []ConditionAssertion `json:"assertions"`
 }
 type Scenario struct {
 	ID              string           `json:"id"`
@@ -228,12 +235,14 @@ func validRehearsal(v Rehearsal, revision Revision) bool {
 			}
 		}
 		covered := map[string]bool{}
+		outcomes := map[string]StepOutcome{}
 		for _, result := range scenario.Steps {
 			step, ok := stepIDs[result.StepID]
 			if !ok || covered[result.StepID] || result.Output == "" || len(result.Output) > 32768 || secretPattern.MatchString(result.Output+result.Command) || result.FinishedAt.Before(result.StartedAt) || (result.Outcome != "passed" && result.Outcome != "failed" && result.Outcome != "manual_gap") {
 				return false
 			}
 			covered[result.StepID] = true
+			outcomes[result.StepID] = result
 			for _, required := range step.Authority.RequiredAccess {
 				if !containsString(result.Permissions, required) {
 					return false
@@ -268,7 +277,35 @@ func validRehearsal(v Rehearsal, revision Revision) bool {
 		decisions := map[string]bool{}
 		for _, decision := range scenario.Decisions {
 			step, ok := stepIDs[decision.StepID]
-			if !ok || decisions[decision.StepID] || step.Decision == nil || decision.Condition == "" || decision.SelectedStepID == "" || decision.Rationale == "" || (decision.SelectedStepID != step.Decision.IfTrueStepID && decision.SelectedStepID != step.Decision.IfFalseStepID) {
+			evidence, evidenceOK := outcomes[decision.EvidenceStepID]
+			if !ok || decisions[decision.StepID] || step.Decision == nil || decision.Condition != step.Decision.Condition || decision.SelectedStepID == "" || decision.Rationale == "" || !evidenceOK {
+				return false
+			}
+			assertionOK := false
+			assertionCount := 0
+			for _, assertion := range evidence.Assertions {
+				if assertion.Condition != decision.Condition {
+					continue
+				}
+				assertionCount++
+				artifactFound := false
+				for _, artifact := range evidence.Artifacts {
+					if artifact.Digest == assertion.EvidenceDigest {
+						artifactFound = true
+					}
+				}
+				if strings.TrimSpace(assertion.EvidenceDigest) == "" || !artifactFound {
+					continue
+				}
+				expected := step.Decision.IfFalseStepID
+				if assertion.Met {
+					expected = step.Decision.IfTrueStepID
+				}
+				if expected != "" && decision.SelectedStepID == expected {
+					assertionOK = true
+				}
+			}
+			if assertionCount != 1 || !assertionOK {
 				return false
 			}
 			decisions[decision.StepID] = true

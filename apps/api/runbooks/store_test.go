@@ -67,13 +67,25 @@ func TestRehearsalRequiresExactlyOneDecisionRecord(t *testing.T) {
 	if _, err := s.Rehearse(created.ID, "human", "owner", "missing", 1, "isolated", "box", "", []Scenario{scenario}); err != ErrInvalid {
 		t.Fatalf("missing decision error=%v", err)
 	}
-	scenario.Decisions = []BranchDecision{{StepID: "choose", Condition: "health failed", SelectedStepID: "inspect", Rationale: "synthetic health failed"}}
+	scenario.Steps[0].Artifacts = []Artifact{{Name: "health.json", Digest: "sha256:health-failed", MediaType: "application/json"}}
+	scenario.Steps[0].Assertions = []ConditionAssertion{{Condition: "health failed", Met: true, EvidenceDigest: "sha256:health-failed"}}
+	scenario.Decisions = []BranchDecision{{StepID: "choose", Condition: "health failed", SelectedStepID: "inspect", EvidenceStepID: "inspect", Rationale: "synthetic health failed"}}
 	if _, err := s.Rehearse(created.ID, "human", "owner", "valid", 1, "isolated", "box", "", []Scenario{scenario}); err != nil {
 		t.Fatalf("valid decision error=%v", err)
 	}
 	scenario.Decisions = append(scenario.Decisions, scenario.Decisions[0])
 	if _, err := s.Rehearse(created.ID, "human", "owner", "duplicate", 1, "isolated", "box", "", []Scenario{scenario}); err != ErrInvalid {
 		t.Fatalf("duplicate decision error=%v", err)
+	}
+	scenario.Decisions = scenario.Decisions[:1]
+	scenario.Decisions[0].Condition = "operator preference"
+	if _, err := s.Rehearse(created.ID, "human", "owner", "arbitrary", 1, "isolated", "box", "", []Scenario{scenario}); err != ErrInvalid {
+		t.Fatalf("arbitrary condition error=%v", err)
+	}
+	scenario.Decisions[0].Condition = "health failed"
+	scenario.Steps[0].Assertions[0].Met = false
+	if _, err := s.Rehearse(created.ID, "human", "owner", "mismatch", 1, "isolated", "box", "", []Scenario{scenario}); err != ErrInvalid {
+		t.Fatalf("evidence branch mismatch error=%v", err)
 	}
 }
 func TestVersioningAndAuthorityDiagnostics(t *testing.T) {
