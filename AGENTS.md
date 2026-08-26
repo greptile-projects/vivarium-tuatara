@@ -2,6 +2,8 @@
 
 Guidance for coding agents working in this repository.
 
+Operational runbooks at repository `/runbooks` routes and the repository Runbooks workspace retain immutable complete revisions beneath `$RUNBOOK_STORAGE_ROOT` (`runbooks`). Current repository writers define a service, environment, dependency, or signal procedure with purpose, preconditions, diagnostic, action, decision, and communication steps, expected evidence, rollback criteria, owners, required skills, escalation paths, reviewed command/workflow/documentation/agent references, and an effective authority preview. Publication rechecks every named owner and escalation recipient as a current repository participant; caller-stable create and revision identities reconcile unchanged retries and reject changed reuse. Reads preserve every revision and project attributable missing ownership or skills, unsafe change authority or assumptions, inaccessible resources, unreviewed executable material, unapproved agents, secret-bearing input, and conflicting policy boundaries. Runbooks coordinate procedure only and grant no repository, secret, environment, agent, workflow, disclosure, deployment, spending, or operational authority.
+
 Urgent-response coverage at repository `/response-policies` routes and the repository
 Response coverage workspace retains immutable complete revisions beneath
 `$RESPONSE_POLICY_STORAGE_ROOT` (`response-policies`). Current repository writers define

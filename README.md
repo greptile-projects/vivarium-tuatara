@@ -69,6 +69,14 @@ with a bounded agent and dependency owner, authorized mitigation and an accepted
 context, a severe recurrence becomes an incident, and ordinary reviewed work improves the runbook.
 Duplicate, missed, absent, noisy, failed-delivery, revoked-access, and over-budget paths remain visible.
 
+Repository writers publish immutable operational procedures at
+`/repositories/{id}/runbooks` and use the Runbooks workspace to make service,
+environment, dependency, and signal response knowledge reviewable before an emergency.
+Every diagnostic, action, decision, and communication step explains its purpose,
+evidence, rollback, ownership, skills, references, and effective authority; unsafe,
+inaccessible, secret-bearing, unreviewed, unapproved, and policy-conflicting inputs
+remain attributable gaps without granting operational authority.
+
 Repository participants and scoped read-only agents can turn an exact objective into
 an immutable, permission-aware capacity model at `/repositories/{id}/capacity-models`.
 The Capacity workspace exposes release-bound sanitized evidence, observation windows,
