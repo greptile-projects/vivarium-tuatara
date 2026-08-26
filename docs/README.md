@@ -3,6 +3,33 @@
 Notes on how this project fits together. Mostly empty for now — things get
 written down here as they're decided, not before.
 
+## Versioned urgent-response coverage
+
+Repository readers inspect immutable response policies through
+`GET /repositories/{id}/response-policies` and its `{policy_id}` detail route. Current
+participants with repository-write scope create a policy or publish an optimistic,
+complete successor; a stable `request_id` reconciles unchanged ambiguous retries while
+changed reuse and concurrent successors conflict. Storage defaults beneath
+`$RESPONSE_POLICY_STORAGE_ROOT` (`response-policies`) and retains all earlier revisions.
+
+Each revision maps repository, service, environment, user-journey, and dependency
+resources plus their service-owner teams to signal classes and severities. Rules name an
+accountable team, current human members, required skills, acknowledgement and resolution
+targets, expected actions, timed escalation teams, communication audiences, incident
+criteria, access requirements, permitted and prohibited actions, and linked privacy,
+security, and continuity controls. Narrow exceptions require a reason, ordinary follow-up
+identity, expiry, and grantor attribution. Publication rechecks every response-team member
+as a current repository participant.
+
+Projection derives uncovered resources, same-condition or service-owner accountability
+conflicts, missing team skills, impossible acknowledgement/resolution/escalation timing,
+and exceptions that expire within 30 days or have expired. These gaps stay attributable;
+they are not inferred readiness or proof that a team is available. The repository
+Response coverage workspace renders the responsibility map, exact targets and actions,
+diagnostics, and authority boundary. A policy coordinates attention only and grants no
+repository, secret, deployment, disclosure, incident, spending, governance, or
+operational authority.
+
 ## Collaborative capacity objectives
 
 Repository readers list and inspect immutable demand contracts through

@@ -2,6 +2,21 @@
 
 Guidance for coding agents working in this repository.
 
+Urgent-response coverage at repository `/response-policies` routes and the repository
+Response coverage workspace retains immutable complete revisions beneath
+`$RESPONSE_POLICY_STORAGE_ROOT` (`response-policies`). Current repository writers define
+repository, service, environment, user-journey, and dependency resources; accountable
+teams and current human members; signal-class and severity mappings; required skills;
+acknowledgement and resolution targets; expected actions; escalation paths;
+communication audiences; incident criteria; access requirements; permitted and
+prohibited actions; privacy, security, and continuity rule links; and follow-up-backed
+exceptions. Caller-stable create and revision identities reconcile unchanged retries and
+reject changed reuse. Reads preserve every version and derive attributable uncovered
+resources, conflicting ownership, unavailable skills, impossible targets, and expiring
+or expired exceptions. All declared team members must remain current repository
+participants at publication. Policies coordinate response only and grant no repository,
+secret, deployment, disclosure, incident, spending, governance, or operational authority.
+
 Collaborative capacity contracts at repository `/capacity-objectives` routes and the
 repository `/capacity` workspace retain immutable complete revisions beneath
 `$CAPACITY_OBJECTIVE_STORAGE_ROOT` (`capacity-objectives`). Current repository
