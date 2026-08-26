@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os/exec"
 	"strconv"
+	"strings"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/capacitymodels"
@@ -112,7 +113,8 @@ func registerCapacityTestRoutes(mux *http.ServeMux, gitStore *storage.Store, rep
 					if gitStore != nil {
 						repository, x := gitStore.Open(r.PathValue("id"))
 						if x == nil {
-							valid = exec.Command("git", "-C", repository.Path(), "cat-file", "-e", component.Revision+":"+component.ResourceID).Run() == nil
+							resolved, resolveErr := exec.Command("git", "-C", repository.Path(), "rev-parse", "--verify", component.Revision+"^{commit}").Output()
+							valid = resolveErr == nil && strings.TrimSpace(string(resolved)) == component.Revision && exec.Command("git", "-C", repository.Path(), "cat-file", "-e", component.Revision+":"+component.ResourceID).Run() == nil
 						}
 					}
 				}
