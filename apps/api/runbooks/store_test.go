@@ -52,6 +52,19 @@ func TestRehearsalRejectsUnsafeChangingStepAndSecretOutput(t *testing.T) {
 	if _, err := s.Rehearse(created.ID, "agent", "agent", "secret", 1, "isolated", "box", "", []Scenario{base}); err != ErrInvalid {
 		t.Fatalf("secret error=%v", err)
 	}
+	base.Steps[0].Output = "ok"
+	base.Steps[0].CostCents = -1
+	if _, err := s.Rehearse(created.ID, "agent", "agent", "negative-cost", 1, "isolated", "box", "", []Scenario{base}); err != ErrInvalid {
+		t.Fatalf("negative cost error=%v", err)
+	}
+	base.Steps[0].CostCents = maxRehearsalStepCostCents + 1
+	if _, err := s.Rehearse(created.ID, "agent", "agent", "excessive-cost", 1, "isolated", "box", "", []Scenario{base}); err != ErrInvalid {
+		t.Fatalf("excessive cost error=%v", err)
+	}
+	base.Steps[0].CostCents = maxRehearsalStepCostCents
+	if _, err := s.Rehearse(created.ID, "agent", "agent", "maximum-cost", 1, "isolated", "box", "", []Scenario{base}); err != nil {
+		t.Fatalf("maximum cost error=%v", err)
+	}
 }
 
 func TestRehearsalRequiresExactlyOneDecisionRecord(t *testing.T) {

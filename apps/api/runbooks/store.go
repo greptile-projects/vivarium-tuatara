@@ -20,6 +20,8 @@ var ErrNotFound = errors.New("runbook not found")
 var ErrInvalid = errors.New("invalid runbook")
 var ErrConflict = errors.New("runbook conflict")
 
+const maxRehearsalStepCostCents = 100_000_000
+
 type Scope struct {
 	Kind       string `json:"kind"`
 	ResourceID string `json:"resource_id"`
@@ -238,7 +240,7 @@ func validRehearsal(v Rehearsal, revision Revision) bool {
 		outcomes := map[string]StepOutcome{}
 		for _, result := range scenario.Steps {
 			step, ok := stepIDs[result.StepID]
-			if !ok || covered[result.StepID] || result.Output == "" || len(result.Output) > 32768 || secretPattern.MatchString(result.Output+result.Command) || result.FinishedAt.Before(result.StartedAt) || (result.Outcome != "passed" && result.Outcome != "failed" && result.Outcome != "manual_gap") {
+			if !ok || covered[result.StepID] || result.Output == "" || len(result.Output) > 32768 || secretPattern.MatchString(result.Output+result.Command) || result.FinishedAt.Before(result.StartedAt) || result.CostCents < 0 || result.CostCents > maxRehearsalStepCostCents || (result.Outcome != "passed" && result.Outcome != "failed" && result.Outcome != "manual_gap") {
 				return false
 			}
 			covered[result.StepID] = true
