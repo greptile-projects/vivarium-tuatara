@@ -176,6 +176,14 @@ func (s *Store) AddRun(repositoryID, actorType, actor, planID, request string, r
 		for _, q := range p.Scenarios {
 			if q.ID == r.ScenarioID {
 				found = true
+				if r.Metrics.Cost > q.Limits.MaxCost {
+					r.LimitBreaches = appendUnique(r.LimitBreaches, "max_cost")
+				}
+			}
+		}
+		for _, c := range p.Candidates {
+			if c.ID == r.CandidateID && c.Currency != r.Metrics.Currency {
+				r.Comparable = false
 			}
 		}
 		if r.CandidateDigest == "" || !found || !validRun(r) {
@@ -250,11 +258,13 @@ func (s *Store) Compare(repositoryID, planID string) (Comparison, error) {
 		return nil
 	})
 	out := Comparison{PlanID: planID, Runs: runs}
-	seen := map[string]bool{}
+	coverage := map[string]map[string]bool{}
 	for _, r := range runs {
-		if r.Quality == "proof" && !seen[r.CandidateID] {
-			seen[r.CandidateID] = true
-			out.ProvenCandidateIDs = append(out.ProvenCandidateIDs, r.CandidateID)
+		if r.Quality == "proof" {
+			if coverage[r.CandidateID] == nil {
+				coverage[r.CandidateID] = map[string]bool{}
+			}
+			coverage[r.CandidateID][r.ScenarioID] = true
 		}
 		if r.Quality != "proof" {
 			out.Diagnostics = append(out.Diagnostics, r.CandidateID+"/"+r.ScenarioID+": "+r.Quality)
@@ -263,8 +273,28 @@ func (s *Store) Compare(repositoryID, planID string) (Comparison, error) {
 	if len(runs) == 0 {
 		out.Diagnostics = []string{"no retained executions"}
 	}
-	_ = p
+	for _, candidate := range p.Candidates {
+		complete := true
+		for _, scenario := range p.Scenarios {
+			if !coverage[candidate.ID][scenario.ID] {
+				complete = false
+				out.Diagnostics = append(out.Diagnostics, candidate.ID+"/"+scenario.ID+": missing proof")
+			}
+		}
+		if complete {
+			out.ProvenCandidateIDs = append(out.ProvenCandidateIDs, candidate.ID)
+		}
+	}
 	return out, nil
+}
+
+func appendUnique(values []string, value string) []string {
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	return append(values, value)
 }
 func validPlan(p Plan) bool {
 	if p.ObjectiveID == "" || p.ObjectiveVersion < 1 || p.Title == "" || (p.EnvironmentKind != "isolated" && p.EnvironmentKind != "policy_approved") || len(p.Candidates) < 2 || len(p.Scenarios) == 0 {

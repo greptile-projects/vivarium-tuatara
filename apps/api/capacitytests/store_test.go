@@ -38,8 +38,52 @@ func TestOnlyComparableStableCorrectRunsBecomeProof(t *testing.T) {
 		t.Fatalf("noisy=%+v err=%v", r, e)
 	}
 	comparison, _ := s.Compare("repo", p.ID)
-	if len(comparison.ProvenCandidateIDs) != 1 || comparison.ProvenCandidateIDs[0] != "scale-out" || len(comparison.Diagnostics) != 1 {
+	if len(comparison.ProvenCandidateIDs) != 1 || comparison.ProvenCandidateIDs[0] != "scale-out" || len(comparison.Diagnostics) != 2 {
 		t.Fatalf("comparison=%+v", comparison)
+	}
+}
+func TestProofRequiresEveryScenario(t *testing.T) {
+	s, _ := New(t.TempDir())
+	p := testPlan()
+	second := p.Scenarios[0]
+	second.ID, second.Name = "soak", "sustained soak"
+	p.Scenarios = append(p.Scenarios, second)
+	created, e := s.Create("repo", "owner", "coverage", p)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = s.AddRun("repo", "human", "owner", created.ID, "peak", testRun()); e != nil {
+		t.Fatal(e)
+	}
+	partial, _ := s.Compare("repo", created.ID)
+	if len(partial.ProvenCandidateIDs) != 0 {
+		t.Fatalf("partial evidence was proven: %+v", partial)
+	}
+	soak := testRun()
+	soak.ScenarioID = "soak"
+	if _, e = s.AddRun("repo", "human", "owner", created.ID, "soak", soak); e != nil {
+		t.Fatal(e)
+	}
+	complete, _ := s.Compare("repo", created.ID)
+	if len(complete.ProvenCandidateIDs) != 1 || complete.ProvenCandidateIDs[0] != "scale-out" {
+		t.Fatalf("complete evidence was not proven: %+v", complete)
+	}
+}
+func TestCostLimitIsDerivedFromScenario(t *testing.T) {
+	s, _ := New(t.TempDir())
+	p, _ := s.Create("repo", "owner", "cost-plan", testPlan())
+	over := testRun()
+	over.Metrics.Cost = 3
+	retained, e := s.AddRun("repo", "human", "owner", p.ID, "over-cost", over)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if retained.Quality != "limit_breached" || len(retained.LimitBreaches) != 1 || retained.LimitBreaches[0] != "max_cost" {
+		t.Fatalf("over-budget run=%+v", retained)
+	}
+	comparison, _ := s.Compare("repo", p.ID)
+	if len(comparison.ProvenCandidateIDs) != 0 {
+		t.Fatalf("over-budget evidence was proven: %+v", comparison)
 	}
 }
 func TestRejectsProductionAndUnboundedLoad(t *testing.T) {

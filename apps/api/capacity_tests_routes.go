@@ -3,13 +3,18 @@ package main
 import (
 	"errors"
 	"net/http"
+	"os/exec"
+	"strconv"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/capacitymodels"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/capacityobjectives"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/capacitytests"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/durableschemas"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/infrastructure"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 )
 
 type capacityTestInput struct {
@@ -21,7 +26,7 @@ type capacityRunInput struct {
 	Run       capacitytests.Run `json:"run"`
 }
 
-func registerCapacityTestRoutes(mux *http.ServeMux, repos *repositories.Store, credentials *auth.Store, objectives *capacityobjectives.Store, models *capacitymodels.Store, releaseStore *releases.Store, tests *capacitytests.Store) {
+func registerCapacityTestRoutes(mux *http.ServeMux, gitStore *storage.Store, repos *repositories.Store, credentials *auth.Store, objectives *capacityobjectives.Store, models *capacitymodels.Store, releaseStore *releases.Store, infrastructureStore *infrastructure.Store, schemaStore *durableschemas.Store, tests *capacitytests.Store) {
 	read := func(w http.ResponseWriter, r *http.Request) (auth.Credential, bool) {
 		c, _, ok := authorizeRepositoryRead(w, r, repos, credentials, r.PathValue("id"))
 		return c, ok
@@ -83,12 +88,37 @@ func registerCapacityTestRoutes(mux *http.ServeMux, repos *repositories.Store, c
 		}
 		for _, candidate := range in.Plan.Candidates {
 			for _, component := range candidate.Components {
-				if component.Kind == "release" {
+				valid := false
+				switch component.Kind {
+				case "release":
 					release, x := releaseStore.Get(r.PathValue("id"), component.ResourceID)
-					if x != nil || release.CommitID != component.Revision {
-						writeAPIError(w, 422, "capacity_candidate_invalid", "release components must bind an authoritative exact repository release")
-						return
+					valid = x == nil && release.CommitID == component.Revision
+				case "infrastructure":
+					if infrastructureStore != nil {
+						definition, x := infrastructureStore.Get(component.ResourceID, true)
+						if x == nil && definition.RepositoryID == r.PathValue("id") {
+							for _, revision := range definition.Revisions {
+								valid = valid || revision.Revision == component.Revision
+							}
+						}
 					}
+				case "schema":
+					if schemaStore != nil {
+						schema, x := schemaStore.Get(r.PathValue("id"), component.ResourceID)
+						version, versionErr := strconv.Atoi(component.Revision)
+						valid = x == nil && versionErr == nil && version >= 1 && version <= len(schema.Revisions) && schema.Revisions[version-1].Version == version
+					}
+				case "dependency_configuration":
+					if gitStore != nil {
+						repository, x := gitStore.Open(r.PathValue("id"))
+						if x == nil {
+							valid = exec.Command("git", "-C", repository.Path(), "cat-file", "-e", component.Revision+":"+component.ResourceID).Run() == nil
+						}
+					}
+				}
+				if !valid {
+					writeAPIError(w, 422, "capacity_candidate_invalid", "every component must bind an authoritative exact release, infrastructure revision, schema version, or dependency file revision in this repository")
+					return
 				}
 			}
 		}

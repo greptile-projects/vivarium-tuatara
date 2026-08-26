@@ -560,8 +560,9 @@ environments, coordinated-load keys, correctness criteria, and hard duration, re
 concurrency, and cost limits reject production data and production impact. Human and
 approved-agent evidence retains throughput, latency, errors, saturation, recovery,
 correctness, resources, optional declared carbon, cost, variability, limit breaches, and
-logs. Only successful, correct, comparable, repeated, low-noise evidence projects as
-proof; weaker results remain explicit. Experiments grant no environment, infrastructure,
+logs. The server derives cost-limit breaches, and only successful, correct, comparable,
+repeated, low-noise evidence across every declared scenario projects a candidate as proof;
+weaker or partial results remain explicit. Experiments grant no environment, infrastructure,
 release, deployment, funding, scaling, production-data, or operational authority.
   CAS-versioned bounded trials resolve an existing attested release or exact readable commit, scope
   packages/APIs and synthetic or permitted data, and select only the adopter's declared journeys.

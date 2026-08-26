@@ -78,8 +78,11 @@ production data and production-impact permission are rejected. Human and approve
 runs retain throughput, percentile latency, errors, saturation, recovery, correctness,
 resources, optional declared carbon, cost, repetitions, variability, comparability, limit
 breaches, and a log digest. Only successful, correct, comparable evidence with at least
-three repetitions and no more than 15% noise is projected as `proof`; all weaker results
-remain visible. Storage defaults beneath `$CAPACITY_TEST_STORAGE_ROOT` (`capacity-tests`).
+three repetitions and no more than 15% noise is projected as scenario proof, and a
+candidate is demonstrated only after every declared scenario has such proof. The server
+derives cost-limit breaches from the matched scenario rather than trusting the submitter.
+All weaker or incomplete results remain visible. Storage defaults beneath
+`$CAPACITY_TEST_STORAGE_ROOT` (`capacity-tests`).
 The records grant no environment, infrastructure, release, production-data, deployment,
 funding, scaling, or operational authority.
 
