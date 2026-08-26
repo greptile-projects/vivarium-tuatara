@@ -374,39 +374,48 @@ func registerResponseAlertRoutes(mux *http.ServeMux, catalog *repositories.Store
 
 func responseAlertEventAllowed(v responsealerts.Alert, actor string, rotations []responsepolicies.Rotation, currentParticipants map[string]bool) bool {
 	// Delivery freezes who received the original page. An accepted exact-duty
-	// handoff changes who may complete an alert that arose during that shift,
-	// without rewriting that delivery evidence or granting any other authority.
+	// handoff changes who may complete an alert that arose during its historical
+	// shift. Later schedule revisions do not rewrite that accepted transfer.
+	var transferredTo string
+	var transferredAt time.Time
 	for _, rotation := range rotations {
 		if len(rotation.Revisions) == 0 {
 			continue
 		}
-		revision := rotation.Revisions[len(rotation.Revisions)-1]
-		if revision.PolicyID != v.PolicyID || revision.TeamID != v.TeamID {
-			continue
-		}
-		projected := responsepolicies.ProjectRotation(rotation, currentParticipants, time.Now().UTC())
-		for _, shift := range revision.Shifts {
-			if v.Signal.OccurredAt.Before(shift.StartsAt) || !v.Signal.OccurredAt.Before(shift.EndsAt) {
+		for _, event := range rotation.Events {
+			if event.Status != "accepted" {
 				continue
 			}
-			transferred := false
-			for _, event := range rotation.Events {
-				if event.ShiftID != shift.ID || event.Status != "accepted" || event.RotationVersion != rotation.CurrentVersion {
+			namesAlert := false
+			for _, context := range event.Context {
+				if context.ResourceID == v.ID {
+					namesAlert = true
+					break
+				}
+			}
+			if !namesAlert || event.RotationVersion < 1 || event.RotationVersion > len(rotation.Revisions) {
+				continue
+			}
+			historical := rotation.Revisions[event.RotationVersion-1]
+			if historical.PolicyID != v.PolicyID || historical.TeamID != v.TeamID {
+				continue
+			}
+			for _, shift := range historical.Shifts {
+				if shift.ID != event.ShiftID || v.Signal.OccurredAt.Before(shift.StartsAt) || !v.Signal.OccurredAt.Before(shift.EndsAt) {
 					continue
 				}
-				for _, context := range event.Context {
-					if context.ResourceID == v.ID {
-						transferred = true
-						break
-					}
+				acceptedAt := event.CreatedAt
+				if event.AcceptedAt != nil {
+					acceptedAt = *event.AcceptedAt
+				}
+				if transferredTo == "" || acceptedAt.After(transferredAt) {
+					transferredTo, transferredAt = event.ToUserID, acceptedAt
 				}
 			}
-			if !transferred {
-				continue
-			}
-			owner := projected.EffectiveOwnerByShift[shift.ID]
-			return owner != "" && owner == actor && currentParticipants[actor]
 		}
+	}
+	if transferredTo != "" {
+		return transferredTo == actor && currentParticipants[actor]
 	}
 	for _, delivery := range v.Routing {
 		if delivery.RecipientID == actor && delivery.Status == "delivered" && currentParticipants[actor] {

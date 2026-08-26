@@ -141,6 +141,8 @@ the resulting failed delivery remain explicit evidence; none of those paths expa
 For an alert explicitly named in an accepted current-rotation handoff, acknowledge/resolve authority
 moves to the effective shift owner while original routing stays immutable delivery evidence. The former
 owner and unrelated handoff context do not retain or manufacture active-alert completion authority.
+Schedule successors preserve accepted exact-alert transfers by resolving the event against its retained
+historical rotation revision; removed recipients still lose authority through live participation checks.
 
 ## Collaborative capacity objectives
 
