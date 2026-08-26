@@ -19,6 +19,14 @@ type runbookInput struct {
 	ExpectedVersion int               `json:"expected_version"`
 	Revision        runbooks.Revision `json:"revision"`
 }
+type runbookRehearsalInput struct {
+	RequestID              string              `json:"request_id"`
+	RunbookVersion         int                 `json:"runbook_version"`
+	EnvironmentKind        string              `json:"environment_kind"`
+	EnvironmentID          string              `json:"environment_id"`
+	PolicyApprovalRevision string              `json:"policy_approval_revision"`
+	Scenarios              []runbooks.Scenario `json:"scenarios"`
+}
 
 func registerRunbookRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, store *runbooks.Store, workflows *workflowcomponents.Store, orgs *organizations.Store) {
 	mux.HandleFunc("GET /repositories/{id}/runbooks", func(w http.ResponseWriter, r *http.Request) {
@@ -98,6 +106,37 @@ func registerRunbookRoutes(mux *http.ServeMux, git *storage.Store, catalog *repo
 	}
 	mux.HandleFunc("POST /repositories/{id}/runbooks", publish(false))
 	mux.HandleFunc("POST /repositories/{id}/runbooks/{runbook_id}/revisions", publish(true))
+	mux.HandleFunc("POST /repositories/{id}/runbooks/{runbook_id}/rehearsals", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:read")
+		if !ok {
+			return
+		}
+		current, err := store.Get(r.PathValue("runbook_id"))
+		if err != nil || current.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "runbook_not_found", "runbook not found")
+			return
+		}
+		var in runbookRehearsalInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_rehearsal", "a bounded complete rehearsal is required")
+			return
+		}
+		actorType, actorID := "human", actor.UserID
+		if actor.AgentID != "" {
+			actorType, actorID = "agent", actor.AgentID
+		}
+		out, err := store.Rehearse(current.ID, actorType, actorID, in.RequestID, in.RunbookVersion, in.EnvironmentKind, in.EnvironmentID, in.PolicyApprovalRevision, in.Scenarios)
+		switch {
+		case err == nil:
+			writeJSON(w, 201, out)
+		case errors.Is(err, runbooks.ErrConflict):
+			writeAPIError(w, 409, "runbook_rehearsal_conflict", "the rehearsal request identity conflicts")
+		case errors.Is(err, runbooks.ErrInvalid):
+			writeAPIError(w, 400, "invalid_rehearsal", "the rehearsal must use bounded evidence, complete step outcomes, and simulate or exclude changing steps")
+		default:
+			writeAPIError(w, 500, "runbooks_unavailable", "the rehearsal could not be retained")
+		}
+	})
 }
 
 // resolveRunbookReferences ignores caller status flags and derives them from the

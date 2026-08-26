@@ -4,10 +4,54 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func validRevision(owner string) Revision {
 	return Revision{Title: "Checkout recovery", Purpose: "Diagnose before changing state", Scope: Scope{Kind: "service", ResourceID: "checkout", Name: "Checkout"}, Preconditions: []string{"Confirm signal"}, RollbackCriteria: []string{"Stop on increased impact"}, OwnerIDs: []string{owner}, RequiredSkills: []string{"operations"}, Escalations: []Escalation{{Condition: "blocked", OwnerID: owner, Path: "owner", ExpectedAction: "decide"}}, ChangeReason: "initial", Steps: []Step{{ID: "inspect", Position: 1, Kind: "diagnostic", Title: "Inspect", Purpose: "Test hypothesis", Instructions: "Use reviewed workflow", Preconditions: []string{"read access"}, ExpectedEvidence: []string{"health digest"}, OwnerIDs: []string{owner}, RequiredSkills: []string{"operations"}, References: []Reference{{Kind: "command", ResourceID: "health-check", Revision: "abc", Reviewed: true, Accessible: true}}, Authority: Authority{RequiredAccess: []string{"service:read"}, Inspects: []string{"health"}, ProhibitedActions: []string{"deploy"}}}}}
+}
+
+func TestRehearsalRetainsBoundedEvidenceAndBecomesStale(t *testing.T) {
+	s, _ := New(t.TempDir())
+	r := validRevision("owner")
+	r.Scope.Revision = "service-v1"
+	created, err := s.Create("repo", "owner", "create", r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	scenario := Scenario{ID: "latency", Name: "Elevated latency", Failure: "health check is slow", Inputs: []RehearsalInput{{Kind: "service", ResourceID: "checkout", Revision: "service-v1", EvidenceKind: "synthetic", Digest: "sha256:input"}}, Steps: []StepOutcome{{StepID: "inspect", Output: "healthy synthetic response", StartedAt: now, FinishedAt: now.Add(time.Second), Artifacts: []Artifact{{Name: "health.json", Digest: "sha256:artifact", MediaType: "application/json"}}, CostCents: 2, Permissions: []string{"service:read"}, Outcome: "passed", DestructiveHandling: "not_applicable"}}, AchievedOutcome: "achieved"}
+	rehearsed, err := s.Rehearse(created.ID, "human", "owner", "rehearse", 1, "isolated", "sandbox-1", "", []Scenario{scenario})
+	if err != nil || len(rehearsed.Rehearsals) != 1 || rehearsed.Rehearsals[0].Status != "passed" || rehearsed.Rehearsals[0].Stale {
+		t.Fatalf("rehearsed=%+v err=%v", rehearsed, err)
+	}
+	retry, err := s.Rehearse(created.ID, "human", "owner", "rehearse", 1, "isolated", "sandbox-1", "", []Scenario{scenario})
+	if err != nil || retry.Rehearsals[0].ID != rehearsed.Rehearsals[0].ID {
+		t.Fatalf("retry=%+v err=%v", retry, err)
+	}
+	r.ChangeReason = "clarify recovery"
+	revised, err := s.Revise(created.ID, 1, "owner", "revise", r)
+	if err != nil || !revised.Rehearsals[0].Stale || revised.Rehearsals[0].StaleReasons[0] != "runbook_steps_changed" {
+		t.Fatalf("revised=%+v err=%v", revised, err)
+	}
+}
+
+func TestRehearsalRejectsUnsafeChangingStepAndSecretOutput(t *testing.T) {
+	s, _ := New(t.TempDir())
+	r := validRevision("owner")
+	r.Steps[0].Authority.Changes = []string{"traffic"}
+	r.Steps[0].Authority.HumanApprovalRequired = true
+	created, _ := s.Create("repo", "owner", "create", r)
+	now := time.Now().UTC()
+	base := Scenario{ID: "failure", Name: "Failure", Failure: "unavailable", Inputs: []RehearsalInput{{Kind: "service", ResourceID: "checkout", Revision: "v1", EvidenceKind: "permitted", Digest: "sha256:x"}}, Steps: []StepOutcome{{StepID: "inspect", Output: "ok", StartedAt: now, FinishedAt: now, Permissions: []string{"service:read"}, Outcome: "passed"}}, AchievedOutcome: "achieved"}
+	if _, err := s.Rehearse(created.ID, "agent", "agent", "unsafe", 1, "isolated", "box", "", []Scenario{base}); err != ErrInvalid {
+		t.Fatalf("unsafe error=%v", err)
+	}
+	base.Steps[0].DestructiveHandling = "simulated"
+	base.Steps[0].Output = "token=abcdefghijklmnop"
+	if _, err := s.Rehearse(created.ID, "agent", "agent", "secret", 1, "isolated", "box", "", []Scenario{base}); err != ErrInvalid {
+		t.Fatalf("secret error=%v", err)
+	}
 }
 func TestVersioningAndAuthorityDiagnostics(t *testing.T) {
 	s, _ := New(t.TempDir())
