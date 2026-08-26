@@ -565,6 +565,21 @@ negative/non-finite metrics and derives every limit breach; only successful, cor
 repeated, low-noise evidence across every declared scenario projects a candidate as proof;
 weaker or partial results remain explicit. Experiments grant no environment, infrastructure,
 release, deployment, funding, scaling, production-data, or operational authority.
+Supported scaling choices become accountable delivery programs at repository
+`/capacity-plans` routes and the same `/capacity` workspace beneath
+`$CAPACITY_PLAN_STORAGE_ROOT` (`capacity-plans`). Each caller-stable plan binds exact
+objective/model/test evidence to one proven candidate, reservations, procurement/quota
+dependencies, a bounded budget, and ordered owned phases with acceptance criteria,
+decision points, and exit strategies. All named owners remain current participants.
+Delivery freezes the default-branch revision and creates one ordinary human- or
+agent-owned proposal task per phase; existing sessions, workspaces, contribution pulls,
+reviews, checks, queues, releases, and environment controls retain their own authority.
+Deterministic proposal/task identities are retained as a pending link before ordinary
+work publication, retries converge, and the approved phase dependency graph is preserved.
+The retained base remains the retry base after default-branch movement because its first
+reservation was published under the Git reference lock; current participants are still rechecked.
+Plan approval grants no spending, provider, quota, repository, secret, merge, release,
+deployment, environment, scaling, or operational authority.
   CAS-versioned bounded trials resolve an existing attested release or exact readable commit, scope
   packages/APIs and synthetic or permitted data, and select only the adopter's declared journeys.
   Definitions and immutable attempts retain setup, configuration, commands, integration changes,

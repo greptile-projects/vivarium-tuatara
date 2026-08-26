@@ -109,6 +109,7 @@ type ReasoningOrigin struct {
 	ProvenanceAssessmentID         string                     `json:"provenance_assessment_id,omitempty"`
 	ProvenanceFindingID            string                     `json:"provenance_finding_id,omitempty"`
 	ProvenanceRepairRequestID      string                     `json:"provenance_repair_request_id,omitempty"`
+	CapacityPlanID                 string                     `json:"capacity_plan_id,omitempty"`
 }
 
 type ReasoningItem struct {
@@ -161,6 +162,7 @@ type Task struct {
 type ImplementationTaskInput struct {
 	ID, Title, Outcome, Risk, VerificationPlan, AssigneeType, AssigneeID string
 	DependsOnPrevious                                                    bool
+	DependencyIDs                                                        []string
 }
 
 type ImplementationInput struct {
@@ -421,8 +423,9 @@ func (s *Store) CreateImplementation(input ImplementationInput) (Proposal, []Tas
 	isRegression := validID(input.Origin.RegressionInvestigationID) && validID(input.Origin.RegressionResponseID)
 	isPropagation := validReliabilityReference(input.Origin.PropagationCampaignID) && strings.TrimSpace(input.Origin.PropagationTargetID) != "" && validReliabilityReference(input.Origin.PropagationAssessmentID) && input.Origin.AssessmentVersion > 0
 	isProvenance := validID(input.Origin.ProvenanceAssessmentID) && input.Origin.AssessmentVersion > 0 && strings.TrimSpace(input.Origin.ProvenanceFindingID) != "" && validID(input.Origin.ProvenanceRepairRequestID)
+	isCapacity := validID(input.Origin.CapacityPlanID)
 	originCount := 0
-	for _, present := range []bool{isAssessment, isAccessibility, isDecision, isIssue, isGovernance, isRoadmap, isDataObservation, isReliability, isRecovery, isSupport, isDebugging, isDesign, isExploratory, isSecurityFinding, isRegression, isPropagation, isProvenance} {
+	for _, present := range []bool{isAssessment, isAccessibility, isDecision, isIssue, isGovernance, isRoadmap, isDataObservation, isReliability, isRecovery, isSupport, isDebugging, isDesign, isExploratory, isSecurityFinding, isRegression, isPropagation, isProvenance, isCapacity} {
 		if present {
 			originCount++
 		}
@@ -518,6 +521,22 @@ func (s *Store) CreateImplementation(input ImplementationInput) (Proposal, []Tas
 			}
 			return r.Proposal, append([]Task(nil), r.Tasks...), nil
 		}
+		if isCapacity && r.Proposal.RepositoryID == input.RepositoryID && r.Proposal.Reasoning != nil && r.Proposal.Reasoning.CapacityPlanID == input.Origin.CapacityPlanID {
+			if !reflect.DeepEqual(*r.Proposal.Reasoning, input.Origin) || r.Proposal.Title != title || r.Proposal.Body != body || len(r.Tasks) != len(input.Tasks) {
+				return Proposal{}, nil, ErrImplementationConflict
+			}
+			for i, task := range r.Tasks {
+				value := input.Tasks[i]
+				expectedDependencies := cloneStrings(value.DependencyIDs)
+				if len(expectedDependencies) == 0 && value.DependsOnPrevious && i > 0 {
+					expectedDependencies = []string{r.Tasks[i-1].ID}
+				}
+				if task.Title != strings.TrimSpace(value.Title) || task.Outcome != strings.TrimSpace(value.Outcome) || task.Risk != strings.TrimSpace(value.Risk) || task.VerificationPlan != strings.TrimSpace(value.VerificationPlan) || task.Assignment == nil || task.Assignment.AssigneeType != value.AssigneeType || task.Assignment.AssigneeID != value.AssigneeID || !slices.Equal(task.DependencyIDs, expectedDependencies) {
+					return Proposal{}, nil, ErrImplementationConflict
+				}
+			}
+			return r.Proposal, append([]Task(nil), r.Tasks...), nil
+		}
 		if r.Proposal.RepositoryID == input.RepositoryID && r.Proposal.Reasoning != nil && ((isAccessibility && r.Proposal.Reasoning.AssessmentID == input.Origin.AssessmentID && r.Proposal.Reasoning.AccessibilityFindingID == input.Origin.AccessibilityFindingID) || (isAssessment && r.Proposal.Reasoning.AssessmentID == input.Origin.AssessmentID && r.Proposal.Reasoning.AssuranceFindingID == input.Origin.AssuranceFindingID) || (isDecision && r.Proposal.Reasoning.DecisionID == input.Origin.DecisionID && r.Proposal.Reasoning.CommitmentVersion == input.Origin.CommitmentVersion) || (isIssue && r.Proposal.Reasoning.IssueID == input.Origin.IssueID && r.Proposal.Reasoning.ReproductionID == input.Origin.ReproductionID) || (isGovernance && r.Proposal.Reasoning.GovernanceProposalID == input.Origin.GovernanceProposalID) || (isRoadmap && r.Proposal.Reasoning.RoadmapItemID == input.Origin.RoadmapItemID && r.Proposal.Reasoning.RoadmapVersion == input.Origin.RoadmapVersion) || (isDataObservation && r.Proposal.Reasoning.DataObservationID == input.Origin.DataObservationID) || (isReliability && r.Proposal.Reasoning.ReliabilityContractID == input.Origin.ReliabilityContractID && r.Proposal.Reasoning.ReliabilityFindingID == input.Origin.ReliabilityFindingID && r.Proposal.Reasoning.ReliabilityImpactID == input.Origin.ReliabilityImpactID) || (isRecovery && r.Proposal.Reasoning.RecoveryExerciseID == input.Origin.RecoveryExerciseID && r.Proposal.Reasoning.RecoveryFindingID == input.Origin.RecoveryFindingID) || (isSupport && r.Proposal.Reasoning.SupportThreadID == input.Origin.SupportThreadID) || (isDesign && r.Proposal.Reasoning.DesignProposalID == input.Origin.DesignProposalID)) {
 			if ((isAccessibility || isIssue || isGovernance || isRoadmap || isReliability || isRecovery || isSupport || isDesign) && !reflect.DeepEqual(*r.Proposal.Reasoning, input.Origin)) || r.Proposal.Title != title || r.Proposal.Body != body || len(r.Tasks) != len(input.Tasks) {
 				return Proposal{}, nil, ErrImplementationConflict
@@ -572,9 +591,18 @@ func (s *Store) CreateImplementation(input ImplementationInput) (Proposal, []Tas
 		if idErr != nil {
 			return Proposal{}, nil, idErr
 		}
-		dependencies := []string{}
-		if value.DependsOnPrevious && index > 0 {
+		dependencies := cloneStrings(value.DependencyIDs)
+		if len(dependencies) == 0 && value.DependsOnPrevious && index > 0 {
 			dependencies = []string{tasks[index-1].ID}
+		}
+		for _, dependencyID := range dependencies {
+			found := false
+			for _, prior := range tasks {
+				found = found || prior.ID == dependencyID
+			}
+			if !found || dependencyID == taskID {
+				return Proposal{}, nil, ErrInvalid
+			}
 		}
 		scopes, branch := []string{}, "no new access; existing collaborator authority only"
 		if value.AssigneeType == "agent" {

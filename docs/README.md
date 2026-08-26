@@ -88,6 +88,33 @@ All weaker or incomplete results remain visible. Storage defaults beneath
 The records grant no environment, infrastructure, release, production-data, deployment,
 funding, scaling, or operational authority.
 
+## Accountable capacity delivery plans
+
+Current repository writers publish selected scaling programs through
+`POST /repositories/{id}/capacity-plans` after the named candidate has proof-quality
+coverage for every scenario in one exact retained capacity test. Plans bind exact
+objective and optional model revisions and retain reservations, procurement or quota
+dependencies, a bounded total budget, and ordered application, schema, infrastructure,
+dependency, observability, and operating-documentation phases. Every phase names a
+current owner, acceptance criteria, a decision point, and an exit strategy; dependency
+edges must resolve inside the plan and phase budgets cannot exceed its envelope.
+
+The plan's `/delivery` route freezes the current default-branch revision and creates one
+ordinary proposal with an ordered human- or approved-agent-owned task per phase. Those
+tasks use the existing scoped session, workspace, contribution pull, review, check,
+merge-queue, release, and environment paths. The handoff preserves capacity-plan and
+phase reasoning but bypasses none of their authorization or readiness checks. Stable
+plan requests and delivery publication reconcile retries without duplicating programs
+or ordinary work. Delivery first retains deterministic proposal/task identities as a
+visible `pending` linkage, creates or recovers that exact ordinary work, and then marks
+the linkage `created`, so a cross-store failure cannot leave untracked tasks. Declared
+phase dependencies are copied exactly rather than linearized. Recovery uses the retained
+base even if later ordinary work advances the default branch; the first reservation was
+itself captured under the branch reference lock, while live participation is rechecked.
+Storage defaults beneath `$CAPACITY_PLAN_STORAGE_ROOT`
+(`capacity-plans`). Plan approval is coordination only and grants no spending, provider,
+quota, repository, secret, merge, release, deployment, or environment authority.
+
 ## Revision-exact review plans
 
 Pull authors and current repository owners can publish a review plan before approvals accumulate through `POST /repositories/{id}/pulls/{pull_id}/review-plans`; all repository readers can inspect its immutable history through the matching `GET` route and the pull page. Caller-stable `request_id` values reconcile ambiguous post-publication retries to the already-retained version and reject changed reuse. Each version freezes the exact source and target commits, declared pull intent, changed paths, target-branch required checks, inferred risks and affected security, privacy, accessibility, or interface commitments, then breaks that context into review areas with acceptance questions, required evidence, dependencies, accountable current ownership, and explicit completion rules.
