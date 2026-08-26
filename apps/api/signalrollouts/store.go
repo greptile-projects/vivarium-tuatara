@@ -209,6 +209,17 @@ func (s *Store) Mutate(repo, id string, expected int, ev Event) (Rollout, error)
 			return Rollout{}, ErrInvalid
 		}
 		r.Status = "rolled_back"
+	case "verify_stopped":
+		if r.Status != "rolled_back" || ev.Observation == nil || !validObservation(*ev.Observation) || !sameScope(ev.Observation.Scope, r.Scope) || ev.Observation.Quality.CollectorAvailable {
+			return Rollout{}, ErrInvalid
+		}
+		o := *ev.Observation
+		o.ID = stable(r.ID, ev.RequestID)
+		o.CreatedBy = ev.ActorID
+		o.CreatedAt = s.now()
+		o.Digest = digest(o.Quality)
+		r.Observations = append(r.Observations, o)
+		ev.Observation = &o
 	case "observe":
 		if r.Status == "rolled_back" {
 			return Rollout{}, ErrInvalid

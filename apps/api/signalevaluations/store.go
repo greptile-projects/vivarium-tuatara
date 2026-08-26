@@ -25,6 +25,7 @@ type Correlation struct {
 	Label      string `json:"label"`
 }
 type Citation struct {
+	ID          string    `json:"id"`
 	Kind        string    `json:"kind"`
 	ResourceID  string    `json:"resource_id"`
 	Revision    string    `json:"revision"`
@@ -209,8 +210,25 @@ func (s *Store) AddFinding(repo, id string, f Finding) (Evaluation, error) {
 		return Evaluation{}, ErrInvalid
 	}
 	for _, c := range f.Citations {
-		if c.Kind == "" || c.ResourceID == "" || c.Revision == "" || len(c.Digest) != 64 || c.Query == "" || c.WindowStart.IsZero() || !c.WindowEnd.After(c.WindowStart) {
+		if c.ID == "" || c.Kind == "" || c.ResourceID == "" || c.Revision == "" || len(c.Digest) != 64 || c.Query == "" || c.WindowStart.IsZero() || !c.WindowEnd.After(c.WindowStart) {
 			return Evaluation{}, ErrInvalid
+		}
+	}
+	citations := map[string]bool{}
+	for _, c := range f.Citations {
+		if citations[c.ID] {
+			return Evaluation{}, ErrInvalid
+		}
+		citations[c.ID] = true
+	}
+	for _, criterion := range f.Criteria {
+		if criterion.ID == "" || criterion.Result == "" || criterion.Rationale == "" || len(criterion.CitationIDs) == 0 {
+			return Evaluation{}, ErrInvalid
+		}
+		for _, id := range criterion.CitationIDs {
+			if !citations[id] {
+				return Evaluation{}, ErrInvalid
+			}
 		}
 	}
 	f.ID = stable(x.ID, f.RequestID)
@@ -258,16 +276,25 @@ func (s *Store) Decide(repo, id string, d Decision) (Evaluation, error) {
 	if d.Repair != nil && (strings.TrimSpace(d.Repair.Kind) == "" || strings.TrimSpace(d.Repair.ResourceID) == "" || strings.TrimSpace(d.Repair.Summary) == "") {
 		return Evaluation{}, ErrInvalid
 	}
+	if !sameConsumers(d.Consumers, x.Consumers) {
+		return Evaluation{}, ErrInvalid
+	}
 	updateKinds := map[string]bool{"service_objective": true, "alert": true, "runbook": true, "investigation": true, "quality_check": true, "decision": true}
 	for _, update := range d.Updates {
-		if !updateKinds[update.Kind] || update.ResourceID == "" || update.Revision == "" || update.Summary == "" {
+		if !updateKinds[update.Kind] || update.ResourceID == "" || update.Revision == "" || update.Summary == "" || !hasCorrelation(x.Correlations, update.Kind, update.ResourceID, update.Revision) {
 			return Evaluation{}, ErrInvalid
 		}
+	}
+	if d.Repair != nil && ((d.Repair.Kind != "proposal" && d.Repair.Kind != "task") || !hasCorrelationResource(x.Correlations, d.Repair.Kind, d.Repair.ResourceID)) {
+		return Evaluation{}, ErrInvalid
 	}
 	if (d.Action == "archive" || d.Action == "remove") && (d.StopVerification == nil || len(d.StopVerification.Digest) != 64 || len(d.Consumers) == 0) {
 		return Evaluation{}, ErrInvalid
 	}
 	if d.StopVerification != nil && (d.StopVerification.ResourceID == "" || d.StopVerification.Revision == "" || d.StopVerification.Query == "" || d.StopVerification.WindowStart.IsZero() || !d.StopVerification.WindowEnd.After(d.StopVerification.WindowStart)) {
+		return Evaluation{}, ErrInvalid
+	}
+	if (d.Action == "archive" || d.Action == "remove") && d.StopVerification.Kind != "collector_stop" {
 		return Evaluation{}, ErrInvalid
 	}
 	d.ID = stable(x.ID, d.RequestID)
@@ -277,6 +304,42 @@ func (s *Store) Decide(repo, id string, d Decision) (Evaluation, error) {
 	x.Version++
 	x.UpdatedAt = d.CreatedAt
 	return x, s.write(x)
+}
+func sameConsumers(a, b []Consumer) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	used := make([]bool, len(b))
+	for _, x := range a {
+		found := -1
+		for i, y := range b {
+			if !used[i] && x == y {
+				found = i
+				break
+			}
+		}
+		if found < 0 {
+			return false
+		}
+		used[found] = true
+	}
+	return true
+}
+func hasCorrelation(xs []Correlation, kind, id, revision string) bool {
+	for _, x := range xs {
+		if x.Kind == kind && x.ResourceID == id && x.Revision == revision {
+			return true
+		}
+	}
+	return false
+}
+func hasCorrelationResource(xs []Correlation, kind, id string) bool {
+	for _, x := range xs {
+		if x.Kind == kind && x.ResourceID == id {
+			return true
+		}
+	}
+	return false
 }
 func createView(x Evaluation) Evaluation {
 	x.ID = ""

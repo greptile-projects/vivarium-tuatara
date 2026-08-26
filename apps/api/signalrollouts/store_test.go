@@ -77,6 +77,23 @@ func TestNarrowPreservesReviewedTargetAndTerminalStates(t *testing.T) {
 	}
 }
 
+func TestRolledBackCollectionRequiresExactStoppedObservation(t *testing.T) {
+	s, _ := New(t.TempDir())
+	r, _ := s.Create("repo", "operator", "create-stop", Rollout{ContractID: "contract", ContractVersion: 1, InstrumentationRevision: "commit", DeploymentID: "deploy", EnvironmentID: "prod", ControllerID: "operator", Scope: Scope{Service: "api", Audience: "ops", Region: "eu", TrafficPercent: 10}, Budget: Budget{}})
+	r, _ = s.Mutate("repo", r.ID, r.Version, Event{RequestID: "rollback-stop", Kind: "rollback", ActorID: "operator", Reason: "retire collection"})
+	now := time.Now().UTC()
+	stillRunning := Observation{Scope: r.Scope, StartedAt: now.Add(-time.Minute), EndedAt: now, Quality: Quality{SignalHealth: "stopped", Coverage: 1, PrivacyControls: []string{"redaction"}, CollectorAvailable: true}}
+	if _, err := s.Mutate("repo", r.ID, r.Version, Event{RequestID: "false-stop", Kind: "verify_stopped", ActorID: "operator", Reason: "collector audit", Observation: &stillRunning}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("running collector accepted as stopped: %v", err)
+	}
+	stopped := stillRunning
+	stopped.Quality.CollectorAvailable = false
+	r, err := s.Mutate("repo", r.ID, r.Version, Event{RequestID: "verified-stop", Kind: "verify_stopped", ActorID: "operator", Reason: "collector accepted no payloads", Observation: &stopped})
+	if err != nil || r.Status != "rolled_back" || len(r.Observations) != 1 || r.Events[len(r.Events)-1].Kind != "verify_stopped" {
+		t.Fatalf("stop proof not retained: %v %+v", err, r)
+	}
+}
+
 func TestContainmentRequiresExplicitHealthyResolution(t *testing.T) {
 	s, _ := New(t.TempDir())
 	r, _ := s.Create("repo", "operator", "create", Rollout{ContractID: "contract", ContractVersion: 1, InstrumentationRevision: "commit", DeploymentID: "deploy", EnvironmentID: "prod", ControllerID: "operator", Scope: Scope{Service: "api", Audience: "ops", Region: "eu", TrafficPercent: 10}, Budget: Budget{StorageBytes: 100, QueryCostCents: 10, Cardinality: 20}})

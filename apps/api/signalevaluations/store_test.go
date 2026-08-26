@@ -13,7 +13,7 @@ func TestFindingsAndRetirementPreserveMeaningAndRequireStopProof(t *testing.T) {
 		t.Fatal(err)
 	}
 	start := time.Now().Add(-time.Hour).UTC()
-	f := Finding{RequestID: "finding", ActorKind: "agent", ActorID: "agent", Summary: "Saturation predicts latency", Method: "join trace dependency span with release window", Reproduction: "query digest q1 with frozen window", Uncertainty: "sample excludes one region", Citations: []Citation{{Kind: "signal", ResourceID: "observation", Revision: "4", Digest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Query: "q1", WindowStart: start, WindowEnd: start.Add(time.Minute)}}, Criteria: []Criterion{{ID: "distinguish", Result: "met", Rationale: "dependency spans separate the cases", CitationIDs: []string{"observation"}}}}
+	f := Finding{RequestID: "finding", ActorKind: "agent", ActorID: "agent", Summary: "Saturation predicts latency", Method: "join trace dependency span with release window", Reproduction: "query digest q1 with frozen window", Uncertainty: "sample excludes one region", Citations: []Citation{{ID: "citation-1", Kind: "signal", ResourceID: "observation", Revision: "4", Digest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Query: "q1", WindowStart: start, WindowEnd: start.Add(time.Minute)}}, Criteria: []Criterion{{ID: "distinguish", Result: "met", Rationale: "dependency spans separate the cases", CitationIDs: []string{"citation-1"}}}}
 	e, err = s.AddFinding("repo", e.ID, f)
 	if err != nil {
 		t.Fatal(err)
@@ -23,7 +23,7 @@ func TestFindingsAndRetirementPreserveMeaningAndRequireStopProof(t *testing.T) {
 		t.Fatalf("removal without impact and stop proof should fail: %v", err)
 	}
 	bad.Consumers = e.Consumers
-	bad.StopVerification = &Citation{Kind: "collector_audit", ResourceID: "collector", Revision: "after-removal", Digest: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Query: "no accepted payloads for 24h", WindowStart: start, WindowEnd: start.Add(24 * time.Hour)}
+	bad.StopVerification = &Citation{ID: "stop", Kind: "collector_stop", ResourceID: "collector", Revision: "after-removal", Digest: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Query: "no accepted payloads for 24h", WindowStart: start, WindowEnd: start.Add(24 * time.Hour)}
 	e, err = s.Decide("repo", e.ID, bad)
 	if err != nil {
 		t.Fatal(err)
@@ -37,7 +37,7 @@ func TestChangedFindingRetryConflicts(t *testing.T) {
 	s, _ := New(t.TempDir())
 	e, _ := s.Create("repo", "owner", Evaluation{RequestID: "open", GapID: "gap", GapVersion: 1, ContractID: "contract", ContractVersion: 1, RolloutID: "rollout", RolloutVersion: 1, SignalIDs: []string{"signal"}, Question: "useful?", OwnerIDs: []string{"owner"}})
 	n := time.Now().UTC()
-	f := Finding{RequestID: "same", ActorKind: "human", ActorID: "owner", Summary: "one", Method: "query", Reproduction: "repeat", Uncertainty: "known", Citations: []Citation{{Kind: "signal", ResourceID: "signal", Revision: "1", Digest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Query: "q", WindowStart: n, WindowEnd: n.Add(time.Minute)}}, Criteria: []Criterion{{ID: "c", Result: "met", Rationale: "r"}}}
+	f := Finding{RequestID: "same", ActorKind: "human", ActorID: "owner", Summary: "one", Method: "query", Reproduction: "repeat", Uncertainty: "known", Citations: []Citation{{ID: "citation", Kind: "signal", ResourceID: "signal", Revision: "1", Digest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Query: "q", WindowStart: n, WindowEnd: n.Add(time.Minute)}}, Criteria: []Criterion{{ID: "c", Result: "met", Rationale: "r", CitationIDs: []string{"citation"}}}}
 	if _, err := s.AddFinding("repo", e.ID, f); err != nil {
 		t.Fatal(err)
 	}

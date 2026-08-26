@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/observabilitygaps"
@@ -108,16 +109,25 @@ func registerSignalEvaluationRoutes(mux *http.ServeMux, repos *repositories.Stor
 			writeSignalEvaluation(w, x, e, 404)
 			return
 		}
-		allowed := map[string]bool{}
-		for _, id := range x.SignalIDs {
-			allowed[id] = true
+		rollout, e := rollouts.Get(r.PathValue("id"), x.RolloutID)
+		if e != nil {
+			writeAPIError(w, 422, "signal_evidence_unavailable", "the authoritative rollout evidence is unavailable")
+			return
 		}
-		for _, c := range x.Correlations {
-			allowed[c.ResourceID] = true
+		allowedSignals := map[string]bool{}
+		for _, id := range x.SignalIDs {
+			allowedSignals[id] = true
 		}
 		for _, c := range in.Citations {
-			if !allowed[c.ResourceID] {
-				writeAPIError(w, 422, "signal_citation_invalid", "citations must resolve through the evaluation's frozen signals or correlations")
+			resolved := false
+			for _, event := range rollout.Events {
+				if event.Sequence <= x.RolloutVersion && event.Observation != nil && allowedSignals[event.Observation.ID] && c.Kind == "signal" && c.ResourceID == event.Observation.ID && c.Revision == strconv.Itoa(event.Sequence) && c.Digest == event.Observation.Digest {
+					resolved = true
+					break
+				}
+			}
+			if !resolved {
+				writeAPIError(w, 422, "signal_citation_invalid", "every citation must match an exact frozen rollout observation ID, event revision, and digest")
 				return
 			}
 		}
@@ -158,11 +168,88 @@ func registerSignalEvaluationRoutes(mux *http.ServeMux, repos *repositories.Stor
 			writeAPIError(w, 403, "signal_owner_required", "only a declared current owner may decide the signal lifecycle")
 			return
 		}
+		contract, e := contracts.Get(r.PathValue("id"), current.ContractID)
+		if e != nil || contract.Acceptance == nil || contract.Acceptance.Version != current.ContractVersion || in.PolicyApproval != contract.Acceptance.RequestID {
+			writeAPIError(w, 422, "signal_policy_approval_invalid", "policy approval must resolve to the exact accepted telemetry contract")
+			return
+		}
+		if !sameSignalConsumers(in.Consumers, current.Consumers) {
+			writeAPIError(w, 422, "signal_consumer_impact_invalid", "the impact preview must cover every exact frozen consumer without substitution")
+			return
+		}
+		for _, update := range in.Updates {
+			if !signalReferenceFrozen(update.Kind, update.ResourceID, update.Revision, current.Correlations) {
+				writeAPIError(w, 422, "signal_update_invalid", "every accepted public-surface update must resolve to exact frozen context")
+				return
+			}
+		}
+		if in.Repair != nil && !signalRepairFrozen(*in.Repair, current.Correlations) {
+			writeAPIError(w, 422, "signal_repair_invalid", "connected repair work must resolve to a frozen proposal or task")
+			return
+		}
+		if in.Action == "archive" || in.Action == "remove" {
+			rollout, readErr := rollouts.Get(r.PathValue("id"), current.RolloutID)
+			if readErr != nil || rollout.Status != "rolled_back" || in.StopVerification == nil || !stopProofResolves(*in.StopVerification, rollout) {
+				writeAPIError(w, 422, "signal_stop_unverified", "archive and removal require a rolled-back rollout and exact post-rollback collector-stop observation")
+				return
+			}
+		}
 		in.ActorID = actor.UserID
 		var out signalevaluations.Evaluation
 		e = repos.WithCurrentParticipant(actor.UserID, r.PathValue("id"), func() error { var x error; out, x = evaluations.Decide(r.PathValue("id"), current.ID, in); return x })
 		writeSignalEvaluation(w, out, e, 201)
 	})
+}
+
+func sameSignalConsumers(got, frozen []signalevaluations.Consumer) bool {
+	if len(got) != len(frozen) {
+		return false
+	}
+	used := make([]bool, len(frozen))
+	for _, x := range got {
+		found := -1
+		for i, y := range frozen {
+			if !used[i] && x == y {
+				found = i
+				break
+			}
+		}
+		if found < 0 {
+			return false
+		}
+		used[found] = true
+	}
+	return true
+}
+func signalReferenceFrozen(kind, id, revision string, xs []signalevaluations.Correlation) bool {
+	for _, x := range xs {
+		if x.Kind == kind && x.ResourceID == id && x.Revision == revision {
+			return true
+		}
+	}
+	return false
+}
+func signalRepairFrozen(r signalevaluations.Repair, xs []signalevaluations.Correlation) bool {
+	if r.Kind != "proposal" && r.Kind != "task" {
+		return false
+	}
+	for _, x := range xs {
+		if x.Kind == r.Kind && x.ResourceID == r.ResourceID {
+			return true
+		}
+	}
+	return false
+}
+func stopProofResolves(c signalevaluations.Citation, rollout signalrollouts.Rollout) bool {
+	if c.Kind != "collector_stop" || c.Revision != strconv.Itoa(rollout.Version) {
+		return false
+	}
+	for _, event := range rollout.Events {
+		if event.Kind == "verify_stopped" && event.Sequence == rollout.Version && event.Observation != nil && event.Observation.ID == c.ResourceID && event.Observation.Digest == c.Digest && !event.Observation.Quality.CollectorAvailable {
+			return true
+		}
+	}
+	return false
 }
 func writeSignalEvaluation(w http.ResponseWriter, out signalevaluations.Evaluation, e error, status int) {
 	switch {
