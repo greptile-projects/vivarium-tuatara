@@ -116,6 +116,38 @@ type Workspace struct {
 	Investigations []Investigation  `json:"investigations"`
 	IncidentID     string           `json:"incident_id,omitempty"`
 }
+type OutcomeReview struct {
+	ID                   string    `json:"id"`
+	RequestID            string    `json:"request_id"`
+	ActorID              string    `json:"actor_id"`
+	Classification       string    `json:"classification"`
+	UserOutcome          string    `json:"user_outcome,omitempty"`
+	UserOutcomeConsent   bool      `json:"user_outcome_consent"`
+	InterruptionMinutes  int       `json:"interruption_minutes,omitempty"`
+	ResponderLoadConsent bool      `json:"responder_load_consent"`
+	AgentCost            int       `json:"agent_cost,omitempty"`
+	CorrectionKind       string    `json:"correction_kind,omitempty"`
+	RoutingAction        string    `json:"routing_action,omitempty"`
+	Rationale            string    `json:"rationale"`
+	ProposalID           string    `json:"proposal_id,omitempty"`
+	TaskID               string    `json:"task_id,omitempty"`
+	CreatedAt            time.Time `json:"created_at"`
+	RequestDigest        string    `json:"request_digest"`
+}
+type OutcomeReviewInput struct {
+	RequestID            string `json:"request_id"`
+	Classification       string `json:"classification"`
+	UserOutcome          string `json:"user_outcome,omitempty"`
+	UserOutcomeConsent   bool   `json:"user_outcome_consent"`
+	InterruptionMinutes  int    `json:"interruption_minutes,omitempty"`
+	ResponderLoadConsent bool   `json:"responder_load_consent"`
+	AgentCost            int    `json:"agent_cost,omitempty"`
+	CorrectionKind       string `json:"correction_kind,omitempty"`
+	RoutingAction        string `json:"routing_action,omitempty"`
+	Rationale            string `json:"rationale"`
+	ProposalID           string `json:"proposal_id,omitempty"`
+	TaskID               string `json:"task_id,omitempty"`
+}
 type WorkspaceCommand struct {
 	RequestID       string           `json:"request_id"`
 	Kind            string           `json:"kind"`
@@ -132,30 +164,31 @@ type WorkspaceCommand struct {
 	IncidentID      string           `json:"incident_id,omitempty"`
 }
 type Alert struct {
-	ID                string     `json:"id"`
-	RepositoryID      string     `json:"repository_id"`
-	RequestID         string     `json:"request_id"`
-	RequestDigest     string     `json:"request_digest"`
-	PolicyID          string     `json:"policy_id"`
-	PolicyVersion     int        `json:"policy_version"`
-	RuleID            string     `json:"rule_id"`
-	TeamID            string     `json:"team_id"`
-	Signal            Signal     `json:"signal"`
-	FirstSeenAt       time.Time  `json:"first_seen_at"`
-	LastSeenAt        time.Time  `json:"last_seen_at"`
-	EventCount        int        `json:"event_count"`
-	AcknowledgeBy     time.Time  `json:"acknowledge_by"`
-	ResolveBy         time.Time  `json:"resolve_by"`
-	State             string     `json:"state"`
-	Routing           []Delivery `json:"routing"`
-	Events            []Event    `json:"events"`
-	Diagnostics       []string   `json:"diagnostics"`
-	ExpectedActions   []string   `json:"expected_actions"`
-	PermittedActions  []string   `json:"permitted_actions"`
-	ProhibitedActions []string   `json:"prohibited_actions"`
-	AudienceIDs       []string   `json:"audience_ids"`
-	UpdatedAt         time.Time  `json:"updated_at"`
-	Workspace         Workspace  `json:"workspace"`
+	ID                string          `json:"id"`
+	RepositoryID      string          `json:"repository_id"`
+	RequestID         string          `json:"request_id"`
+	RequestDigest     string          `json:"request_digest"`
+	PolicyID          string          `json:"policy_id"`
+	PolicyVersion     int             `json:"policy_version"`
+	RuleID            string          `json:"rule_id"`
+	TeamID            string          `json:"team_id"`
+	Signal            Signal          `json:"signal"`
+	FirstSeenAt       time.Time       `json:"first_seen_at"`
+	LastSeenAt        time.Time       `json:"last_seen_at"`
+	EventCount        int             `json:"event_count"`
+	AcknowledgeBy     time.Time       `json:"acknowledge_by"`
+	ResolveBy         time.Time       `json:"resolve_by"`
+	State             string          `json:"state"`
+	Routing           []Delivery      `json:"routing"`
+	Events            []Event         `json:"events"`
+	Diagnostics       []string        `json:"diagnostics"`
+	ExpectedActions   []string        `json:"expected_actions"`
+	PermittedActions  []string        `json:"permitted_actions"`
+	ProhibitedActions []string        `json:"prohibited_actions"`
+	AudienceIDs       []string        `json:"audience_ids"`
+	UpdatedAt         time.Time       `json:"updated_at"`
+	Workspace         Workspace       `json:"workspace"`
+	OutcomeReviews    []OutcomeReview `json:"outcome_reviews"`
 }
 type Store struct {
 	root string
@@ -174,6 +207,9 @@ func New(root string) (*Store, error) {
 }
 
 func (s *Store) Create(repo, actor, request string, signal Signal, policy responsepolicies.Policy, recipients []string) (Alert, error) {
+	return s.CreateControlled(repo, actor, request, signal, policy, recipients, "")
+}
+func (s *Store) CreateControlled(repo, actor, request string, signal Signal, policy responsepolicies.Policy, recipients []string, routingDirective string) (Alert, error) {
 	var out Alert
 	err := s.lock(func() error {
 		if request == "" || validateSignal(signal) != nil || len(policy.Revisions) == 0 {
@@ -234,6 +270,13 @@ func (s *Store) Create(repo, actor, request string, signal Signal, policy respon
 			state = "maintenance"
 			diagnostics = append(diagnostics, "maintenance_window")
 		}
+		if routingDirective == "pause" {
+			state = "routing_paused"
+			diagnostics = append(diagnostics, "routing_paused")
+		}
+		if routingDirective == "backup" {
+			diagnostics = append(diagnostics, "declared_backup_activated")
+		}
 		for _, e := range signal.Evidence {
 			if !e.Available {
 				diagnostics = append(diagnostics, "inaccessible_evidence")
@@ -273,6 +316,73 @@ func (s *Store) Create(repo, actor, request string, signal Signal, policy respon
 		return s.write(out)
 	})
 	return out, err
+}
+
+func (s *Store) ReviewOutcome(id, actor string, in OutcomeReviewInput, allowed bool) (Alert, error) {
+	var out Alert
+	err := s.lock(func() error {
+		v, err := s.read(id)
+		if err != nil {
+			return err
+		}
+		d := outcomeDigest(in)
+		for _, old := range v.OutcomeReviews {
+			if old.RequestID == in.RequestID {
+				if old.ActorID != actor || old.RequestDigest != d {
+					return ErrConflict
+				}
+				out = v
+				return nil
+			}
+		}
+		if !allowed || ValidateOutcomeReview(in) != nil {
+			return ErrInvalid
+		}
+		now := s.now()
+		v.OutcomeReviews = append(v.OutcomeReviews, OutcomeReview{ID: stable(id, actor, in.RequestID), RequestID: in.RequestID, ActorID: actor, Classification: in.Classification, UserOutcome: in.UserOutcome, UserOutcomeConsent: in.UserOutcomeConsent, InterruptionMinutes: in.InterruptionMinutes, ResponderLoadConsent: in.ResponderLoadConsent, AgentCost: in.AgentCost, CorrectionKind: in.CorrectionKind, RoutingAction: in.RoutingAction, Rationale: strings.TrimSpace(in.Rationale), ProposalID: in.ProposalID, TaskID: in.TaskID, CreatedAt: now, RequestDigest: d})
+		v.UpdatedAt = now
+		out = v
+		return s.write(v)
+	})
+	return out, err
+}
+
+func ValidateOutcomeReview(in OutcomeReviewInput) error {
+	validCorrection := in.CorrectionKind == "" || in.CorrectionKind == "signal" || in.CorrectionKind == "routing"
+	validRouting := in.RoutingAction == "" || in.RoutingAction == "pause" || in.RoutingAction == "activate_backup" || in.RoutingAction == "resume"
+	if in.RequestID == "" || strings.TrimSpace(in.Rationale) == "" || !validClassification(in.Classification) || !validCorrection || !validRouting || in.InterruptionMinutes < 0 || in.AgentCost < 0 || (!in.UserOutcomeConsent && in.UserOutcome != "") {
+		return ErrInvalid
+	}
+	return nil
+}
+
+func (s *Store) RoutingDirective(repo, rule string) string {
+	values, err := s.List(repo)
+	if err != nil {
+		return ""
+	}
+	for _, v := range values {
+		if v.RuleID != rule {
+			continue
+		}
+		for i := len(v.OutcomeReviews) - 1; i >= 0; i-- {
+			switch v.OutcomeReviews[i].RoutingAction {
+			case "pause":
+				return "pause"
+			case "activate_backup":
+				return "backup"
+			case "resume":
+				return ""
+			}
+		}
+	}
+	return ""
+}
+
+func outcomeDigest(v OutcomeReviewInput) string {
+	b, _ := json.Marshal(v)
+	h := sha256.Sum256(b)
+	return hex.EncodeToString(h[:])
 }
 
 func (s *Store) ApplyWorkspace(id, actor string, cmd WorkspaceCommand, allowed bool) (Alert, error) {

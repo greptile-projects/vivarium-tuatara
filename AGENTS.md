@@ -43,6 +43,14 @@ remain visible. Successful delivery creates a stable actionable-inbox item but n
 acknowledges response; only an explicitly routed current participant can acknowledge or resolve.
 Alerts coordinate attention and grant no repository, secret, deployment, disclosure, incident,
 spending, governance, or operational authority.
+Owner-only response outcome reads derive acknowledgement and resolution timing, missed targets,
+handoffs, escalations, volume, deduplication, false positives, incidents, and agent cost from the
+retained alert ledger. Responder interruption/load and user outcomes project only with explicit
+consent, and restricted evidence is not copied into learning reports. Caller-stable owner reviews
+can request signal/routing correction, pause affected routing, activate only an exact rotation's
+declared current backup, resume routing, or create ordinary reliability, documentation, automation,
+or staffing proposal tasks assigned to a human or agent. These controls never add access; material
+policy or authority changes still require ordinary publication and approval boundaries.
 
 Collaborative capacity contracts at repository `/capacity-objectives` routes and the
 repository `/capacity` workspace retain immutable complete revisions beneath

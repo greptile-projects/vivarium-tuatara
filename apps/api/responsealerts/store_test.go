@@ -196,3 +196,44 @@ func contains(v []string, w string) bool {
 	}
 	return false
 }
+
+func testPolicy(now time.Time) responsepolicies.Policy {
+	return responsepolicies.Policy{ID: "policy", RepositoryID: "repo", Revisions: []responsepolicies.Revision{{Version: 1, Rules: []responsepolicies.Rule{{ID: "critical", ResourceIDs: []string{"service"}, SignalClass: "reliability", Severity: "critical", AccountableTeamID: "ops", AcknowledgeSeconds: 60, ResolveSeconds: 600}}}}}
+}
+
+func testSignal(at time.Time) Signal {
+	return Signal{SignalClass: "reliability", Severity: "critical", ResourceIDs: []string{"service"}, Summary: "latency elevated", Uncertainty: "sampled", OccurredAt: at, SourceRevision: "0123456789012345678901234567890123456789", CorrelationKey: at.String(), Evidence: []Evidence{{Kind: "check", ResourceID: "check", Revision: "run", Digest: "sha256:test", Summary: "failed", Available: true}}}
+}
+
+func TestOutcomeReviewConsentRetryAndRoutingContainment(t *testing.T) {
+	s, _ := New(t.TempDir())
+	now := time.Date(2026, 8, 26, 9, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return now }
+	policy := testPolicy(now)
+	alert, err := s.Create("repo", "source", "signal", testSignal(now), policy, []string{"responder"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	in := OutcomeReviewInput{RequestID: "review", Classification: "false_positive", InterruptionMinutes: 12, ResponderLoadConsent: true, AgentCost: 7, CorrectionKind: "routing", RoutingAction: "pause", Rationale: "Repeated paging has no actionable evidence"}
+	reviewed, err := s.ReviewOutcome(alert.ID, "owner", in, true)
+	if err != nil || len(reviewed.OutcomeReviews) != 1 || s.RoutingDirective("repo", alert.RuleID) != "pause" {
+		t.Fatalf("review=%#v err=%v", reviewed, err)
+	}
+	retry, err := s.ReviewOutcome(alert.ID, "owner", in, true)
+	if err != nil || len(retry.OutcomeReviews) != 1 {
+		t.Fatalf("retry duplicated: %#v %v", retry, err)
+	}
+	changed := in
+	changed.AgentCost++
+	if _, err = s.ReviewOutcome(alert.ID, "owner", changed, true); err != ErrConflict {
+		t.Fatalf("changed retry err=%v", err)
+	}
+	withoutConsent := OutcomeReviewInput{RequestID: "private", Classification: "actionable", UserOutcome: "customer recovered", Rationale: "outcome"}
+	if _, err = s.ReviewOutcome(alert.ID, "owner", withoutConsent, true); err != ErrInvalid {
+		t.Fatalf("unconsented outcome err=%v", err)
+	}
+	paused, err := s.CreateControlled("repo", "source", "next", testSignal(now.Add(time.Minute)), policy, []string{"responder"}, s.RoutingDirective("repo", alert.RuleID))
+	if err != nil || paused.State != "routing_paused" || len(paused.Routing) != 0 || !contains(paused.Diagnostics, "routing_paused") {
+		t.Fatalf("paused=%#v err=%v", paused, err)
+	}
+}
