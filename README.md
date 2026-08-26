@@ -24,6 +24,12 @@ to agree on forecast demand, traffic shape, reliability, dependency, regional,
 budget, lead-time, success, and rollback boundaries. Unsupported inputs and changing
 commitments remain explicit rather than being treated as settled planning facts.
 
+Supported capacity-test candidates can become phased programs at
+`/repositories/{id}/capacity-plans`. The Capacity workspace records reservations,
+quota/procurement dependencies, budgets, owners, decision points, and exit strategies,
+then hands every phase to the ordinary proposal/task/session/workspace/pull pipeline
+without granting spending, provider, repository, merge, or deployment authority.
+
 Repository participants and scoped read-only agents can turn an exact objective into
 an immutable, permission-aware capacity model at `/repositories/{id}/capacity-models`.
 The Capacity workspace exposes release-bound sanitized evidence, observation windows,
