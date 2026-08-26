@@ -252,12 +252,19 @@ func registerResponsePolicyRoutes(mux *http.ServeMux, catalog *repositories.Stor
 			return
 		}
 		members, membershipErr := currentTeamMembers(current)
-		if membershipErr != nil || !members[actor.UserID] {
+		var pendingSender string
+		for _, event := range current.Events {
+			if event.ID == r.PathValue("event_id") {
+				pendingSender = event.FromUserID
+				break
+			}
+		}
+		if membershipErr != nil || !members[actor.UserID] || pendingSender == "" || !members[pendingSender] {
 			writeAPIError(w, 403, "response_rotation_forbidden", "duty acceptance requires current accountable-team membership")
 			return
 		}
 		var out responsepolicies.Rotation
-		err = catalog.WithCurrentParticipants([]string{actor.UserID}, r.PathValue("id"), func() error {
+		err = catalog.WithCurrentParticipants([]string{actor.UserID, pendingSender}, r.PathValue("id"), func() error {
 			var e error
 			out, e = store.AcceptDutyEvent(current.ID, r.PathValue("event_id"), actor.UserID, in.ExpectedVersion)
 			return e

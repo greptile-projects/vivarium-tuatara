@@ -491,7 +491,7 @@ func effectiveOwner(v Rotation, shift Shift) string {
 }
 func handoffRecorded(v Rotation, shift string) bool {
 	for _, e := range v.Events {
-		if e.ShiftID == shift && e.Status == "accepted" && (e.Kind == "swap" || e.Kind == "delegate" || e.Kind == "override") {
+		if e.RotationVersion == v.CurrentVersion && e.ShiftID == shift && e.Status == "accepted" && (e.Kind == "swap" || e.Kind == "delegate" || e.Kind == "override") {
 			return true
 		}
 	}

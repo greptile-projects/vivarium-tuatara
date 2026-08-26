@@ -128,3 +128,42 @@ func TestWeeklyWorkloadIsBucketedInRotationTimeZone(t *testing.T) {
 		}
 	}
 }
+
+func TestPriorRevisionHandoffCannotSatisfySuccessorShift(t *testing.T) {
+	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
+	s, _ := New(t.TempDir())
+	s.now = func() time.Time { return now }
+	revision := rotationFixture(now)
+	availability := revision.Responders[0].Availability
+	revision.Responders = append(revision.Responders, Responder{UserID: "charlie", Qualifications: []string{"incident lead"}, Availability: availability, MaxShifts: 2})
+	r, err := s.CreateRotation("repo", "alice", "handoff-v1", revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	context := []DutyContext{{Kind: "active_alert", ResourceID: "alert", Revision: "1", Summary: "context"}}
+	r, err = s.AppendDutyEvent(r.ID, "alice", "delegate-v1", "delegate", "day-1", "bob", "handoff", context, r.EventVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err = s.AcceptDutyEvent(r.ID, r.Events[0].ID, "bob", r.EventVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revision.Shifts[0].PrimaryUserID = "charlie"
+	revision.Shifts[0].BackupUserIDs = []string{"bob"}
+	revision.ChangeReason = "reuse shift in successor"
+	r, err = s.ReviseRotation(r.ID, r.CurrentVersion, "alice", "handoff-v2", revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projected := ProjectRotation(r, map[string]bool{"alice": true, "bob": true, "charlie": true}, now)
+	found := false
+	for _, diagnostic := range projected.Diagnostics {
+		if diagnostic.Kind == "missed_handoff" && diagnostic.ShiftID == "day-1" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("diagnostics=%+v", projected.Diagnostics)
+	}
+}

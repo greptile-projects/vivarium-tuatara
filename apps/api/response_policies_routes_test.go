@@ -54,18 +54,24 @@ func TestResponsePolicyAPI(t *testing.T) {
 	authenticatedRequest(t, http.MethodPost, url, string(payload), owner.Credential.Token, http.StatusOK).Body.Close()
 	now := time.Now().UTC()
 	availability := []responsepolicies.Availability{{Weekdays: []string{strings.ToLower(now.Weekday().String())}, StartLocal: "00:00", EndLocal: "23:59"}}
-	rotationRevision := responsepolicies.RotationRevision{Name: "Primary", PolicyID: created.ID, TeamID: "owners", TimeZone: "UTC", HandoffMinutes: 30, Responders: []responsepolicies.Responder{{UserID: owner.User.ID, Qualifications: []string{"operations"}, Availability: availability, MaxShifts: 5}, {UserID: responder.User.ID, Qualifications: []string{"operations"}, Availability: availability, MaxShifts: 5}}, AbsenceRules: []responsepolicies.AbsenceRule{{Kind: "planned", NoticeHours: 24, Action: "use backup"}}, Shifts: []responsepolicies.Shift{{ID: "shift", StartsAt: now.Add(time.Hour), EndsAt: now.Add(2 * time.Hour), PrimaryUserID: owner.User.ID, BackupUserIDs: []string{responder.User.ID}, RequiredQualifications: []string{"operations"}}}, ChangeReason: "schedule"}
+	rotationRevision := responsepolicies.RotationRevision{Name: "Primary", PolicyID: created.ID, TeamID: "owners", TimeZone: "UTC", HandoffMinutes: 30, Responders: []responsepolicies.Responder{{UserID: owner.User.ID, Qualifications: []string{"operations"}, Availability: availability, MaxShifts: 5}, {UserID: responder.User.ID, Qualifications: []string{"operations"}, Availability: availability, MaxShifts: 5}}, AbsenceRules: []responsepolicies.AbsenceRule{{Kind: "planned", NoticeHours: 24, Action: "use backup"}}, Shifts: []responsepolicies.Shift{{ID: "shift", StartsAt: now.Add(time.Hour), EndsAt: now.Add(2 * time.Hour), PrimaryUserID: responder.User.ID, BackupUserIDs: []string{owner.User.ID}, RequiredQualifications: []string{"operations"}}}, ChangeReason: "schedule"}
 	rotationPayload, _ := json.Marshal(map[string]any{"request_id": "rotation", "revision": rotationRevision})
 	rotationResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/response-rotations", string(rotationPayload), owner.Credential.Token, http.StatusCreated)
 	var rotation responsepolicies.Rotation
 	_ = json.NewDecoder(rotationResponse.Body).Decode(&rotation)
 	rotationResponse.Body.Close()
+	pendingPayload, _ := json.Marshal(map[string]any{"request_id": "pending-before-removal", "expected_version": rotation.EventVersion, "kind": "delegate", "shift_id": "shift", "to_user_id": owner.User.ID, "reason": "planned handoff", "context": []responsepolicies.DutyContext{{Kind: "active_alert", ResourceID: "alert", Revision: "1", Summary: "context"}}})
+	pendingResponse := authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/response-rotations/"+rotation.ID+"/duty-events", string(pendingPayload), responder.Credential.Token, http.StatusCreated)
+	_ = json.NewDecoder(pendingResponse.Body).Decode(&rotation)
+	pendingResponse.Body.Close()
 	removed := revision
 	removed.Teams = append([]responsepolicies.Team(nil), revision.Teams...)
 	removed.Teams[0].MemberIDs = []string{owner.User.ID}
 	removed.ChangeReason = "remove responder"
 	removedPayload, _ := json.Marshal(map[string]any{"request_id": "remove-responder", "expected_version": 2, "revision": removed})
 	authenticatedRequest(t, http.MethodPost, url, string(removedPayload), owner.Credential.Token, http.StatusOK).Body.Close()
+	acceptPayload, _ := json.Marshal(map[string]any{"expected_version": rotation.EventVersion})
+	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/response-rotations/"+rotation.ID+"/duty-events/"+rotation.Events[0].ID+"/accept", string(acceptPayload), owner.Credential.Token, http.StatusForbidden).Body.Close()
 	eventPayload, _ := json.Marshal(map[string]any{"request_id": "removed-transfer", "expected_version": rotation.EventVersion, "kind": "delegate", "shift_id": "shift", "to_user_id": owner.User.ID, "reason": "stale membership", "context": []responsepolicies.DutyContext{{Kind: "active_alert", ResourceID: "alert", Revision: "1", Summary: "context"}}})
 	authenticatedRequest(t, http.MethodPost, server.URL+"/repositories/"+repo.ID+"/response-rotations/"+rotation.ID+"/duty-events", string(eventPayload), responder.Credential.Token, http.StatusForbidden).Body.Close()
 	invalid := revision
