@@ -189,21 +189,30 @@ func (s *Store) Mutate(repo, id string, expected int, ev Event) (Rollout, error)
 	}
 	switch ev.Kind {
 	case "pause":
+		if r.Status != "staged" && r.Status != "running" && r.Status != "narrowed" && r.Status != "paused" {
+			return Rollout{}, ErrInvalid
+		}
 		r.Status = "paused"
 	case "resume":
-		if len(r.ContainmentReasons) > 0 {
+		if len(r.ContainmentReasons) > 0 || r.Status != "paused" && r.Status != "staged" {
 			return Rollout{}, ErrInvalid
 		}
 		r.Status = "running"
 	case "narrow":
-		if ev.Scope == nil || !validScope(*ev.Scope) || ev.Scope.TrafficPercent > r.Scope.TrafficPercent {
+		if len(r.ContainmentReasons) > 0 || r.Status == "rolled_back" || ev.Scope == nil || !validScope(*ev.Scope) || ev.Scope.Service != r.Scope.Service || ev.Scope.Audience != r.Scope.Audience || ev.Scope.Region != r.Scope.Region || ev.Scope.TrafficPercent > r.Scope.TrafficPercent {
 			return Rollout{}, ErrInvalid
 		}
 		r.Scope = *ev.Scope
 		r.Status = "narrowed"
 	case "rollback":
+		if r.Status == "rolled_back" {
+			return Rollout{}, ErrInvalid
+		}
 		r.Status = "rolled_back"
 	case "observe":
+		if r.Status == "rolled_back" {
+			return Rollout{}, ErrInvalid
+		}
 		if ev.Observation == nil || !validObservation(*ev.Observation) {
 			return Rollout{}, ErrInvalid
 		}
@@ -214,10 +223,26 @@ func (s *Store) Mutate(repo, id string, expected int, ev Event) (Rollout, error)
 		o.Digest = digest(o.Quality)
 		r.Observations = append(r.Observations, o)
 		reasons := contain(o.Quality, r.Budget)
+		if len(r.ContainmentReasons) > 0 {
+			reasons = mergeReasons(r.ContainmentReasons, reasons)
+		}
 		r.ContainmentReasons = reasons
 		if len(reasons) > 0 {
 			r.Status = "contained"
 		}
+		ev.Observation = &o
+	case "resolve":
+		if r.Status != "contained" || len(r.ContainmentReasons) == 0 || ev.Observation == nil || !validObservation(*ev.Observation) || len(contain(ev.Observation.Quality, r.Budget)) > 0 {
+			return Rollout{}, ErrInvalid
+		}
+		o := *ev.Observation
+		o.ID = stable(r.ID, ev.RequestID)
+		o.CreatedBy = ev.ActorID
+		o.CreatedAt = s.now()
+		o.Digest = digest(o.Quality)
+		r.Observations = append(r.Observations, o)
+		r.ContainmentReasons = []string{}
+		r.Status = "paused"
 		ev.Observation = &o
 	default:
 		return Rollout{}, ErrInvalid
@@ -228,6 +253,21 @@ func (s *Store) Mutate(repo, id string, expected int, ev Event) (Rollout, error)
 	ev.CreatedAt = r.UpdatedAt
 	r.Events = append(r.Events, ev)
 	return r, s.write(r)
+}
+
+func mergeReasons(existing, observed []string) []string {
+	out := append([]string{}, existing...)
+	seen := map[string]bool{}
+	for _, reason := range out {
+		seen[reason] = true
+	}
+	for _, reason := range observed {
+		if !seen[reason] {
+			out = append(out, reason)
+			seen[reason] = true
+		}
+	}
+	return out
 }
 func contain(q Quality, b Budget) []string {
 	v := []string{}

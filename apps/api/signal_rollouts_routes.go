@@ -64,7 +64,12 @@ func registerSignalRolloutRoutes(mux *http.ServeMux, repos *repositories.Store, 
 			return
 		}
 		in.ControllerID = actor.UserID
-		out, e := rollouts.Create(r.PathValue("id"), actor.UserID, in.RequestID, in)
+		var out signalrollouts.Rollout
+		e = repos.WithCurrentParticipant(actor.UserID, r.PathValue("id"), func() error {
+			var writeErr error
+			out, writeErr = rollouts.Create(r.PathValue("id"), actor.UserID, in.RequestID, in)
+			return writeErr
+		})
 		writeSignalRollout(w, out, e, 201)
 	})
 	mux.HandleFunc("POST /repositories/{id}/signal-rollouts/{rollout_id}/events", func(w http.ResponseWriter, r *http.Request) {
@@ -97,7 +102,12 @@ func registerSignalRolloutRoutes(mux *http.ServeMux, repos *repositories.Store, 
 			}
 		}
 		in.Event.ActorID = actor.UserID
-		out, e := rollouts.Mutate(r.PathValue("id"), current.ID, in.ExpectedVersion, in.Event)
+		var out signalrollouts.Rollout
+		e = repos.WithCurrentParticipant(actor.UserID, r.PathValue("id"), func() error {
+			var writeErr error
+			out, writeErr = rollouts.Mutate(r.PathValue("id"), current.ID, in.ExpectedVersion, in.Event)
+			return writeErr
+		})
 		writeSignalRollout(w, out, e, 201)
 	})
 }

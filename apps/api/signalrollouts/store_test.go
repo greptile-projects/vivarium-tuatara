@@ -48,3 +48,52 @@ func TestStableMutationsRejectChangedRetry(t *testing.T) {
 		t.Fatalf("changed reuse should conflict: %v", e)
 	}
 }
+
+func TestNarrowPreservesReviewedTargetAndTerminalStates(t *testing.T) {
+	s, _ := New(t.TempDir())
+	create := func(request string) Rollout {
+		r, err := s.Create("repo", "operator", request, Rollout{ContractID: "contract", ContractVersion: 1, InstrumentationRevision: "commit", DeploymentID: "deploy", EnvironmentID: "prod", ControllerID: "operator", Scope: Scope{Service: "api", Audience: "ops", Region: "eu", TrafficPercent: 10}, Budget: Budget{StorageBytes: 100, QueryCostCents: 10, Cardinality: 20}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	r := create("scope")
+	changed := Scope{Service: "admin", Audience: "users", Region: "us", TrafficPercent: 5}
+	if _, err := s.Mutate("repo", r.ID, r.Version, Event{RequestID: "redirect", Kind: "narrow", ActorID: "operator", Reason: "redirect", Scope: &changed}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("changed reviewed target should fail: %v", err)
+	}
+	narrow := Scope{Service: "api", Audience: "ops", Region: "eu", TrafficPercent: 5}
+	if _, err := s.Mutate("repo", r.ID, r.Version, Event{RequestID: "narrow", Kind: "narrow", ActorID: "operator", Reason: "reduce exposure", Scope: &narrow}); err != nil {
+		t.Fatalf("valid narrow failed: %v", err)
+	}
+	r = create("terminal")
+	r, _ = s.Mutate("repo", r.ID, r.Version, Event{RequestID: "rollback", Kind: "rollback", ActorID: "operator", Reason: "end rollout"})
+	if _, err := s.Mutate("repo", r.ID, r.Version, Event{RequestID: "resume", Kind: "resume", ActorID: "operator", Reason: "reactivate"}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("rolled back resume should fail: %v", err)
+	}
+	if _, err := s.Mutate("repo", r.ID, r.Version, Event{RequestID: "narrow-terminal", Kind: "narrow", ActorID: "operator", Reason: "reactivate", Scope: &narrow}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("rolled back narrow should fail: %v", err)
+	}
+}
+
+func TestContainmentRequiresExplicitHealthyResolution(t *testing.T) {
+	s, _ := New(t.TempDir())
+	r, _ := s.Create("repo", "operator", "create", Rollout{ContractID: "contract", ContractVersion: 1, InstrumentationRevision: "commit", DeploymentID: "deploy", EnvironmentID: "prod", ControllerID: "operator", Scope: Scope{Service: "api", Audience: "ops", Region: "eu", TrafficPercent: 10}, Budget: Budget{StorageBytes: 100, QueryCostCents: 10, Cardinality: 20}})
+	now := time.Now()
+	unsafe := Observation{Scope: r.Scope, StartedAt: now.Add(-time.Minute), EndedAt: now, Quality: Quality{SignalHealth: "bad", Coverage: .8, Missingness: .2, PipelineLoss: .1, PrivacyControls: []string{"redaction"}, MalformedPayloads: 1, CollectorAvailable: true}}
+	r, _ = s.Mutate("repo", r.ID, r.Version, Event{RequestID: "unsafe", Kind: "observe", ActorID: "operator", Reason: "bad payload", Observation: &unsafe})
+	if _, err := s.Mutate("repo", r.ID, r.Version, Event{RequestID: "narrow-contained", Kind: "narrow", ActorID: "operator", Reason: "bypass", Scope: &r.Scope}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("contained narrow should fail: %v", err)
+	}
+	healthy := unsafe
+	healthy.Quality = Quality{SignalHealth: "healthy", Coverage: 1, PrivacyControls: []string{"redaction"}, CollectorAvailable: true}
+	r, _ = s.Mutate("repo", r.ID, r.Version, Event{RequestID: "healthy-observe", Kind: "observe", ActorID: "operator", Reason: "healthy window", Observation: &healthy})
+	if r.Status != "contained" || len(r.ContainmentReasons) == 0 {
+		t.Fatal("ordinary observation silently cleared containment")
+	}
+	r, err := s.Mutate("repo", r.ID, r.Version, Event{RequestID: "resolve", Kind: "resolve", ActorID: "operator", Reason: "operator verified recovery", Observation: &healthy})
+	if err != nil || r.Status != "paused" || len(r.ContainmentReasons) != 0 {
+		t.Fatalf("explicit resolution failed: %v %#v", err, r)
+	}
+}

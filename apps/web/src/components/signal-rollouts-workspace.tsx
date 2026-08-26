@@ -146,7 +146,7 @@ export function SignalRolloutsWorkspace({
     if (!token || !selected) return;
     try {
       const body =
-        kind === "observe"
+        kind === "observe" || kind === "resolve"
           ? JSON.parse(evidence)
           : { request_id: crypto.randomUUID(), reason: `operator ${kind}` };
       body.request_id ||= crypto.randomUUID();
@@ -220,6 +220,9 @@ export function SignalRolloutsWorkspace({
             <Button onClick={() => act("resume")}>Resume</Button>
             <Button onClick={() => act("narrow")}>Narrow</Button>
             <Button onClick={() => act("rollback")}>Roll back</Button>
+            {selected.status === "contained" && (
+              <Button onClick={() => act("resolve")}>Resolve containment</Button>
+            )}
           </div>
           <textarea
             aria-label="Production signal evidence JSON"
