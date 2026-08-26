@@ -94,7 +94,7 @@ test("a released service signal becomes an owned response, handoff, incident, an
     const missedBefore = (await json(ownerPage, "get", `/repositories/${repository.id}/response-outcomes`, owner.headers)).missed_acknowledgements;
     const missed = await signal("high", `missed-${suffix}`, "absent-primary"); expect(missed.routing).toContainEqual(expect.objectContaining({ recipient_id: backup.user.id }));
     await expect.poll(async () => { const target = await json(ownerPage, "get", `/repositories/${repository.id}/response-alerts/${missed.id}`, owner.headers); return Date.now() > Date.parse(target.acknowledge_by) && !target.events.some((event: { kind: string }) => event.kind === "acknowledge"); }, { timeout: 10_000 }).toBe(true);
-    expect((await json(ownerPage, "get", `/repositories/${repository.id}/response-outcomes`, owner.headers)).missed_acknowledgements).toBeGreaterThan(missedBefore);
+    expect((await json(ownerPage, "get", `/repositories/${repository.id}/response-outcomes`, owner.headers)).missed_acknowledgements).toBe(missedBefore + 1);
     await ownerPage.goto(`/repositories/${repository.id}/response-policies`); await expect(ownerPage.getByRole("heading", { name: "Response coverage" })).toBeVisible(); await expect(ownerPage.getByText("Checkout response coverage", { exact: true })).toBeVisible(); await expect(ownerPage.getByRole("heading", { name: "Response outcomes" })).toBeVisible();
     const report = await json(ownerPage, "get", `/repositories/${repository.id}/response-outcomes`, owner.headers); expect(report).toMatchObject({ deduplicated_events: 1, incidents: 1, agent_cost: 20 }); expect(report.missed_acknowledgements).toBeGreaterThan(0);
   } finally { await rm(copy, { recursive: true, force: true }); }
