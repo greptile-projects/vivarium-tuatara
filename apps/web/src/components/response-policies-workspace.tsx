@@ -129,52 +129,52 @@ export function ResponsePoliciesWorkspace({
 }: {
   repositoryID: string;
 }) {
+  const { user } = useAuth();
+  return (
+    <ScopedResponsePoliciesWorkspace
+      key={`${repositoryID}:${user?.id ?? "unauthenticated"}`}
+      repositoryID={repositoryID}
+    />
+  );
+}
+
+function ScopedResponsePoliciesWorkspace({
+  repositoryID,
+}: {
+  repositoryID: string;
+}) {
   const { token, user } = useAuth();
   const [items, setItems] = useState<Policy[]>([]),
     [selected, setSelected] = useState<Policy>(),
     [draft, setDraft] = useState(""),
     [error, setError] = useState(""),
     [publishing, setPublishing] = useState(false);
-  const scope = `${repositoryID}\u0000${user?.id ?? "unauthenticated"}`;
-  const scopeRef = useRef(scope);
   const publishingRef = useRef(false);
-  useEffect(() => {
-    scopeRef.current = scope;
-    publishingRef.current = false;
-    setPublishing(false);
-    setItems([]);
-    setSelected(undefined);
-    setError("");
-    setDraft(JSON.stringify(template(user?.id), null, 2));
-  }, [scope, user?.id]);
   const load = useCallback(async () => {
     if (!token) return;
-    const requestedScope = scope;
     try {
       const out = await api<{ response_policies: Policy[] }>(
         `/repositories/${repositoryID}/response-policies`,
         {},
         token,
       );
-      if (scopeRef.current !== requestedScope) return;
       setItems(out.response_policies);
       setSelected(out.response_policies[0]);
+      setDraft(JSON.stringify(template(user?.id), null, 2));
     } catch (e) {
-      if (scopeRef.current !== requestedScope) return;
       setError(
         e instanceof Error
           ? e.message
           : "Response coverage could not be loaded",
       );
     }
-  }, [repositoryID, scope, token]);
+  }, [repositoryID, token, user?.id]);
   useEffect(() => {
     void Promise.resolve().then(load);
   }, [load]);
   async function publish(e: FormEvent) {
     e.preventDefault();
-    if (!token || scopeRef.current !== scope || publishingRef.current) return;
-    const submittedScope = scope;
+    if (!token || publishingRef.current) return;
     publishingRef.current = true;
     setPublishing(true);
     try {
@@ -192,23 +192,19 @@ export function ResponsePoliciesWorkspace({
         },
         token,
       );
-      if (scopeRef.current !== submittedScope) return;
       setItems((v) => [out, ...v.filter((x) => x.id !== out.id)]);
       setSelected(out);
       setDraft(JSON.stringify(out.revisions.at(-1), null, 2));
       setError("");
     } catch (x) {
-      if (scopeRef.current !== submittedScope) return;
       setError(
         x instanceof Error
           ? x.message
           : "Response policy could not be published",
       );
     } finally {
-      if (scopeRef.current === submittedScope) {
-        publishingRef.current = false;
-        setPublishing(false);
-      }
+      publishingRef.current = false;
+      setPublishing(false);
     }
   }
   const current = selected?.revisions.at(-1);
