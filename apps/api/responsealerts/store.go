@@ -69,7 +69,7 @@ type Alert struct {
 	ID                string     `json:"id"`
 	RepositoryID      string     `json:"repository_id"`
 	RequestID         string     `json:"request_id"`
-	RequestDigest     string     `json:"-"`
+	RequestDigest     string     `json:"request_digest"`
 	PolicyID          string     `json:"policy_id"`
 	PolicyVersion     int        `json:"policy_version"`
 	RuleID            string     `json:"rule_id"`
@@ -169,7 +169,7 @@ func (s *Store) Create(repo, actor, request string, signal Signal, policy respon
 		// Correlated events join the existing open alert without producing another page.
 		values, _ := s.listUnlocked(repo)
 		for _, v := range values {
-			if v.Signal.CorrelationKey != "" && v.Signal.CorrelationKey == signal.CorrelationKey && v.RuleID == rule.ID && v.State != "resolved" {
+			if v.Signal.CorrelationKey != "" && v.Signal.CorrelationKey == signal.CorrelationKey && v.RuleID == rule.ID && v.State == "open" && v.PolicyID == policy.ID && v.PolicyVersion == rev.Version && v.TeamID == rule.AccountableTeamID {
 				for _, event := range v.Events {
 					if event.Kind == "correlated" && event.RequestID == request {
 						if event.Reason != digest {

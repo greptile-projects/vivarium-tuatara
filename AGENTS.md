@@ -32,8 +32,11 @@ coverage workspace evaluate repository-defined reliability, deployment, security
 dependency, workflow, and user-impact signals against exactly one rule in the newest immutable
 response policy. Alerts freeze source revision, evidence provenance and audience, uncertainty,
 affected resources/users, exact policy revision, deadlines, routing attempts, and authority
-boundaries. Stable requests reconcile retries; correlation keys append related events without
-duplicating pages. Active exact-policy rotations narrow delivery to the effective shift owner.
+boundaries. Stable requests reconcile retries across process restarts; correlation keys append
+related events only while an alert remains open under the same exact policy revision, rule, and
+team, so non-open alerts and policy ownership movement trigger fresh routing. Active exact-policy
+rotations narrow delivery to the effective shift owner. Delivery-gap and non-delivery-state
+fallback visibility is owner-only; routing and declared alert audiences govern other reads.
 Suppression, maintenance, stale or inaccessible evidence, policy movement, and delivery failure
 remain visible. Successful delivery creates a stable actionable-inbox item but never
 acknowledges response; only an explicitly routed current participant can acknowledge or resolve.

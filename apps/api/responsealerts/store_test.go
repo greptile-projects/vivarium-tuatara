@@ -75,6 +75,49 @@ func TestSuppressionAndMissingDeliveryRemainVisible(t *testing.T) {
 		t.Fatalf("missing delivery hidden: %#v", b)
 	}
 }
+
+func TestPersistedRetryAndCorrelationBoundaries(t *testing.T) {
+	root := t.TempDir()
+	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
+	policy := responsepolicies.Policy{ID: "policy", Revisions: []responsepolicies.Revision{{Version: 1, Rules: []responsepolicies.Rule{{ID: "rule", ResourceIDs: []string{"service"}, SignalClass: "reliability", Severity: "critical", AccountableTeamID: "team-a", AcknowledgeSeconds: 60, ResolveSeconds: 600}}}}}
+	signal := Signal{SignalClass: "reliability", Severity: "critical", ResourceIDs: []string{"service"}, Summary: "urgent", Uncertainty: "confirmed", OccurredAt: now, SourceRevision: "one", CorrelationKey: "service-errors", Evidence: []Evidence{{Kind: "check", ResourceID: "check", Revision: "one", Digest: "digest", Summary: "failed", Available: true}}}
+	firstStore, _ := New(root)
+	firstStore.now = func() time.Time { return now }
+	first, err := firstStore.Create("repo", "source", "request-1", signal, policy, []string{"recipient-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened, _ := New(root)
+	reopened.now = func() time.Time { return now }
+	retry, err := reopened.Create("repo", "source", "request-1", signal, policy, []string{"recipient-a"})
+	if err != nil || retry.ID != first.ID {
+		t.Fatalf("persisted retry = %#v, %v", retry, err)
+	}
+	acknowledged, err := reopened.Append(first.ID, "ack", "acknowledge", "recipient-a", "", true)
+	if err != nil || acknowledged.State != "acknowledged" {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Minute)
+	signal.OccurredAt, signal.SourceRevision = now, "two"
+	later, err := reopened.Create("repo", "source", "request-2", signal, policy, []string{"recipient-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if later.ID == first.ID || later.State != "open" || len(later.Routing) != 1 {
+		t.Fatalf("non-open alert swallowed later urgency: %#v", later)
+	}
+	policy.Revisions[0].Version = 2
+	policy.Revisions[0].Rules[0].AccountableTeamID = "team-b"
+	now = now.Add(time.Minute)
+	signal.OccurredAt, signal.SourceRevision = now, "three"
+	rerouted, err := reopened.Create("repo", "source", "request-3", signal, policy, []string{"recipient-b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rerouted.ID == later.ID || rerouted.PolicyVersion != 2 || rerouted.TeamID != "team-b" || len(rerouted.Routing) != 1 || rerouted.Routing[0].RecipientID != "recipient-b" {
+		t.Fatalf("policy movement retained stale routing: %#v", rerouted)
+	}
+}
 func contains(v []string, w string) bool {
 	for _, x := range v {
 		if x == w {

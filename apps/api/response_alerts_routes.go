@@ -28,6 +28,8 @@ func registerResponseAlertRoutes(mux *http.ServeMux, catalog *repositories.Store
 		if !ok {
 			return
 		}
+		repository, _ := catalog.GetByID(r.PathValue("id"))
+		owner := actor.UserID != "" && repository.OwnerID == actor.UserID
 		values, err := alerts.List(r.PathValue("id"))
 		if err != nil {
 			writeAPIError(w, 500, "response_alerts_unavailable", "response alerts could not be read")
@@ -36,7 +38,7 @@ func registerResponseAlertRoutes(mux *http.ServeMux, catalog *repositories.Store
 		current, _ := policies.List(r.PathValue("id"))
 		visible := values[:0]
 		for _, v := range values {
-			if alertVisible(v, actor.UserID) {
+			if alertVisible(v, actor.UserID, owner) {
 				visible = append(visible, projectResponseAlert(v, actor.UserID, current))
 			}
 		}
@@ -47,8 +49,10 @@ func registerResponseAlertRoutes(mux *http.ServeMux, catalog *repositories.Store
 		if !ok {
 			return
 		}
+		repository, _ := catalog.GetByID(r.PathValue("id"))
+		owner := actor.UserID != "" && repository.OwnerID == actor.UserID
 		v, e := alerts.Get(r.PathValue("alert_id"))
-		if e != nil || v.RepositoryID != r.PathValue("id") || !alertVisible(v, actor.UserID) {
+		if e != nil || v.RepositoryID != r.PathValue("id") || !alertVisible(v, actor.UserID, owner) {
 			writeAPIError(w, 404, "response_alert_not_found", "response alert not found")
 			return
 		}
@@ -170,7 +174,7 @@ func responseAlertIntersects(a, b []string) bool {
 	}
 	return false
 }
-func alertVisible(v responsealerts.Alert, user string) bool {
+func alertVisible(v responsealerts.Alert, user string, repositoryOwner bool) bool {
 	if v.Signal.AffectedUserCount == 0 {
 	}
 	for _, d := range v.Routing {
@@ -183,12 +187,7 @@ func alertVisible(v responsealerts.Alert, user string) bool {
 			return true
 		}
 	}
-	for _, diagnostic := range v.Diagnostics {
-		if diagnostic == "delivery_failed" {
-			return true
-		}
-	}
-	if v.State == "suppressed" || v.State == "maintenance" {
+	if repositoryOwner && (responseAlertContains(v.Diagnostics, "delivery_failed") || v.State == "suppressed" || v.State == "maintenance") {
 		return true
 	}
 	return false

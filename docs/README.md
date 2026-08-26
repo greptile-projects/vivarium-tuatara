@@ -68,9 +68,12 @@ response-policy revision, derives acknowledgement and resolution deadlines, and 
 matching rotation's effective shift owner when available. Otherwise it records team routing;
 an empty route remains an explicit `delivery_failed` diagnostic.
 
-Stable request identities reconcile retries. A non-empty correlation key joins later events to
-the same unresolved alert and preserves one routing page, event count, first/last-seen times,
-and append-only correlation provenance. Suppression and maintenance windows retain visible alert
+Stable request identities reconcile retries, including after process restart. A non-empty
+correlation key joins later events only to an open alert under the same exact policy revision,
+rule, and accountable team, preserving one routing page, event count, first/last-seen times,
+and append-only correlation provenance without carrying stale ownership across policy movement.
+Later urgency after acknowledgement, suppression, or maintenance creates a fresh evaluation and
+actionable alert. Suppression and maintenance windows retain visible alert
 states, and stale or inaccessible evidence stays diagnostic. Reads preserve the original policy
 binding while projecting `policy_changed` after active coverage moves. Reader-specific evidence
 audiences redact summaries, URLs, and digests without hiding that evidence is unavailable.
@@ -78,7 +81,9 @@ audiences redact summaries, URLs, and digests without hiding that evidence is un
 Successful web delivery projects one stable `response` item into the existing actionable inbox,
 but never changes alert state. Only a successfully routed participant can append an explicit
 acknowledgement or resolution event; clearing an inbox item likewise cannot acknowledge an alert.
-The Response coverage web workspace presents severity, impact, uncertainty, exact evidence,
+Delivery-failure and non-delivery-state fallbacks are visible to the repository owner, not to
+arbitrary repository readers; routed responders and declared audience members retain their own
+alert access. The Response coverage web workspace presents severity, impact, uncertainty, exact evidence,
 deadlines, routing gaps, expected actions, and the policy's permitted/prohibited action boundary.
 Alerts coordinate attention and grant no repository, secret, deployment, disclosure, incident,
 spending, governance, or operational authority.
