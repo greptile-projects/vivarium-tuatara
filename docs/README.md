@@ -16,6 +16,17 @@ authority while retaining attributable safety, ownership, access, secret, review
 agent-approval, and policy gaps. The record coordinates response and grants none of
 the referenced operational authority.
 
+`POST /repositories/{id}/runbooks/{runbook_id}/rehearsals` lets a current human
+participant or exact repository-bound organization agent retain a caller-stable exercise
+of one immutable runbook revision. Exercises must use an isolated environment or an exact
+policy approval already named by the revision, digest-addressed synthetic or permitted
+inputs, and complete per-step results. They retain decisions and rationale, only reviewed
+command identities, bounded credential-screened output, timing, artifacts, costs, exact
+permissions, outcomes, and manual gaps. Every changing step is simulated or explicitly
+excluded. A successor runbook, changed scoped service/dependency revision, moved policy,
+or expired frozen credential marks only the affected proof stale; failed and historical
+evidence remains visible and never becomes live operational authority.
+
 ## Versioned urgent-response coverage
 
 Repository readers inspect immutable response policies through

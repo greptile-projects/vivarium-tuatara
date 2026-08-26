@@ -76,6 +76,11 @@ Every diagnostic, action, decision, and communication step explains its purpose,
 evidence, rollback, ownership, skills, references, and effective authority; unsafe,
 inaccessible, secret-bearing, unreviewed, unapproved, and policy-conflicting inputs
 remain attributable gaps without granting operational authority.
+Current participants and exact repository-bound agents can rehearse a selected immutable
+revision in isolated or exactly policy-approved environments. The workspace retains
+representative inputs, branches, commands, outputs, timing, artifacts, cost, permissions,
+manual gaps, and simulated/excluded change effects, while revision, resource, policy, and
+credential movement makes obsolete proof visibly stale.
 
 Repository participants and scoped read-only agents can turn an exact objective into
 an immutable, permission-aware capacity model at `/repositories/{id}/capacity-models`.

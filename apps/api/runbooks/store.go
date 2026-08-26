@@ -20,6 +20,8 @@ var ErrNotFound = errors.New("runbook not found")
 var ErrInvalid = errors.New("invalid runbook")
 var ErrConflict = errors.New("runbook conflict")
 
+const maxRehearsalStepCostCents = 100_000_000
+
 type Scope struct {
 	Kind       string `json:"kind"`
 	ResourceID string `json:"resource_id"`
@@ -90,6 +92,70 @@ type Revision struct {
 	CreatedBy         string       `json:"created_by,omitempty"`
 	CreatedAt         time.Time    `json:"created_at,omitempty"`
 }
+type RehearsalInput struct {
+	Kind         string     `json:"kind"`
+	ResourceID   string     `json:"resource_id"`
+	Revision     string     `json:"revision"`
+	EvidenceKind string     `json:"evidence_kind"`
+	Digest       string     `json:"digest"`
+	ExpiresAt    *time.Time `json:"expires_at,omitempty"`
+}
+type BranchDecision struct {
+	StepID         string `json:"step_id"`
+	Condition      string `json:"condition"`
+	SelectedStepID string `json:"selected_step_id"`
+	EvidenceStepID string `json:"evidence_step_id"`
+	Rationale      string `json:"rationale"`
+}
+type ConditionAssertion struct {
+	Condition      string `json:"condition"`
+	Met            bool   `json:"met"`
+	EvidenceDigest string `json:"evidence_digest"`
+}
+type Artifact struct {
+	Name      string `json:"name"`
+	Digest    string `json:"digest"`
+	MediaType string `json:"media_type"`
+}
+type StepOutcome struct {
+	StepID              string               `json:"step_id"`
+	Command             string               `json:"command,omitempty"`
+	Output              string               `json:"output"`
+	StartedAt           time.Time            `json:"started_at"`
+	FinishedAt          time.Time            `json:"finished_at"`
+	Artifacts           []Artifact           `json:"artifacts"`
+	CostCents           int                  `json:"cost_cents"`
+	Permissions         []string             `json:"permissions"`
+	Outcome             string               `json:"outcome"`
+	ManualGaps          []string             `json:"manual_gaps"`
+	DestructiveHandling string               `json:"destructive_handling"`
+	Assertions          []ConditionAssertion `json:"assertions"`
+}
+type Scenario struct {
+	ID              string           `json:"id"`
+	Name            string           `json:"name"`
+	Failure         string           `json:"failure"`
+	Inputs          []RehearsalInput `json:"inputs"`
+	Decisions       []BranchDecision `json:"decisions"`
+	Steps           []StepOutcome    `json:"steps"`
+	AchievedOutcome string           `json:"achieved_outcome"`
+}
+type Rehearsal struct {
+	ID                     string     `json:"id"`
+	RequestID              string     `json:"request_id"`
+	RequestDigest          string     `json:"request_digest"`
+	RunbookVersion         int        `json:"runbook_version"`
+	EnvironmentKind        string     `json:"environment_kind"`
+	EnvironmentID          string     `json:"environment_id"`
+	PolicyApprovalRevision string     `json:"policy_approval_revision,omitempty"`
+	Scenarios              []Scenario `json:"scenarios"`
+	Status                 string     `json:"status"`
+	ActorType              string     `json:"actor_type"`
+	ActorID                string     `json:"actor_id"`
+	CreatedAt              time.Time  `json:"created_at"`
+	Stale                  bool       `json:"stale"`
+	StaleReasons           []string   `json:"stale_reasons"`
+}
 type Diagnostic struct {
 	Kind         string `json:"kind"`
 	Severity     string `json:"severity"`
@@ -108,7 +174,180 @@ type Runbook struct {
 	Diagnostics    []Diagnostic `json:"diagnostics"`
 	CreatedAt      time.Time    `json:"created_at"`
 	UpdatedAt      time.Time    `json:"updated_at"`
+	Rehearsals     []Rehearsal  `json:"rehearsals"`
 }
+
+func (s *Store) Rehearse(id, actorType, actorID, request string, version int, environmentKind, environmentID, policyApproval string, scenarios []Scenario) (Runbook, error) {
+	var out Runbook
+	err := s.lock(func() error {
+		v, e := s.read(id)
+		if e != nil {
+			return e
+		}
+		candidate := Rehearsal{RunbookVersion: version, EnvironmentKind: environmentKind, EnvironmentID: environmentID, PolicyApprovalRevision: policyApproval, Scenarios: scenarios}
+		d := rehearsalDigest(candidate)
+		for _, old := range v.Rehearsals {
+			if old.RequestID == request {
+				if old.RequestDigest != d || old.ActorID != actorID {
+					return ErrConflict
+				}
+				out = v
+				return nil
+			}
+		}
+		if request == "" || version < 1 || version > v.CurrentVersion || !validRehearsal(candidate, v.Revisions[version-1]) {
+			return ErrInvalid
+		}
+		now := s.now()
+		candidate.ID = stableID(id, actorType, actorID, request)
+		candidate.RequestID = request
+		candidate.RequestDigest = d
+		candidate.ActorType = actorType
+		candidate.ActorID = actorID
+		candidate.CreatedAt = now
+		candidate.Status = rehearsalStatus(scenarios)
+		v.Rehearsals = append(v.Rehearsals, candidate)
+		v.UpdatedAt = now
+		out = v
+		return s.write(v)
+	})
+	return project(out), err
+}
+
+func validRehearsal(v Rehearsal, revision Revision) bool {
+	if (v.EnvironmentKind != "isolated" && v.EnvironmentKind != "policy_approved") || strings.TrimSpace(v.EnvironmentID) == "" || (v.EnvironmentKind == "policy_approved" && strings.TrimSpace(v.PolicyApprovalRevision) == "") || len(v.Scenarios) == 0 {
+		return false
+	}
+	if v.EnvironmentKind == "policy_approved" && !containsString(revision.PolicyRevisionIDs, v.PolicyApprovalRevision) {
+		return false
+	}
+	stepIDs := map[string]Step{}
+	for _, s := range revision.Steps {
+		stepIDs[s.ID] = s
+	}
+	seen := map[string]bool{}
+	for _, scenario := range v.Scenarios {
+		if scenario.ID == "" || seen[scenario.ID] || scenario.Name == "" || scenario.Failure == "" || len(scenario.Inputs) == 0 || len(scenario.Steps) == 0 || scenario.AchievedOutcome == "" {
+			return false
+		}
+		seen[scenario.ID] = true
+		for _, in := range scenario.Inputs {
+			if in.ResourceID == "" || in.Revision == "" || in.Digest == "" || (in.EvidenceKind != "synthetic" && in.EvidenceKind != "permitted") {
+				return false
+			}
+		}
+		covered := map[string]bool{}
+		outcomes := map[string]StepOutcome{}
+		for _, result := range scenario.Steps {
+			step, ok := stepIDs[result.StepID]
+			if !ok || covered[result.StepID] || result.Output == "" || len(result.Output) > 32768 || secretPattern.MatchString(result.Output+result.Command) || result.FinishedAt.Before(result.StartedAt) || result.CostCents < 0 || result.CostCents > maxRehearsalStepCostCents || (result.Outcome != "passed" && result.Outcome != "failed" && result.Outcome != "manual_gap") {
+				return false
+			}
+			covered[result.StepID] = true
+			outcomes[result.StepID] = result
+			for _, required := range step.Authority.RequiredAccess {
+				if !containsString(result.Permissions, required) {
+					return false
+				}
+			}
+			if result.Command != "" {
+				matched := false
+				for _, ref := range step.References {
+					if ref.Kind == "command" && ref.ResourceID == result.Command && ref.Reviewed && ref.Accessible {
+						matched = true
+					}
+				}
+				if !matched {
+					return false
+				}
+			}
+			if len(step.Authority.Changes) > 0 && result.DestructiveHandling != "simulated" && result.DestructiveHandling != "excluded" {
+				return false
+			}
+			if result.DestructiveHandling != "" && result.DestructiveHandling != "not_applicable" && result.DestructiveHandling != "simulated" && result.DestructiveHandling != "excluded" {
+				return false
+			}
+			for _, a := range result.Artifacts {
+				if a.Name == "" || a.Digest == "" {
+					return false
+				}
+			}
+		}
+		if len(covered) != len(stepIDs) {
+			return false
+		}
+		decisions := map[string]bool{}
+		for _, decision := range scenario.Decisions {
+			step, ok := stepIDs[decision.StepID]
+			evidence, evidenceOK := outcomes[decision.EvidenceStepID]
+			if !ok || decisions[decision.StepID] || step.Decision == nil || decision.Condition != step.Decision.Condition || decision.SelectedStepID == "" || decision.Rationale == "" || !evidenceOK {
+				return false
+			}
+			assertionOK := false
+			assertionCount := 0
+			for _, assertion := range evidence.Assertions {
+				if assertion.Condition != decision.Condition {
+					continue
+				}
+				assertionCount++
+				artifactFound := false
+				for _, artifact := range evidence.Artifacts {
+					if artifact.Digest == assertion.EvidenceDigest {
+						artifactFound = true
+					}
+				}
+				if strings.TrimSpace(assertion.EvidenceDigest) == "" || !artifactFound {
+					continue
+				}
+				expected := step.Decision.IfFalseStepID
+				if assertion.Met {
+					expected = step.Decision.IfTrueStepID
+				}
+				if expected != "" && decision.SelectedStepID == expected {
+					assertionOK = true
+				}
+			}
+			if assertionCount != 1 || !assertionOK {
+				return false
+			}
+			decisions[decision.StepID] = true
+		}
+		for _, step := range revision.Steps {
+			if step.Decision != nil && !decisions[step.ID] {
+				return false
+			}
+		}
+	}
+	return true
+}
+func rehearsalStatus(scenarios []Scenario) string {
+	for _, s := range scenarios {
+		if s.AchievedOutcome != "achieved" {
+			return "failed"
+		}
+		for _, x := range s.Steps {
+			if x.Outcome != "passed" || len(x.ManualGaps) > 0 {
+				return "failed"
+			}
+		}
+	}
+	return "passed"
+}
+func rehearsalDigest(v Rehearsal) string {
+	v.ID = ""
+	v.RequestID = ""
+	v.RequestDigest = ""
+	v.ActorType = ""
+	v.ActorID = ""
+	v.CreatedAt = time.Time{}
+	v.Status = ""
+	v.Stale = false
+	v.StaleReasons = nil
+	b, _ := json.Marshal(v)
+	h := sha256.Sum256(b)
+	return hex.EncodeToString(h[:])
+}
+
 type Store struct {
 	root string
 	mu   sync.Mutex
@@ -253,6 +492,30 @@ func project(v Runbook) Runbook {
 		return v
 	}
 	r := v.Revisions[len(v.Revisions)-1]
+	for i := range v.Rehearsals {
+		v.Rehearsals[i].Stale = v.Rehearsals[i].RunbookVersion != v.CurrentVersion
+		v.Rehearsals[i].StaleReasons = nil
+		if v.Rehearsals[i].Stale {
+			v.Rehearsals[i].StaleReasons = append(v.Rehearsals[i].StaleReasons, "runbook_steps_changed")
+		}
+		if v.Rehearsals[i].EnvironmentKind == "policy_approved" && !containsString(r.PolicyRevisionIDs, v.Rehearsals[i].PolicyApprovalRevision) {
+			v.Rehearsals[i].Stale = true
+			v.Rehearsals[i].StaleReasons = append(v.Rehearsals[i].StaleReasons, "policy_changed")
+		}
+		for _, scenario := range v.Rehearsals[i].Scenarios {
+			for _, input := range scenario.Inputs {
+				if input.Kind == "credential" && input.ExpiresAt != nil && !input.ExpiresAt.After(time.Now().UTC()) {
+					v.Rehearsals[i].Stale = true
+					v.Rehearsals[i].StaleReasons = append(v.Rehearsals[i].StaleReasons, "credential_expired")
+				}
+				if input.Kind == r.Scope.Kind && input.ResourceID == r.Scope.ResourceID && r.Scope.Revision != "" && input.Revision != r.Scope.Revision {
+					v.Rehearsals[i].Stale = true
+					v.Rehearsals[i].StaleReasons = append(v.Rehearsals[i].StaleReasons, input.Kind+"_changed")
+				}
+			}
+		}
+		v.Rehearsals[i].StaleReasons = uniqueStrings(v.Rehearsals[i].StaleReasons)
+	}
 	d := []Diagnostic{}
 	add := func(kind, severity, msg, step, res, actor string) {
 		d = append(d, Diagnostic{Kind: kind, Severity: severity, Message: msg, StepID: step, ResourceID: res, AttributedTo: actor})
@@ -299,6 +562,25 @@ func project(v Runbook) Runbook {
 	}
 	v.Diagnostics = d
 	return v
+}
+func containsString(xs []string, value string) bool {
+	for _, x := range xs {
+		if x == value {
+			return true
+		}
+	}
+	return false
+}
+func uniqueStrings(xs []string) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, x := range xs {
+		if !seen[x] {
+			seen[x] = true
+			out = append(out, x)
+		}
+	}
+	return out
 }
 func stamp(r *Revision, actor, request string, version int, now time.Time) {
 	r.RequestID = request
