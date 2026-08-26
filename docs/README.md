@@ -68,7 +68,9 @@ response-policy revision, derives acknowledgement and resolution deadlines, and 
 matching rotation's effective shift owner when available. Otherwise it records team routing;
 an empty route remains an explicit `delivery_failed` diagnostic.
 
-Stable request identities reconcile retries, including after process restart. A non-empty
+Stable request identities reconcile retries, including after process restart and after a
+correlated request's parent alert is acknowledged or resolved; changed reuse still conflicts.
+A non-empty
 correlation key joins later events only to an open alert under the same exact policy revision,
 rule, and accountable team, preserving one routing page, event count, first/last-seen times,
 and append-only correlation provenance without carrying stale ownership across policy movement.

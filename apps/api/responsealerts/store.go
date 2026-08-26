@@ -123,6 +123,25 @@ func (s *Store) Create(repo, actor, request string, signal Signal, policy respon
 		} else if !errors.Is(e, ErrNotFound) {
 			return e
 		}
+		values, listErr := s.listUnlocked(repo)
+		if listErr != nil {
+			return listErr
+		}
+		// A correlated event owns its caller-stable identity independently of
+		// the parent alert's later lifecycle or policy state. Reconcile that
+		// identity before deciding whether a new occurrence may correlate.
+		for _, value := range values {
+			for _, event := range value.Events {
+				if event.Kind != "correlated" || event.ActorID != actor || event.RequestID != request {
+					continue
+				}
+				if event.Reason != digest {
+					return ErrConflict
+				}
+				out = value
+				return nil
+			}
+		}
 		rev := policy.Revisions[len(policy.Revisions)-1]
 		var rule *responsepolicies.Rule
 		for i := range rev.Rules {
@@ -167,18 +186,8 @@ func (s *Store) Create(repo, actor, request string, signal Signal, policy respon
 		}
 		out = Alert{ID: id, RepositoryID: repo, RequestID: request, RequestDigest: digest, PolicyID: policy.ID, PolicyVersion: rev.Version, RuleID: rule.ID, TeamID: rule.AccountableTeamID, Signal: signal, FirstSeenAt: now, LastSeenAt: now, EventCount: 1, AcknowledgeBy: now.Add(time.Duration(rule.AcknowledgeSeconds) * time.Second), ResolveBy: now.Add(time.Duration(rule.ResolveSeconds) * time.Second), State: state, Routing: routing, Events: []Event{}, Diagnostics: diagnostics, ExpectedActions: rule.ExpectedActions, PermittedActions: rule.Authority.PermittedActions, ProhibitedActions: rule.Authority.ProhibitedActions, AudienceIDs: rule.CommunicationAudienceIDs, UpdatedAt: now}
 		// Correlated events join the existing open alert without producing another page.
-		values, _ := s.listUnlocked(repo)
 		for _, v := range values {
 			if v.Signal.CorrelationKey != "" && v.Signal.CorrelationKey == signal.CorrelationKey && v.RuleID == rule.ID && v.State == "open" && v.PolicyID == policy.ID && v.PolicyVersion == rev.Version && v.TeamID == rule.AccountableTeamID {
-				for _, event := range v.Events {
-					if event.Kind == "correlated" && event.RequestID == request {
-						if event.Reason != digest {
-							return ErrConflict
-						}
-						out = v
-						return nil
-					}
-				}
 				v.LastSeenAt = now
 				v.EventCount++
 				v.Events = append(v.Events, Event{ID: stable(v.ID, actor, request), RequestID: request, Kind: "correlated", ActorID: actor, Reason: digest, CreatedAt: now})

@@ -118,6 +118,45 @@ func TestPersistedRetryAndCorrelationBoundaries(t *testing.T) {
 		t.Fatalf("policy movement retained stale routing: %#v", rerouted)
 	}
 }
+
+func TestClosedCorrelatedRequestRetainsIdempotency(t *testing.T) {
+	for _, terminal := range []string{"acknowledge", "resolve"} {
+		t.Run(terminal, func(t *testing.T) {
+			s, _ := New(t.TempDir())
+			now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
+			s.now = func() time.Time { return now }
+			policy := responsepolicies.Policy{ID: "policy", Revisions: []responsepolicies.Revision{{Version: 1, Rules: []responsepolicies.Rule{{ID: "rule", ResourceIDs: []string{"service"}, SignalClass: "reliability", Severity: "critical", AccountableTeamID: "team", AcknowledgeSeconds: 60, ResolveSeconds: 600}}}}}
+			signal := Signal{SignalClass: "reliability", Severity: "critical", ResourceIDs: []string{"service"}, Summary: "urgent", Uncertainty: "confirmed", OccurredAt: now, SourceRevision: "one", CorrelationKey: "errors", Evidence: []Evidence{{Kind: "check", ResourceID: "check", Revision: "one", Digest: "digest", Summary: "failed", Available: true}}}
+			parent, err := s.Create("repo", "source", "parent", signal, policy, []string{"responder"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			now = now.Add(time.Minute)
+			signal.OccurredAt, signal.SourceRevision = now, "two"
+			correlated, err := s.Create("repo", "source", "correlated-request", signal, policy, []string{"responder"})
+			if err != nil || correlated.ID != parent.ID {
+				t.Fatalf("correlation = %#v, %v", correlated, err)
+			}
+			closed, err := s.Append(parent.ID, "close", terminal, "responder", "", true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			retry, err := s.Create("repo", "source", "correlated-request", signal, policy, []string{"responder"})
+			if err != nil || retry.ID != parent.ID || retry.State != closed.State || retry.EventCount != 2 {
+				t.Fatalf("closed exact retry = %#v, %v", retry, err)
+			}
+			changed := signal
+			changed.Summary = "changed reuse"
+			if _, err := s.Create("repo", "source", "correlated-request", changed, policy, []string{"responder"}); err != ErrConflict {
+				t.Fatalf("changed closed retry err = %v", err)
+			}
+			otherActor, err := s.Create("repo", "other-source", "correlated-request", signal, policy, []string{"responder"})
+			if err != nil || otherActor.ID == parent.ID {
+				t.Fatalf("request identity leaked across actors: %#v, %v", otherActor, err)
+			}
+		})
+	}
+}
 func contains(v []string, w string) bool {
 	for _, x := range v {
 		if x == w {
