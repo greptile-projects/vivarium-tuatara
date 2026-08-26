@@ -52,6 +52,13 @@ can request signal/routing correction, pause affected routing, activate only an 
 declared current backup, resume routing, or create ordinary reliability, documentation, automation,
 or staffing proposal tasks assigned to a human or agent. These controls never add access; material
 policy or authority changes still require ordinary publication and approval boundaries.
+The connected `on-call-coordination-journey.spec.ts` browser/API/stock-Git journey proves the
+complete released-service loop from immutable coverage and acknowledged primary/backup duty
+through revision-exact alert correlation, bounded agent/dependency investigation, separately
+authorized mitigation, context-exact shift handoff, severe-recurrence incident promotion, and
+ordinary reviewed runbook improvement. It retains duplicate delivery, a missed acknowledgement,
+an absent primary, dependency false positive, failed delivery after access revocation, and rejected
+over-budget agent delegation as visible escalation and containment evidence.
 
 Collaborative capacity contracts at repository `/capacity-objectives` routes and the
 repository `/capacity` workspace retain immutable complete revisions beneath
