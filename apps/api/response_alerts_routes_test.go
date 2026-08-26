@@ -25,3 +25,16 @@ func TestResponseAlertFallbackVisibilityRequiresRepositoryOwner(t *testing.T) {
 		t.Fatal("routing audience visibility is incorrect")
 	}
 }
+
+func TestResponseWorkspaceAudienceAndIncidentSeverityBoundaries(t *testing.T) {
+	alert := responsealerts.Alert{AudienceIDs: []string{"audience"}, Routing: []responsealerts.Delivery{{RecipientID: "responder", Status: "delivered"}}}
+	if !responseAlertAudienceMember(alert, "audience") || !responseAlertAudienceMember(alert, "responder") || responseAlertAudienceMember(alert, "collaborator-only") {
+		t.Fatal("workspace invitation escaped the frozen alert audience")
+	}
+	want := map[string]string{"critical": "sev1", "high": "sev2", "medium": "sev3", "low": "sev4"}
+	for alertSeverity, incidentSeverity := range want {
+		if got := responseIncidentSeverity(alertSeverity); got != incidentSeverity {
+			t.Fatalf("%s mapped to %s", alertSeverity, got)
+		}
+	}
+}

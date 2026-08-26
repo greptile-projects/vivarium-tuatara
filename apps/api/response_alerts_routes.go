@@ -181,46 +181,95 @@ func registerResponseAlertRoutes(mux *http.ServeMux, catalog *repositories.Store
 			return
 		}
 		allowed := responseWorkspaceParticipant(current, actor.UserID)
+		roleIDs := []string{}
 		if (in.Kind == "invite" || in.Kind == "reassign") && in.TargetUserID != "" {
-			if _, err := catalog.GetByID(current.RepositoryID); err != nil {
-				allowed = false
-			}
-			has, _ := catalog.HasCollaborator(in.TargetUserID, current.RepositoryID)
-			repo, _ := catalog.GetByID(current.RepositoryID)
-			if !has && repo.OwnerID != in.TargetUserID {
-				writeAPIError(w, 422, "invalid_response_participant", "owners and responders must be current repository participants")
+			if !responseAlertAudienceMember(current, in.TargetUserID) {
+				writeAPIError(w, 422, "invalid_response_audience", "owners and responders must already belong to the alert audience")
 				return
 			}
+			roleIDs = append(roleIDs, in.TargetUserID)
 		}
 		if in.Kind == "promote_incident" && in.IncidentID == "" {
 			if current.Workspace.IncidentID != "" {
 				in.IncidentID = current.Workspace.IncidentID
 			}
 		}
+		writeAuthorized := true
 		if in.Kind == "promote_incident" && current.Workspace.IncidentID == "" {
+			if strings.TrimSpace(in.RequestID) == "" || strings.TrimSpace(in.Message) == "" {
+				writeAPIError(w, 400, "invalid_request", "incident promotion requires a caller-stable identity and rationale")
+				return
+			}
 			if !allowed || incidentStore == nil {
 				writeAPIError(w, 403, "response_alert_forbidden", "incident declaration is unavailable to this responder")
 				return
 			}
 			if _, _, writeOK := authorizeRepositoryParticipant(w, r, catalog, credentials, current.RepositoryID, "repositories:write"); !writeOK {
+				writeAuthorized = false
 				return
 			}
-			roles := []incidents.Role{{Name: "incident_commander", UserID: actor.UserID}}
-			for _, id := range current.Workspace.ParticipantIDs {
-				if id != actor.UserID {
-					roles = append(roles, incidents.Role{Name: "responder", UserID: id})
-				}
-			}
-			created, createErr := incidentStore.Create(incidents.Incident{Title: current.Signal.Summary, Summary: "Promoted from response alert " + current.ID + ". " + strings.TrimSpace(in.Message), Severity: current.Signal.Severity, Status: "investigating", Scopes: []incidents.Scope{{RepositoryID: current.RepositoryID}}, Roles: roles, DeclaredBy: actor.UserID})
-			if createErr != nil {
-				writeAPIError(w, 409, "incident_promotion_failed", "the alert could not become an incident")
-				return
-			}
-			in.IncidentID = created.ID
+			roleIDs = append(roleIDs, current.Workspace.ParticipantIDs...)
 		}
-		out, applyErr := alerts.ApplyWorkspace(current.ID, actor.UserID, in, allowed)
+		if !writeAuthorized {
+			return
+		}
+		var out responsealerts.Alert
+		applyErr := catalog.WithIncidentAuthorization(actor.UserID, []string{current.RepositoryID}, roleIDs, func() error {
+			locked, readErr := alerts.Get(current.ID)
+			if readErr != nil {
+				return readErr
+			}
+			lockedAllowed := responseWorkspaceParticipant(locked, actor.UserID)
+			if (in.Kind == "invite" || in.Kind == "reassign") && !responseAlertAudienceMember(locked, in.TargetUserID) {
+				return responsealerts.ErrForbidden
+			}
+			if in.Kind == "promote_incident" && locked.Workspace.IncidentID == "" {
+				roles := []incidents.Role{{Name: "incident_commander", UserID: actor.UserID}}
+				for _, id := range locked.Workspace.ParticipantIDs {
+					if id != actor.UserID {
+						roles = append(roles, incidents.Role{Name: "responder_" + id[:8], UserID: id})
+					}
+				}
+				created, createErr := incidentStore.Create(incidents.Incident{Title: locked.Signal.Summary, Summary: "Promoted from response alert " + locked.ID + ". " + strings.TrimSpace(in.Message), Severity: responseIncidentSeverity(locked.Signal.Severity), Status: "investigating", Scopes: []incidents.Scope{{RepositoryID: locked.RepositoryID}}, Roles: roles, DeclaredBy: actor.UserID})
+				if createErr != nil {
+					return createErr
+				}
+				in.IncidentID = created.ID
+			} else if in.Kind == "promote_incident" {
+				in.IncidentID = locked.Workspace.IncidentID
+			}
+			var mutationErr error
+			out, mutationErr = alerts.ApplyWorkspace(locked.ID, actor.UserID, in, lockedAllowed)
+			return mutationErr
+		})
+		if errors.Is(applyErr, repositories.ErrInvalidCollaborator) || errors.Is(applyErr, repositories.ErrNotFound) {
+			writeAPIError(w, 404, "response_alert_not_found", "response alert not found")
+			return
+		}
+		if errors.Is(applyErr, incidents.ErrInvalid) {
+			writeAPIError(w, 409, "incident_promotion_failed", "the alert could not become an incident")
+			return
+		}
 		writeResponseAlert(w, out, applyErr, 200)
 	})
+}
+
+func responseAlertAudienceMember(v responsealerts.Alert, user string) bool {
+	for _, id := range v.AudienceIDs {
+		if id == user {
+			return true
+		}
+	}
+	for _, delivery := range v.Routing {
+		if delivery.RecipientID == user && delivery.Status == "delivered" {
+			return true
+		}
+	}
+	return false
+}
+
+func responseIncidentSeverity(v string) string {
+	return map[string]string{"critical": "sev1", "high": "sev2", "medium": "sev3", "low": "sev4"}[v]
 }
 
 func responseWorkspaceParticipant(v responsealerts.Alert, user string) bool {
