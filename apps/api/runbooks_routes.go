@@ -28,7 +28,7 @@ func verifyAlertRunbookLaunch(alerts *responsealerts.Store, book runbooks.Runboo
 		return nil, nil
 	}
 	alert, err := alerts.Get(context.OriginID)
-	if err != nil || alert.RepositoryID != book.RepositoryID || alert.State == "resolved" || alert.Signal.SourceRevision != context.OriginRevision {
+	if err != nil || alert.RepositoryID != book.RepositoryID || alert.State != "open" || alert.Signal.SourceRevision != context.OriginRevision {
 		return nil, nil
 	}
 	alertResources := make(map[string]struct{}, len(alert.Signal.ResourceIDs))

@@ -96,6 +96,47 @@ func TestVerifyAlertRunbookLaunchRequiresCompleteResourceBinding(t *testing.T) {
 	if len(preconditions) != 0 || len(access) != 0 {
 		t.Fatalf("mixed-resource context inherited alert readiness: preconditions=%+v access=%+v", preconditions, access)
 	}
+	context.AffectedResources = []string{"checkout"}
+	create := func(request string, value responsealerts.Signal, directive string) responsealerts.Alert {
+		t.Helper()
+		var created responsealerts.Alert
+		var createErr error
+		if directive == "" {
+			created, createErr = alerts.Create("repo", "source", request, value, policy, []string{"operator"})
+		} else {
+			created, createErr = alerts.CreateControlled("repo", "source", request, value, policy, []string{"operator"}, directive)
+		}
+		if createErr != nil {
+			t.Fatal(createErr)
+		}
+		return created
+	}
+	acknowledged := create("acknowledged", signal, "")
+	acknowledged, err = alerts.Append(acknowledged.ID, "ack", "acknowledge", "operator", "owned", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	suppressedSignal := signal
+	suppressedUntil := now.Add(time.Hour)
+	suppressedSignal.SuppressedUntil = &suppressedUntil
+	suppressed := create("suppressed", suppressedSignal, "")
+	maintenanceSignal := signal
+	maintenanceEndsAt := now.Add(time.Hour)
+	maintenanceSignal.MaintenanceEndsAt = &maintenanceEndsAt
+	maintenance := create("maintenance", maintenanceSignal, "")
+	paused := create("paused", signal, "pause")
+	resolved := create("resolved", signal, "")
+	resolved, err = alerts.Append(resolved.ID, "resolve", "resolve", "operator", "recovered", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, inactive := range []responsealerts.Alert{acknowledged, suppressed, maintenance, paused, resolved} {
+		context.OriginID = inactive.ID
+		preconditions, access = verifyAlertRunbookLaunch(alerts, book, 1, context)
+		if len(preconditions) != 0 || len(access) != 0 {
+			t.Fatalf("inactive alert state %q inherited readiness: preconditions=%+v access=%+v", inactive.State, preconditions, access)
+		}
+	}
 }
 
 func TestRunbookAgentGrantRequiresCurrentUndeniedRepositoryAuthority(t *testing.T) {
