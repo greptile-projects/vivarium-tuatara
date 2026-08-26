@@ -46,3 +46,36 @@ func TestRiskEvidenceContainsScalingAndRevisitsDecision(t *testing.T) {
 		t.Fatalf("wanted CAS conflict, got %v", e)
 	}
 }
+
+func TestNegativeHeadroomContainsScalingWithoutCallerFailureKind(t *testing.T) {
+	s, _ := New(t.TempDir())
+	r, _ := s.Create("repo", "operator", "create", fixture())
+	start := time.Now().Add(-time.Hour)
+	evidence := Evidence{Source: "production", ObservationStart: start, ObservationEnd: start.Add(time.Hour), DeploymentIDs: []string{"deployment"}, DeployedRevisions: []string{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, AllocatedCapacity: 100, UsableCapacity: 80, Load: 90, Unit: "rps", Cost: 20, Currency: "USD", ForecastDemand: 75}
+	r, err := s.Mutate("repo", r.ID, 1, Event{RequestID: "observe", Kind: "observe", PhaseID: "scale", ActorType: "human", ActorID: "operator", Reason: "production window"}, &evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Status != "contained" || r.Phases[0].ThrottlePercent != 0 || !contains(r.Phases[0].Blockers, "insufficient_headroom") {
+		t.Fatalf("negative headroom was not contained: %#v", r)
+	}
+}
+
+func TestObserveRetryRejectsChangedEvidence(t *testing.T) {
+	s, _ := New(t.TempDir())
+	r, _ := s.Create("repo", "operator", "create", fixture())
+	start := time.Now().Add(-time.Hour)
+	evidence := Evidence{Source: "production", ObservationStart: start, ObservationEnd: start.Add(time.Hour), DeploymentIDs: []string{"deployment"}, DeployedRevisions: []string{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, AllocatedCapacity: 100, UsableCapacity: 90, Load: 70, Unit: "rps", Cost: 20, Currency: "USD", ForecastDemand: 65}
+	event := Event{RequestID: "observe", Kind: "observe", PhaseID: "scale", ActorType: "human", ActorID: "operator", Reason: "production window"}
+	r, err := s.Mutate("repo", r.ID, 1, event, &evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Mutate("repo", r.ID, r.Version, event, &evidence); err != nil {
+		t.Fatalf("unchanged retry failed: %v", err)
+	}
+	evidence.Load = 95
+	if _, err = s.Mutate("repo", r.ID, r.Version, event, &evidence); !errors.Is(err, ErrConflict) {
+		t.Fatalf("changed evidence retry = %v, want conflict", err)
+	}
+}

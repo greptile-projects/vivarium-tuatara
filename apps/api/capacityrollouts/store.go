@@ -193,6 +193,22 @@ func (s *Store) Mutate(repo, id string, expected int, ev Event, evidence *Eviden
 				if digest(old) != digestWithSequence(ev, old.Sequence, old.CreatedAt) {
 					return ErrConflict
 				}
+				if ev.Kind == "observe" {
+					if evidence == nil {
+						return ErrConflict
+					}
+					matched := false
+					for _, retained := range r.Evidence {
+						if retained.ID == stable(r.ID, ev.RequestID) {
+							candidate := normalizedEvidence(*evidence, retained.ID, retained.PhaseID, retained.CreatedBy, retained.CreatedAt)
+							matched = digest(candidate) == digest(retained)
+							break
+						}
+					}
+					if !matched {
+						return ErrConflict
+					}
+				}
 				out = r
 				return nil
 			}
@@ -240,19 +256,15 @@ func (s *Store) Mutate(repo, id string, expected int, ev Event, evidence *Eviden
 			if evidence == nil || !validEvidence(*evidence) {
 				return ErrInvalid
 			}
-			evidence.ID = stable(r.ID, ev.RequestID)
-			evidence.PhaseID = p.ID
-			evidence.CreatedBy = ev.ActorID
-			evidence.CreatedAt = s.now()
-			deriveEvidence(evidence)
-			r.Evidence = append(r.Evidence, *evidence)
+			retained := normalizedEvidence(*evidence, stable(r.ID, ev.RequestID), p.ID, ev.ActorID, s.now())
+			r.Evidence = append(r.Evidence, retained)
 			p.DeploymentIDs = append([]string{}, evidence.DeploymentIDs...)
 			p.DeployedRevisions = append([]string{}, evidence.DeployedRevisions...)
-			p.Blockers = append([]string{}, evidence.FailureKinds...)
-			if len(evidence.FailureKinds) > 0 {
+			p.Blockers = append([]string{}, retained.FailureKinds...)
+			if !retained.ObjectiveSatisfied {
 				p.State = "contained"
 				p.ThrottlePercent = 0
-				p.PredictedNextAction = containmentAction(evidence.FailureKinds, ev.DecisionID)
+				p.PredictedNextAction = containmentAction(retained.FailureKinds, ev.DecisionID)
 			} else {
 				p.State = "verified"
 				p.PredictedNextAction = "advance to the next plan phase while evidence remains current"
@@ -285,6 +297,9 @@ func validEvidence(e Evidence) bool {
 }
 func deriveEvidence(e *Evidence) {
 	e.Headroom = e.UsableCapacity - e.Load
+	if e.Headroom < 0 && !contains(e.FailureKinds, "insufficient_headroom") {
+		e.FailureKinds = append(e.FailureKinds, "insufficient_headroom")
+	}
 	e.ObjectiveSatisfied = e.Headroom >= 0 && len(e.FailureKinds) == 0
 	e.ForecastValidated = e.Load >= e.ForecastDemand && e.ObjectiveSatisfied
 	known := map[string]bool{"demand_shift": true, "quota_denial": true, "regional_imbalance": true, "scaling_lag": true, "correctness_regression": true, "reliability_regression": true, "unused_reservation": true, "budget_breach": true}
@@ -294,6 +309,19 @@ func deriveEvidence(e *Evidence) {
 			e.ForecastValidated = false
 		}
 	}
+}
+func normalizedEvidence(e Evidence, id, phaseID, actor string, createdAt time.Time) Evidence {
+	e.ID, e.PhaseID, e.CreatedBy, e.CreatedAt = id, phaseID, actor, createdAt
+	deriveEvidence(&e)
+	return e
+}
+func contains(values []string, value string) bool {
+	for _, item := range values {
+		if item == value {
+			return true
+		}
+	}
+	return false
 }
 func containmentAction(kinds []string, decision string) string {
 	revisit := false

@@ -75,7 +75,7 @@ func registerCapacityRolloutRoutes(mux *http.ServeMux, catalog *repositories.Sto
 			}
 			for j, id := range phase.DeploymentIDs {
 				d, x := environments.GetPromotion(r.PathValue("id"), id)
-				if x != nil || j >= len(phase.DeployedRevisions) || d.CommitID != phase.DeployedRevisions[j] || d.EnvironmentID != phase.EnvironmentID {
+				if x != nil || d.State != "succeeded" || j >= len(phase.DeployedRevisions) || d.CommitID != phase.DeployedRevisions[j] || d.EnvironmentID != phase.EnvironmentID {
 					writeAPIError(w, 422, "deployed_revision_invalid", "deployment evidence must resolve to the exact protected environment revision")
 					return
 				}
