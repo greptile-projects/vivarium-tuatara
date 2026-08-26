@@ -41,6 +41,12 @@ contracts from roadmap-linked demand through challenged modeling, bounded altern
 ordinary reviewed delivery, protected deployment, production containment, correction,
 and verified headroom, reliability, and cost.
 
+Repository writers publish immutable urgent-response coverage at
+`/repositories/{id}/response-policies` and use the Response coverage workspace to map
+signals and severities to teams, skills, targets, escalation, audiences, incident
+criteria, and explicit authority boundaries. Coverage, ownership, skill, timing, and
+exception gaps remain visible before an alert arrives.
+
 Repository participants and scoped read-only agents can turn an exact objective into
 an immutable, permission-aware capacity model at `/repositories/{id}/capacity-models`.
 The Capacity workspace exposes release-bound sanitized evidence, observation windows,
