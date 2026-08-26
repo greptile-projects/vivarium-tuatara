@@ -79,3 +79,12 @@ func TestObserveRetryRejectsChangedEvidence(t *testing.T) {
 		t.Fatalf("changed evidence retry = %v, want conflict", err)
 	}
 }
+
+func TestCreateRejectsUnmatchedDeploymentRevisions(t *testing.T) {
+	s, _ := New(t.TempDir())
+	r := fixture()
+	r.Phases[0].DeployedRevisions = append(r.Phases[0].DeployedRevisions, "unverified-trailing-revision")
+	if _, err := s.Create("repo", "operator", "create", r); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("unmatched deployment revisions = %v, want invalid", err)
+	}
+}

@@ -73,6 +73,10 @@ func registerCapacityRolloutRoutes(mux *http.ServeMux, catalog *repositories.Sto
 				writeAPIError(w, 422, "protected_environment_invalid", "every phase requires a repository protected environment")
 				return
 			}
+			if len(phase.DeploymentIDs) != len(phase.DeployedRevisions) {
+				writeAPIError(w, 422, "deployed_revision_invalid", "every deployment requires exactly one matching protected-environment revision")
+				return
+			}
 			for j, id := range phase.DeploymentIDs {
 				d, x := environments.GetPromotion(r.PathValue("id"), id)
 				if x != nil || d.State != "succeeded" || j >= len(phase.DeployedRevisions) || d.CommitID != phase.DeployedRevisions[j] || d.EnvironmentID != phase.EnvironmentID {

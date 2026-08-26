@@ -132,7 +132,7 @@ func (s *Store) Create(repo, actor, request string, r Rollout) (Rollout, error) 
 		r.Evidence = []Evidence{}
 		r.Events = []Event{{RequestID: request + ":stage", Sequence: 1, Kind: "stage", ActorType: "human", ActorID: actor, Reason: "protected capacity rollout staged", CreatedAt: now}}
 		for i := range r.Phases {
-			if r.Phases[i].ID == "" || r.Phases[i].ControllerID == "" || r.Phases[i].EnvironmentID == "" || len(r.Phases[i].DeploymentIDs) == 0 || len(r.Phases[i].DeployedRevisions) == 0 {
+			if r.Phases[i].ID == "" || r.Phases[i].ControllerID == "" || r.Phases[i].EnvironmentID == "" || len(r.Phases[i].DeploymentIDs) == 0 || len(r.Phases[i].DeploymentIDs) != len(r.Phases[i].DeployedRevisions) {
 				return ErrInvalid
 			}
 			r.Phases[i].State = "staged"
