@@ -127,6 +127,20 @@ all named owners and audience members must remain current repository participant
 publication. Gaps coordinate understanding only and grant no repository, telemetry, environment,
 deployment, disclosure, spending, agent, or operational authority.
 
+Versioned telemetry contracts at repository `/telemetry-contracts` routes and the same
+Observability workspace retain immutable revisions beneath `$TELEMETRY_CONTRACT_STORAGE_ROOT`
+(`telemetry-contracts`). Current repository writers bind an exact observability-gap
+revision to named metric, log, trace, profile, or event schemas, units, dimensions,
+sampling, aggregation, correlation, retention, volume, quality thresholds, collectors,
+source symbols, service boundaries, owners, consumers, alternatives, and explicit privacy,
+security, residency, performance, cardinality, storage, and cost assumptions. Humans and
+repository-bound read-only agents append revision-bound challenges with digest-addressed
+citations. Reads derive conflicting definitions, sensitive fields without redaction,
+unbounded dimensions, unsupported collectors, and missing alternatives or assumptions as
+blocking or incomplete diagnostics; publication rejects a moved originating gap. Contracts
+coordinate instrumentation design only and grant no repository, collector, telemetry,
+environment, deployment, disclosure, spending, agent, or operational authority.
+
 Sensitive history remediations at `/repositories/{id}/history-remediations` and the repository
 `/history-remediation` workspace give current maintainers a private, retry-stable coordination boundary
 for a security finding, privacy incident, support case, or selected object. Records retain a bounded

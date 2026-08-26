@@ -122,6 +122,15 @@ ambiguous semantics, inaccessible evidence, and stale
 instrumentation remain attributable diagnostics. These records coordinate understanding
 and grant no telemetry, environment, deployment, disclosure, or operational authority.
 
+Those needs become immutable signal designs at
+`/repositories/{id}/telemetry-contracts`. The Observability workspace previews
+schema, units, dimensions, collection, correlation, retention, volume, quality,
+ownership, consumers, source symbols, service boundaries, and privacy, security,
+residency, performance, cardinality, storage, and cost effects before code changes.
+Alternatives and cited human or read-only-agent challenges remain attributable;
+conflicting definitions, sensitive fields without redaction, unbounded dimensions,
+unsupported collectors, and changed gap revisions remain explicit blockers.
+
 ## Getting started
 
 ```sh
