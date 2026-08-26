@@ -385,13 +385,7 @@ func (s *Store) StartExecution(id, actor, request string, version int, context E
 		candidate.Participants = []ExecutionParticipant{{ActorType: "human", ActorID: actor, JoinedAt: now}}
 		candidate.Health, candidate.RollbackState = "unknown", "not_started"
 		if len(r.Steps) > 0 {
-			candidate.CurrentStepID = r.Steps[0].ID
-			if r.Steps[0].Decision != nil {
-				candidate.PendingDecisions = []string{r.Steps[0].Decision.Condition}
-				candidate.PredictedNextAction = "record decision: " + r.Steps[0].Decision.Condition
-			} else {
-				candidate.PredictedNextAction = "perform " + r.Steps[0].Title
-			}
+			projectExecutionStep(&candidate, r.Steps[0])
 		}
 		candidate.Blockers = blockers
 		candidate.Status = "ready"
@@ -527,12 +521,12 @@ func (s *Store) Act(id, executionID, actorType, actorID string, in ExecutionActi
 				return ErrInvalid
 			}
 			e.PendingDecisions = nil
-			e.CurrentStepID = next
 			if next == "" {
+				e.CurrentStepID = ""
 				e.Status = "completed"
 				e.PredictedNextAction = "verify outcome"
 			} else if n, ok := executionStep(revision, next); ok {
-				e.PredictedNextAction = "perform " + n.Title
+				projectExecutionStep(e, n)
 			}
 		case "abort":
 			e.Status = "aborted"
@@ -587,8 +581,7 @@ func advanceExecution(e *Execution, r Revision) {
 				return
 			}
 			if i+1 < len(r.Steps) {
-				e.CurrentStepID = r.Steps[i+1].ID
-				e.PredictedNextAction = "perform " + r.Steps[i+1].Title
+				projectExecutionStep(e, r.Steps[i+1])
 			} else {
 				e.CurrentStepID = ""
 				e.Status = "completed"
@@ -597,6 +590,16 @@ func advanceExecution(e *Execution, r Revision) {
 			return
 		}
 	}
+}
+func projectExecutionStep(e *Execution, step Step) {
+	e.CurrentStepID = step.ID
+	e.PendingDecisions = nil
+	if step.Decision != nil {
+		e.PendingDecisions = []string{step.Decision.Condition}
+		e.PredictedNextAction = "record decision: " + step.Decision.Condition
+		return
+	}
+	e.PredictedNextAction = "perform " + step.Title
 }
 func actionDigest(v ExecutionAction) string {
 	v.RequestID = ""

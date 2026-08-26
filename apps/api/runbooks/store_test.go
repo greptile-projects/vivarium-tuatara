@@ -194,6 +194,40 @@ func TestExecutionRejectsInactiveDecisionBypass(t *testing.T) {
 	}
 }
 
+func TestExecutionInitializesConsecutiveDecisionTarget(t *testing.T) {
+	s, _ := New(t.TempDir())
+	r := validRevision("owner")
+	r.Steps = []Step{
+		{ID: "first", Position: 1, Kind: "decision", Title: "First decision", Purpose: "Choose first branch", Instructions: "Evaluate first condition", Preconditions: []string{"signal confirmed"}, ExpectedEvidence: []string{"first decision"}, OwnerIDs: []string{"owner"}, RequiredSkills: []string{"operations"}, Decision: &Decision{Condition: "first condition", IfTrueStepID: "second", IfFalseStepID: "second", HumanJudgment: "Judge first condition"}, Authority: Authority{}},
+		{ID: "second", Position: 2, Kind: "decision", Title: "Second decision", Purpose: "Choose second branch", Instructions: "Evaluate second condition", Preconditions: []string{"first decision complete"}, ExpectedEvidence: []string{"second decision"}, OwnerIDs: []string{"owner"}, RequiredSkills: []string{"operations"}, Decision: &Decision{Condition: "second condition", IfTrueStepID: "after", IfFalseStepID: "after", HumanJudgment: "Judge second condition"}, Authority: Authority{}},
+		{ID: "after", Position: 3, Kind: "communication", Title: "Communicate", Purpose: "Share status", Instructions: "Send update", Preconditions: []string{"decisions complete"}, ExpectedEvidence: []string{"timeline update"}, OwnerIDs: []string{"owner"}, RequiredSkills: []string{"operations"}, Authority: Authority{}},
+	}
+	created, err := s.Create("repo", "owner", "create", r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	context := ExecutionContext{OriginKind: "alert", OriginID: "alert-consecutive", OriginRevision: "v1", Summary: "checkout failure", AffectedResources: []string{"checkout"}, WindowFrom: now, WindowTo: now, Evidence: []ExecutionEvidence{{Kind: "metric", ResourceID: "checkout", Revision: "v1", Digest: "sha256:x", Summary: "sanitized"}}}
+	execution, err := s.StartExecution(created.ID, "owner", "launch", 1, context, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, _ := s.read(created.ID)
+	stored.Executions[0].Status = "ready"
+	stored.Executions[0].Blockers = nil
+	if err = s.write(stored); err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.Act(created.ID, execution.ID, "human", "owner", ExecutionAction{RequestID: "first", ExpectedVersion: 1, Action: "decide", StepID: "first", Decision: "true"})
+	if err != nil || second.CurrentStepID != "second" || len(second.PendingDecisions) != 1 || second.PendingDecisions[0] != "second condition" || second.PredictedNextAction != "record decision: second condition" {
+		t.Fatalf("second=%+v err=%v", second, err)
+	}
+	after, err := s.Act(created.ID, execution.ID, "human", "owner", ExecutionAction{RequestID: "second", ExpectedVersion: 2, Action: "decide", StepID: "second", Decision: "false"})
+	if err != nil || after.CurrentStepID != "after" || len(after.PendingDecisions) != 0 || after.PredictedNextAction != "perform Communicate" {
+		t.Fatalf("after=%+v err=%v", after, err)
+	}
+}
+
 func TestRehearsalRejectsUnsafeChangingStepAndSecretOutput(t *testing.T) {
 	s, _ := New(t.TempDir())
 	r := validRevision("owner")
