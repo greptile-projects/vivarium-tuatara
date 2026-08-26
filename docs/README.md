@@ -108,7 +108,10 @@ plan requests and delivery publication reconcile retries without duplicating pro
 or ordinary work. Delivery first retains deterministic proposal/task identities as a
 visible `pending` linkage, creates or recovers that exact ordinary work, and then marks
 the linkage `created`, so a cross-store failure cannot leave untracked tasks. Declared
-phase dependencies are copied exactly rather than linearized. Storage defaults beneath `$CAPACITY_PLAN_STORAGE_ROOT`
+phase dependencies are copied exactly rather than linearized. Recovery uses the retained
+base even if later ordinary work advances the default branch; the first reservation was
+itself captured under the branch reference lock, while live participation is rechecked.
+Storage defaults beneath `$CAPACITY_PLAN_STORAGE_ROOT`
 (`capacity-plans`). Plan approval is coordination only and grants no spending, provider,
 quota, repository, secret, merge, release, deployment, or environment authority.
 

@@ -576,6 +576,8 @@ agent-owned proposal task per phase; existing sessions, workspaces, contribution
 reviews, checks, queues, releases, and environment controls retain their own authority.
 Deterministic proposal/task identities are retained as a pending link before ordinary
 work publication, retries converge, and the approved phase dependency graph is preserved.
+The retained base remains the retry base after default-branch movement because its first
+reservation was published under the Git reference lock; current participants are still rechecked.
 Plan approval grants no spending, provider, quota, repository, secret, merge, release,
 deployment, environment, scaling, or operational authority.
   CAS-versioned bounded trials resolve an existing attested release or exact readable commit, scope

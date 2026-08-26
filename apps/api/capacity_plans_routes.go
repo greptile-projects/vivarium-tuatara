@@ -137,9 +137,14 @@ func registerCapacityPlanRoutes(mux *http.ServeMux, git *storage.Store, catalog 
 			return
 		}
 		b, e := exec.Command("git", "--git-dir="+bare.Path(), "rev-parse", "refs/heads/"+repo.DefaultBranch).Output()
-		revision := strings.TrimSpace(string(b))
-		if e != nil || len(revision) != 40 {
+		liveRevision := strings.TrimSpace(string(b))
+		if e != nil || len(liveRevision) != 40 {
 			writeAPIError(w, 409, "delivery_base_unavailable", "the default branch has no exact delivery base")
+			return
+		}
+		revision, recovering := capacityDeliveryBase(p, liveRevision)
+		if recovering && exec.Command("git", "--git-dir="+bare.Path(), "cat-file", "-e", revision+"^{commit}").Run() != nil {
+			writeAPIError(w, 409, "delivery_base_unavailable", "the retained delivery base is no longer available")
 			return
 		}
 		tasks := make([]proposals.ImplementationTaskInput, len(p.Phases))
@@ -184,11 +189,26 @@ func registerCapacityPlanRoutes(mux *http.ServeMux, git *storage.Store, catalog 
 			_, x = plans.FinalizeDelivery(repo.ID, p.ID, delivery)
 			return x
 		}
-		e = catalog.WithCurrentParticipants(participants, repo.ID, func() error { return bare.WithReferenceTarget("refs/heads/"+repo.DefaultBranch, revision, publish) })
+		e = catalog.WithCurrentParticipants(participants, repo.ID, func() error {
+			if recovering {
+				// The first attempt retained this exact base while holding the Git
+				// reference lock. Recovery must finish that publication even when
+				// later, independently authorized work advances the branch.
+				return publish()
+			}
+			return bare.WithReferenceTarget("refs/heads/"+repo.DefaultBranch, revision, publish)
+		})
 		if e != nil {
 			writeAPIError(w, 422, "capacity_delivery_invalid", "delivery owners and exact base must remain current; plan approval grants no delivery authority")
 			return
 		}
 		writeJSON(w, 201, map[string]any{"capacity_plan": func() capacityplans.Plan { x, _ := plans.Get(repo.ID, p.ID); return x }(), "proposal": proposal, "tasks": made})
 	})
+}
+
+func capacityDeliveryBase(plan capacityplans.Plan, liveRevision string) (string, bool) {
+	if plan.Delivery != nil && (plan.Delivery.Status == "pending" || plan.Delivery.Status == "created") {
+		return plan.Delivery.BaseRevision, true
+	}
+	return liveRevision, false
 }
