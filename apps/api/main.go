@@ -117,6 +117,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/securityfindings"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/securityscenarios"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/serviceobjectives"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/signalevaluations"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/signalrollouts"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/supportsolutions"
@@ -292,6 +293,14 @@ func main() {
 		signalRolloutRoot = "signal-rollouts"
 	}
 	signalRolloutStore, err := signalrollouts.New(signalRolloutRoot)
+	if err != nil {
+		log.Fatal(err)
+	}
+	signalEvaluationRoot := os.Getenv("SIGNAL_EVALUATION_STORAGE_ROOT")
+	if signalEvaluationRoot == "" {
+		signalEvaluationRoot = "signal-evaluations"
+	}
+	signalEvaluationStore, err := signalevaluations.New(signalEvaluationRoot)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -1036,7 +1045,7 @@ func main() {
 		port = "8080"
 	}
 
-	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, reviewPlanStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, charterStore, governanceStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, supportThreadStore, supportVerificationStore, supportSolutionStore, knowledgeAnswerStore, contributorPathwayStore, learningPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore, performanceGoalStore, capacityObjectiveStore, capacityModelStore, capacityTestStore, capacityPlanStore, performanceEvidenceStore, productExperimentStore, feedbackStore, productOpportunityStore, roadmapStore, outcomeValidationStore, projectFundStore, incubatorStore, adoptionWorkspaceStore, accessibilityCommitmentStore, accessibilityReportStore, accessibilityAssessmentStore, accessibilityDeliveryStore, dataCommitmentStore, dataFlowStore, privacyReviewStore, privacyCheckStore, dataObservationStore, localePlanStore, localizationStore, serviceObjectiveStore, recoveryCommitmentStore, protectionPlanStore, recoveryExerciseStore, recoveryOperationStore, agentEvaluationStore, agentProjectStore, agentCandidateStore, apiContractStore, durableSchemaStore, infrastructureStore, debugWorkspaceStore, interfaceSystemStore, capabilityStore, designProposalStore, interfaceCheckStore, designGovernanceStore, qualityPlanStore, assuranceProgramStore, assuranceEvidenceStore, assuranceImpactStore, assuranceAssessmentStore, testScenarioStore, exploratorySessionStore, releaseConfidenceStore, securityExpectationStore, threatModelStore, securityScenarioStore, securityFindingStore, securityConfidenceStore, collaborationWorkflowStore, workflowComponentStore, regressionInvestigationStore, propagationCampaignStore, historyRemediationStore, restructuringPlanStore, changeStackStore, responsePolicyStore, responseAlertStore, runbookStore, observabilityGapStore, telemetryContractStore, signalRolloutStore)
+	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, reviewPlanStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, charterStore, governanceStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, supportThreadStore, supportVerificationStore, supportSolutionStore, knowledgeAnswerStore, contributorPathwayStore, learningPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore, performanceGoalStore, capacityObjectiveStore, capacityModelStore, capacityTestStore, capacityPlanStore, performanceEvidenceStore, productExperimentStore, feedbackStore, productOpportunityStore, roadmapStore, outcomeValidationStore, projectFundStore, incubatorStore, adoptionWorkspaceStore, accessibilityCommitmentStore, accessibilityReportStore, accessibilityAssessmentStore, accessibilityDeliveryStore, dataCommitmentStore, dataFlowStore, privacyReviewStore, privacyCheckStore, dataObservationStore, localePlanStore, localizationStore, serviceObjectiveStore, recoveryCommitmentStore, protectionPlanStore, recoveryExerciseStore, recoveryOperationStore, agentEvaluationStore, agentProjectStore, agentCandidateStore, apiContractStore, durableSchemaStore, infrastructureStore, debugWorkspaceStore, interfaceSystemStore, capabilityStore, designProposalStore, interfaceCheckStore, designGovernanceStore, qualityPlanStore, assuranceProgramStore, assuranceEvidenceStore, assuranceImpactStore, assuranceAssessmentStore, testScenarioStore, exploratorySessionStore, releaseConfidenceStore, securityExpectationStore, threatModelStore, securityScenarioStore, securityFindingStore, securityConfidenceStore, collaborationWorkflowStore, workflowComponentStore, regressionInvestigationStore, propagationCampaignStore, historyRemediationStore, restructuringPlanStore, changeStackStore, responsePolicyStore, responseAlertStore, runbookStore, observabilityGapStore, telemetryContractStore, signalRolloutStore, signalEvaluationStore)
 	startCheckRunRecovery(store, checkRunStore)
 	startIntegrationQueueRecovery(pullRequestStore)
 	startDeploymentRecovery(deploymentStore, checkRunStore)
@@ -1265,6 +1274,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	var observabilityGapStore *observabilitygaps.Store
 	var telemetryContractStore *telemetrycontracts.Store
 	var signalRolloutStore *signalrollouts.Store
+	var signalEvaluationStore *signalevaluations.Store
 	for _, optional := range optionalStores {
 		switch value := optional.(type) {
 		case *releases.Store:
@@ -1345,6 +1355,8 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 			telemetryContractStore = value
 		case *signalrollouts.Store:
 			signalRolloutStore = value
+		case *signalevaluations.Store:
+			signalEvaluationStore = value
 		case *performanceevidence.Store:
 			performanceEvidenceStore = value
 		case *productexperiments.Store:
@@ -1684,6 +1696,9 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 			registerTelemetryContractRoutes(mux, store, repositoryCatalog, authStore, observabilityGapStore, telemetryContractStore, proposalStore, pullRequestStore, previewStore, checkRunStore)
 			if signalRolloutStore != nil {
 				registerSignalRolloutRoutes(mux, repositoryCatalog, authStore, telemetryContractStore, deploymentStore, signalRolloutStore)
+				if signalEvaluationStore != nil {
+					registerSignalEvaluationRoutes(mux, repositoryCatalog, authStore, observabilityGapStore, telemetryContractStore, signalRolloutStore, signalEvaluationStore)
+				}
 			}
 		}
 	}

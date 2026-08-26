@@ -169,6 +169,18 @@ evidence and deterministically contain collection. Agents have no collection, da
 authority, and these records grant no repository, telemetry, disclosure, deployment, spending, or
 operational authority.
 
+Signal usefulness evaluations at repository `/signal-evaluations` routes and the same Observability
+workspace retain exact gap, contract, rollout, delivered-signal, release, deployment, code,
+dependency, user-journey, and known-consumer context beneath `$SIGNAL_EVALUATION_STORAGE_ROOT`
+(`signal-evaluations`). Current participants and repository-bound read-only agents publish
+caller-stable reproducible findings with digest-addressed queries, frozen windows, uncertainty, and
+criterion-level results. Declared current human owners retain, revise, reduce, archive, or remove
+signals through immutable decisions backed by exact findings, policy approval, dependent-consumer
+impact previews, connected repair or accepted public-surface updates, and collection-stop proof for
+archive or removal. Reads preserve provenance, historical meaning, earlier conclusions, and every
+lifecycle decision. Evaluations coordinate understanding and lifecycle intent only and grant no
+repository, evidence, telemetry, collector, policy, deployment, disclosure, or operational authority.
+
 Sensitive history remediations at `/repositories/{id}/history-remediations` and the repository
 `/history-remediation` workspace give current maintainers a private, retry-stable coordination boundary
 for a security finding, privacy incident, support case, or selected object. Records retain a bounded

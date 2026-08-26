@@ -144,6 +144,13 @@ by service, audience, region, and traffic, exposes production quality, privacy, 
 evidence, and gives human operators pause, narrow, resume, and rollback controls. Unsafe payload,
 privacy, collector, skew, regression, or budget evidence is retained and contains collection.
 
+Delivered signals are evaluated at `/repositories/{id}/signal-evaluations`. Exact gap, contract,
+rollout, signal, release, deployment, code, dependency, journey, and consumer context makes human
+and repository-bound read-only-agent findings reproducible and preserves uncertainty and original
+success criteria. Owners retain, revise, reduce, archive, or remove collection only with cited
+findings, policy approval, consumer impact previews, connected repairs where needed, and verified
+stop evidence for retirement; historical meaning and prior conclusions remain immutable.
+
 ## Getting started
 
 ```sh
