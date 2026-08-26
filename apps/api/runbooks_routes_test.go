@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/runbooks"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
@@ -10,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestRunbookAPI(t *testing.T) {
@@ -48,5 +50,25 @@ func TestRunbookAPI(t *testing.T) {
 	listed.Body.Close()
 	if len(result.Runbooks) != 1 {
 		t.Fatalf("list=%+v", result)
+	}
+}
+
+func TestRunbookAgentGrantRequiresCurrentUndeniedRepositoryAuthority(t *testing.T) {
+	now := time.Now().UTC()
+	resource := organizations.ResourceScope{Kind: "repository", ID: "repo"}
+	base := organizations.AccessGrant{PrincipalType: "agent", PrincipalID: "agent", Resources: []organizations.ResourceScope{resource}}
+	if !runbookAgentGrantCurrent(base, "agent", resource, now) {
+		t.Fatal("current grant rejected")
+	}
+	expired := base
+	expiry := now
+	expired.ExpiresAt = &expiry
+	if runbookAgentGrantCurrent(expired, "agent", resource, now) {
+		t.Fatal("expired grant approved")
+	}
+	denied := base
+	denied.Exceptions = []organizations.AccessException{{Resource: resource, Reason: "denied"}}
+	if runbookAgentGrantCurrent(denied, "agent", resource, now) {
+		t.Fatal("repository-denied grant approved")
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
@@ -129,11 +130,12 @@ func resolveRunbookReferences(git *storage.Store, catalog *repositories.Store, w
 						}
 						ref.Accessible = true
 						for _, grant := range organization.AccessGrants {
-							if grant.PrincipalType != "agent" || grant.PrincipalID != agent.ID || grant.RevokedAt != nil {
+							resource := organizations.ResourceScope{Kind: "repository", ID: repositoryID}
+							if !runbookAgentGrantCurrent(grant, agent.ID, resource, time.Now().UTC()) {
 								continue
 							}
-							for _, resource := range grant.Resources {
-								if resource.Kind == "repository" && resource.ID == repositoryID {
+							for _, granted := range grant.Resources {
+								if granted == resource {
 									ref.Approved = true
 								}
 							}
@@ -143,6 +145,18 @@ func resolveRunbookReferences(git *storage.Store, catalog *repositories.Store, w
 			}
 		}
 	}
+}
+
+func runbookAgentGrantCurrent(grant organizations.AccessGrant, agentID string, resource organizations.ResourceScope, now time.Time) bool {
+	if grant.PrincipalType != "agent" || grant.PrincipalID != agentID || grant.RevokedAt != nil || (grant.ExpiresAt != nil && !grant.ExpiresAt.After(now)) {
+		return false
+	}
+	for _, exception := range grant.Exceptions {
+		if exception.Resource == resource {
+			return false
+		}
+	}
+	return true
 }
 
 func runbookRevisionPublished(git *storage.Store, repositoryID, defaultBranch, revision string) bool {
