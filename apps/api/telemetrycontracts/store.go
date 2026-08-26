@@ -94,6 +94,7 @@ type Citation struct {
 	ResourceID string `json:"resource_id"`
 	Revision   string `json:"revision"`
 	Digest     string `json:"digest"`
+	Verified   bool   `json:"-"`
 }
 type Challenge struct {
 	RequestID       string     `json:"request_id"`
@@ -221,7 +222,7 @@ func (s *Store) Challenge(repo, id, request string, version int, authorType, aut
 			return ErrInvalid
 		}
 		for _, c := range citations {
-			if c.Kind == "" || c.ResourceID == "" || c.Revision == "" || c.Digest == "" {
+			if !c.Verified || c.Kind == "" || c.ResourceID == "" || c.Revision == "" || c.Digest == "" {
 				return ErrInvalid
 			}
 		}

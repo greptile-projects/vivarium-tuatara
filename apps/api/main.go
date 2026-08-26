@@ -77,7 +77,6 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/localeplans"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/localization"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/observabilitygaps"
-	"github.com/greptile-projects/vivarium-tuatara/apps/api/telemetrycontracts"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/outcomevalidations"
 	packages "github.com/greptile-projects/vivarium-tuatara/apps/api/packages"
@@ -122,6 +121,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/supportsolutions"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/supportthreads"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/supportverifications"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/telemetrycontracts"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/testscenarios"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/threatmodels"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
@@ -1669,7 +1669,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	if authStore != nil && repositoryCatalog != nil && observabilityGapStore != nil && releaseStore != nil && deploymentStore != nil && serviceObjectiveStore != nil && incidentStore != nil && debugWorkspaceStore != nil && runbookStore != nil && supportThreadStore != nil {
 		registerObservabilityGapRoutes(mux, repositoryCatalog, authStore, observabilityGapStore, releaseStore, deploymentStore, serviceObjectiveStore, incidentStore, debugWorkspaceStore, runbookStore, supportThreadStore)
 		if telemetryContractStore != nil {
-			registerTelemetryContractRoutes(mux, repositoryCatalog, authStore, observabilityGapStore, telemetryContractStore)
+			registerTelemetryContractRoutes(mux, store, repositoryCatalog, authStore, observabilityGapStore, telemetryContractStore)
 		}
 	}
 	if authStore != nil && repositoryCatalog != nil && responsePolicyStore != nil {

@@ -31,7 +31,7 @@ func TestVersionedContractsAndCitedChallenges(t *testing.T) {
 	if e != nil || v.Complete || len(v.Diagnostics) != 2 {
 		t.Fatalf("diagnostics: %+v %v", v, e)
 	}
-	v, e = s.Challenge("repo", v.ID, "challenge", 2, "agent", "agent-1", "logs", "volume", "measurement contradicts estimate", []Citation{{Kind: "check", ResourceID: "check-1", Revision: "abc", Digest: "sha256:123"}})
+	v, e = s.Challenge("repo", v.ID, "challenge", 2, "agent", "agent-1", "logs", "volume", "measurement contradicts estimate", []Citation{{Kind: "git_blob", ResourceID: "evidence.txt", Revision: "abc", Digest: "123", Verified: true}})
 	if e != nil || len(v.Challenges) != 1 {
 		t.Fatalf("challenge: %+v %v", v, e)
 	}

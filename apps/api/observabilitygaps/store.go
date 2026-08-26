@@ -171,6 +171,27 @@ func (s *Store) Get(id string) (Gap, error) {
 	err := s.lock(func() error { var e error; v, e = s.read(id); return e })
 	return project(v, s.now()), err
 }
+
+// WithCurrentVersion holds the gap mutation boundary while dependent state is
+// persisted, so a successor cannot race an exact-version publication.
+func (s *Store) WithCurrentVersion(repo, id string, version int, fn func() error) error {
+	if fn == nil {
+		return ErrInvalid
+	}
+	return s.lock(func() error {
+		v, err := s.read(id)
+		if err != nil || v.RepositoryID != repo {
+			if err == nil {
+				return ErrNotFound
+			}
+			return err
+		}
+		if v.CurrentVersion != version {
+			return ErrConflict
+		}
+		return fn()
+	})
+}
 func (s *Store) List(repo string) ([]Gap, error) {
 	xs := []Gap{}
 	err := s.lock(func() error {

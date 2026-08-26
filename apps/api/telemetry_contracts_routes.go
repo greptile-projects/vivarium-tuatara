@@ -1,12 +1,15 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"net/http"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/observabilitygaps"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/telemetrycontracts"
 )
 
@@ -24,7 +27,7 @@ type telemetryChallengeInput struct {
 	Citations       []telemetrycontracts.Citation `json:"citations"`
 }
 
-func registerTelemetryContractRoutes(mux *http.ServeMux, repos *repositories.Store, credentials *auth.Store, gaps *observabilitygaps.Store, contracts *telemetrycontracts.Store) {
+func registerTelemetryContractRoutes(mux *http.ServeMux, git *storage.Store, repos *repositories.Store, credentials *auth.Store, gaps *observabilitygaps.Store, contracts *telemetrycontracts.Store) {
 	mux.HandleFunc("GET /repositories/{id}/telemetry-contracts", func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := authorizeRepositoryRead(w, r, repos, credentials, r.PathValue("id")); !ok {
 			return
@@ -57,23 +60,24 @@ func registerTelemetryContractRoutes(mux *http.ServeMux, repos *repositories.Sto
 			writeAPIError(w, 400, "invalid_request", "a complete telemetry contract revision is required")
 			return
 		}
-		gap, e := gaps.Get(in.Revision.GapID)
-		if e != nil || gap.RepositoryID != r.PathValue("id") || gap.CurrentVersion != in.Revision.GapVersion {
-			writeAPIError(w, 422, "telemetry_contract_dependency_changed", "the exact observability gap dependency does not resolve or has changed")
-			return
-		}
 		participants := append([]string{actor.UserID}, in.Revision.OwnerIDs...)
 		participants = append(participants, in.Revision.ConsumerIDs...)
 		var out telemetrycontracts.Contract
-		e = repos.WithCurrentParticipants(participants, r.PathValue("id"), func() error {
-			var x error
-			if revise {
-				out, x = contracts.Revise(r.PathValue("id"), r.PathValue("contract_id"), in.ExpectedVersion, actor.UserID, in.RequestID, in.Revision)
-			} else {
-				out, x = contracts.Create(r.PathValue("id"), actor.UserID, in.RequestID, in.Revision)
-			}
-			return x
+		e := repos.WithCurrentParticipants(participants, r.PathValue("id"), func() error {
+			return gaps.WithCurrentVersion(r.PathValue("id"), in.Revision.GapID, in.Revision.GapVersion, func() error {
+				var x error
+				if revise {
+					out, x = contracts.Revise(r.PathValue("id"), r.PathValue("contract_id"), in.ExpectedVersion, actor.UserID, in.RequestID, in.Revision)
+				} else {
+					out, x = contracts.Create(r.PathValue("id"), actor.UserID, in.RequestID, in.Revision)
+				}
+				return x
+			})
 		})
+		if errors.Is(e, observabilitygaps.ErrConflict) || errors.Is(e, observabilitygaps.ErrNotFound) {
+			writeAPIError(w, 422, "telemetry_contract_dependency_changed", "the exact observability gap dependency does not resolve or has changed")
+			return
+		}
 		if e != nil {
 			writeTelemetryContractError(w, e)
 			return
@@ -115,6 +119,13 @@ func registerTelemetryContractRoutes(mux *http.ServeMux, repos *repositories.Sto
 			writeAPIError(w, 400, "invalid_request", "a revision-bound cited challenge is required")
 			return
 		}
+		if !telemetryCitationsResolve(git, r.PathValue("id"), in.Citations) {
+			writeAPIError(w, 422, "telemetry_citation_invalid", "every challenge citation must resolve to an exact repository blob and its SHA-256 digest")
+			return
+		}
+		for index := range in.Citations {
+			in.Citations[index].Verified = true
+		}
 		kind, id := "human", actor.UserID
 		if actor.AgentID != "" {
 			kind, id = "agent", actor.AgentID
@@ -127,6 +138,44 @@ func registerTelemetryContractRoutes(mux *http.ServeMux, repos *repositories.Sto
 		writeJSON(w, 201, out)
 	})
 }
+
+func telemetryCitationsResolve(git *storage.Store, repoID string, citations []telemetrycontracts.Citation) bool {
+	repository, err := git.Open(repoID)
+	if err != nil || len(citations) == 0 {
+		return false
+	}
+	for _, citation := range citations {
+		if citation.Kind != "git_blob" || citation.ResourceID == "" {
+			return false
+		}
+		commit, err := repository.ReadCommit(storage.ObjectID(citation.Revision))
+		if err != nil {
+			return false
+		}
+		entries, err := repository.WalkTree(commit.Tree)
+		if err != nil {
+			return false
+		}
+		matched := false
+		for _, entry := range entries {
+			if entry.Path != citation.ResourceID || entry.Type != storage.BlobObject {
+				continue
+			}
+			object, err := repository.ReadObject(entry.ID)
+			if err != nil {
+				return false
+			}
+			digest := sha256.Sum256(object.Content)
+			matched = hex.EncodeToString(digest[:]) == citation.Digest
+			break
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
+}
+
 func writeTelemetryContractError(w http.ResponseWriter, e error) {
 	switch {
 	case errors.Is(e, telemetrycontracts.ErrNotFound):
