@@ -19,7 +19,8 @@ func testPlan() Plan {
 	}
 }
 func testRun() Run {
-	return Run{CandidateID: "scale-out", ScenarioID: "peak", Status: "succeeded", Repetitions: 3, NoiseRatio: .05, Comparable: true, CorrectnessPassed: true, Metrics: Metrics{Throughput: 100, ThroughputUnit: "rps", LatencyP50MS: 10, LatencyP95MS: 20, LatencyP99MS: 30, ErrorRate: .001, Saturation: .7, RecoverySeconds: 2, ResourceAmount: 4, ResourceUnit: "cores", Cost: 1, Currency: "USD"}, LogsDigest: "sha256:logs"}
+	duration, requests, concurrency := 30.0, 500, 5
+	return Run{CandidateID: "scale-out", ScenarioID: "peak", Status: "succeeded", Repetitions: 3, NoiseRatio: .05, Comparable: true, CorrectnessPassed: true, Metrics: Metrics{Throughput: 100, ThroughputUnit: "rps", DurationSeconds: &duration, RequestCount: &requests, MaxConcurrency: &concurrency, LatencyP50MS: 10, LatencyP95MS: 20, LatencyP99MS: 30, ErrorRate: .001, Saturation: .7, RecoverySeconds: 2, ResourceAmount: 4, ResourceUnit: "cores", Cost: 1, Currency: "USD"}, LogsDigest: "sha256:logs"}
 }
 func TestOnlyComparableStableCorrectRunsBecomeProof(t *testing.T) {
 	s, _ := New(t.TempDir())
@@ -84,6 +85,33 @@ func TestCostLimitIsDerivedFromScenario(t *testing.T) {
 	comparison, _ := s.Compare("repo", p.ID)
 	if len(comparison.ProvenCandidateIDs) != 0 {
 		t.Fatalf("over-budget evidence was proven: %+v", comparison)
+	}
+}
+func TestAllLimitsAreDerivedAndMissingMeasurementsCannotProve(t *testing.T) {
+	s, _ := New(t.TempDir())
+	p, _ := s.Create("repo", "owner", "all-limits", testPlan())
+	missing := testRun()
+	missing.Metrics.DurationSeconds = nil
+	retained, e := s.AddRun("repo", "human", "owner", p.ID, "missing", missing)
+	if e != nil || retained.Quality != "limit_breached" || retained.LimitBreaches[0] != "missing_limit_measurements" {
+		t.Fatalf("missing measurement run=%+v err=%v", retained, e)
+	}
+	over := testRun()
+	duration, requests, concurrency := 61.0, 1001, 11
+	over.Metrics.DurationSeconds, over.Metrics.RequestCount, over.Metrics.MaxConcurrency = &duration, &requests, &concurrency
+	over.LimitBreaches = []string{"caller_value_is_ignored"}
+	retained, e = s.AddRun("repo", "human", "owner", p.ID, "over-all", over)
+	if e != nil || retained.Quality != "limit_breached" || len(retained.LimitBreaches) != 3 {
+		t.Fatalf("derived breaches=%+v err=%v", retained, e)
+	}
+}
+func TestNegativeCostIsInvalid(t *testing.T) {
+	s, _ := New(t.TempDir())
+	p, _ := s.Create("repo", "owner", "negative-cost-plan", testPlan())
+	negative := testRun()
+	negative.Metrics.Cost = -1
+	if _, e := s.AddRun("repo", "human", "owner", p.ID, "negative", negative); e != ErrInvalid {
+		t.Fatalf("negative cost accepted: %v", e)
 	}
 }
 func TestRejectsProductionAndUnboundedLoad(t *testing.T) {

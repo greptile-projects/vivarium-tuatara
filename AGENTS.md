@@ -558,9 +558,10 @@ caching, queueing, or demand-shaping candidates and repository-defined load/fail
 scenarios. Synthetic or privacy-preserving workloads, isolated or policy-approved
 environments, coordinated-load keys, correctness criteria, and hard duration, request,
 concurrency, and cost limits reject production data and production impact. Human and
-approved-agent evidence retains throughput, latency, errors, saturation, recovery,
-correctness, resources, optional declared carbon, cost, variability, limit breaches, and
-logs. The server derives cost-limit breaches, and only successful, correct, comparable,
+approved-agent evidence retains measured duration, request count, peak concurrency,
+throughput, latency, errors, saturation, recovery, correctness, resources, optional
+declared carbon, cost, variability, derived limit breaches, and logs. The server rejects
+negative/non-finite metrics and derives every limit breach; only successful, correct, comparable,
 repeated, low-noise evidence across every declared scenario projects a candidate as proof;
 weaker or partial results remain explicit. Experiments grant no environment, infrastructure,
 release, deployment, funding, scaling, production-data, or operational authority.

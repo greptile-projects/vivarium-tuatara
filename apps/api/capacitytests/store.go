@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -74,6 +75,9 @@ type Plan struct {
 type Metrics struct {
 	Throughput      float64  `json:"throughput"`
 	ThroughputUnit  string   `json:"throughput_unit"`
+	DurationSeconds *float64 `json:"duration_seconds,omitempty"`
+	RequestCount    *int     `json:"request_count,omitempty"`
+	MaxConcurrency  *int     `json:"max_concurrency,omitempty"`
 	LatencyP50MS    float64  `json:"latency_p50_ms"`
 	LatencyP95MS    float64  `json:"latency_p95_ms"`
 	LatencyP99MS    float64  `json:"latency_p99_ms"`
@@ -167,6 +171,9 @@ func (s *Store) AddRun(repositoryID, actorType, actor, planID, request string, r
 		r.PlanID = planID
 		r.ActorType = actorType
 		r.ActorID = actor
+		// Breaches are server-derived from retained measurements and the exact
+		// scenario. Caller-authored conclusions may not upgrade or downgrade proof.
+		r.LimitBreaches = nil
 		for _, c := range p.Candidates {
 			if c.ID == r.CandidateID {
 				r.CandidateDigest = digest(c)
@@ -176,6 +183,19 @@ func (s *Store) AddRun(repositoryID, actorType, actor, planID, request string, r
 		for _, q := range p.Scenarios {
 			if q.ID == r.ScenarioID {
 				found = true
+				if r.Metrics.DurationSeconds == nil || r.Metrics.RequestCount == nil || r.Metrics.MaxConcurrency == nil {
+					r.LimitBreaches = appendUnique(r.LimitBreaches, "missing_limit_measurements")
+				} else {
+					if *r.Metrics.DurationSeconds > float64(q.Limits.MaxDurationSeconds) {
+						r.LimitBreaches = appendUnique(r.LimitBreaches, "max_duration_seconds")
+					}
+					if *r.Metrics.RequestCount > q.Limits.MaxRequests {
+						r.LimitBreaches = appendUnique(r.LimitBreaches, "max_requests")
+					}
+					if *r.Metrics.MaxConcurrency > q.Limits.MaxConcurrency {
+						r.LimitBreaches = appendUnique(r.LimitBreaches, "max_concurrency")
+					}
+				}
 				if r.Metrics.Cost > q.Limits.MaxCost {
 					r.LimitBreaches = appendUnique(r.LimitBreaches, "max_cost")
 				}
@@ -326,7 +346,27 @@ func validRun(r Run) bool {
 	return (r.Status == "succeeded" || r.Status == "failed" || r.Status == "untestable" || r.Status == "canceled") && r.Repetitions >= 0 && r.Repetitions <= 20 && r.NoiseRatio >= 0 && r.ErrorRateOK() && r.LogsDigest != ""
 }
 func (r Run) ErrorRateOK() bool {
-	return r.Metrics.ErrorRate >= 0 && r.Metrics.ErrorRate <= 1 && r.Metrics.LatencyP50MS >= 0 && r.Metrics.LatencyP95MS >= r.Metrics.LatencyP50MS && r.Metrics.LatencyP99MS >= r.Metrics.LatencyP95MS
+	finite := func(values ...float64) bool {
+		for _, value := range values {
+			if math.IsNaN(value) || math.IsInf(value, 0) {
+				return false
+			}
+		}
+		return true
+	}
+	if !finite(r.Metrics.Throughput, r.Metrics.LatencyP50MS, r.Metrics.LatencyP95MS, r.Metrics.LatencyP99MS, r.Metrics.ErrorRate, r.Metrics.Saturation, r.Metrics.RecoverySeconds, r.Metrics.ResourceAmount, r.Metrics.Cost, r.NoiseRatio) || r.Metrics.Cost < 0 {
+		return false
+	}
+	if r.Metrics.DurationSeconds != nil && (math.IsNaN(*r.Metrics.DurationSeconds) || math.IsInf(*r.Metrics.DurationSeconds, 0) || *r.Metrics.DurationSeconds < 0) {
+		return false
+	}
+	if r.Metrics.RequestCount != nil && *r.Metrics.RequestCount < 0 || r.Metrics.MaxConcurrency != nil && *r.Metrics.MaxConcurrency < 0 {
+		return false
+	}
+	if r.Metrics.CarbonGrams != nil && (math.IsNaN(*r.Metrics.CarbonGrams) || math.IsInf(*r.Metrics.CarbonGrams, 0) || *r.Metrics.CarbonGrams < 0) {
+		return false
+	}
+	return r.Metrics.Throughput >= 0 && r.Metrics.ErrorRate >= 0 && r.Metrics.ErrorRate <= 1 && r.Metrics.LatencyP50MS >= 0 && r.Metrics.LatencyP95MS >= r.Metrics.LatencyP50MS && r.Metrics.LatencyP99MS >= r.Metrics.LatencyP95MS && r.Metrics.Saturation >= 0 && r.Metrics.RecoverySeconds >= 0 && r.Metrics.ResourceAmount >= 0
 }
 func quality(r Run) string {
 	if r.Status == "untestable" || r.Status == "canceled" {
