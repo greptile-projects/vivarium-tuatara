@@ -60,6 +60,29 @@ request identities and never rewrite a prediction. Storage defaults beneath
 evidence only; they grant no repository, production-data, deployment, infrastructure,
 funding, scaling, or operational authority.
 
+## Bounded capacity experiments
+
+Repository participants define immutable experiments at
+`POST /repositories/{id}/capacity-tests` and inspect plans, retained execution evidence,
+and server-derived comparisons through the matching collection, detail, and comparison
+routes. Each plan binds an exact capacity-objective revision and optional exact model,
+then compares at least two vertical, horizontal, architectural, caching, queueing, or
+demand-shaping candidates. Components freeze release, infrastructure, schema, and
+dependency-configuration identities and revisions; releases resolve against the
+repository's authoritative release store.
+
+Repository-defined commands use only synthetic or explicitly privacy-preserving workloads
+in isolated or policy-approved environments. Scenarios carry coordinated-load keys,
+correctness criteria, and hard duration, request, concurrency, and cost ceilings;
+production data and production-impact permission are rejected. Human and approved-agent
+runs retain throughput, percentile latency, errors, saturation, recovery, correctness,
+resources, optional declared carbon, cost, repetitions, variability, comparability, limit
+breaches, and a log digest. Only successful, correct, comparable evidence with at least
+three repetitions and no more than 15% noise is projected as `proof`; all weaker results
+remain visible. Storage defaults beneath `$CAPACITY_TEST_STORAGE_ROOT` (`capacity-tests`).
+The records grant no environment, infrastructure, release, production-data, deployment,
+funding, scaling, or operational authority.
+
 ## Revision-exact review plans
 
 Pull authors and current repository owners can publish a review plan before approvals accumulate through `POST /repositories/{id}/pulls/{pull_id}/review-plans`; all repository readers can inspect its immutable history through the matching `GET` route and the pull page. Caller-stable `request_id` values reconcile ambiguous post-publication retries to the already-retained version and reject changed reuse. Each version freezes the exact source and target commits, declared pull intent, changed paths, target-branch required checks, inferred risks and affected security, privacy, accessibility, or interface commitments, then breaks that context into review areas with acceptance questions, required evidence, dependencies, accountable current ownership, and explicit completion rules.
