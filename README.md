@@ -81,6 +81,11 @@ revision in isolated or exactly policy-approved environments. The workspace reta
 representative inputs, branches, commands, outputs, timing, artifacts, cost, permissions,
 manual gaps, and simulated/excluded change effects, while revision, resource, policy, and
 credential movement makes obsolete proof visibly stale.
+Responders can submit exact live context for explained runbook recommendations, explicitly
+choose a matching immutable revision, and retain a durable ready or blocked execution with
+its source timeline, audience, evidence, signal window, releases, environment snapshot,
+precondition decisions, and current access. Ambiguity, staleness, duplicate active launches,
+unverified procedures, and unavailable authority remain visible rather than starting work.
 
 Repository participants and scoped read-only agents can turn an exact objective into
 an immutable, permission-aware capacity model at `/repositories/{id}/capacity-models`.

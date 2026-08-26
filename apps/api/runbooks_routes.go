@@ -27,8 +27,50 @@ type runbookRehearsalInput struct {
 	PolicyApprovalRevision string              `json:"policy_approval_revision"`
 	Scenarios              []runbooks.Scenario `json:"scenarios"`
 }
+type runbookExecutionInput struct {
+	RequestID      string                    `json:"request_id"`
+	RunbookVersion int                       `json:"runbook_version"`
+	Context        runbooks.ExecutionContext `json:"context"`
+	Preconditions  []runbooks.Preconditions  `json:"preconditions"`
+	CurrentAccess  []string                  `json:"current_access"`
+}
 
 func registerRunbookRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, store *runbooks.Store, workflows *workflowcomponents.Store, orgs *organizations.Store) {
+	mux.HandleFunc("POST /repositories/{id}/runbook-recommendations", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:read"); !ok {
+			return
+		}
+		var context runbooks.ExecutionContext
+		if decodeJSON(r, &context) != nil {
+			writeAPIError(w, 400, "invalid_runbook_context", "an exact bounded originating context is required")
+			return
+		}
+		out, err := store.Recommend(r.PathValue("id"), context)
+		if errors.Is(err, runbooks.ErrInvalid) {
+			writeAPIError(w, 400, "invalid_runbook_context", "the origin, signal window, affected resources, and permitted evidence must be complete and credential-free")
+			return
+		}
+		if err != nil {
+			writeAPIError(w, 500, "runbooks_unavailable", "runbook recommendations could not be evaluated")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"recommendations": out})
+	})
+	mux.HandleFunc("GET /repositories/{id}/runbook-executions", func(w http.ResponseWriter, r *http.Request) {
+		if _, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:read"); !ok {
+			return
+		}
+		books, err := store.List(r.PathValue("id"))
+		if err != nil {
+			writeAPIError(w, 500, "runbooks_unavailable", "runbook executions could not be read")
+			return
+		}
+		executions := []runbooks.Execution{}
+		for _, book := range books {
+			executions = append(executions, book.Executions...)
+		}
+		writeJSON(w, 200, map[string]any{"executions": executions})
+	})
 	mux.HandleFunc("GET /repositories/{id}/runbooks", func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id")); !ok {
 			return
@@ -50,6 +92,33 @@ func registerRunbookRoutes(mux *http.ServeMux, git *storage.Store, catalog *repo
 			return
 		}
 		writeJSON(w, 200, out)
+	})
+	mux.HandleFunc("POST /repositories/{id}/runbooks/{runbook_id}/executions", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:read")
+		if !ok {
+			return
+		}
+		book, err := store.Get(r.PathValue("runbook_id"))
+		if err != nil || book.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "runbook_not_found", "runbook not found")
+			return
+		}
+		var in runbookExecutionInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_runbook_execution", "a caller-stable exact context and explicit safety decisions are required")
+			return
+		}
+		out, err := store.StartExecution(book.ID, actor.UserID, in.RequestID, in.RunbookVersion, in.Context, in.Preconditions, in.CurrentAccess)
+		switch {
+		case err == nil:
+			writeJSON(w, 201, out)
+		case errors.Is(err, runbooks.ErrConflict):
+			writeAPIError(w, 409, "runbook_execution_conflict", "the request identity conflicts or this origin already has an active execution")
+		case errors.Is(err, runbooks.ErrInvalid):
+			writeAPIError(w, 400, "invalid_runbook_execution", "the execution context is incomplete, unbounded, or secret-bearing")
+		default:
+			writeAPIError(w, 500, "runbooks_unavailable", "the runbook execution could not be retained")
+		}
 	})
 	publish := func(revise bool) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
