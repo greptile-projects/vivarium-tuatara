@@ -594,6 +594,13 @@ regional imbalance, scaling lag, correctness or reliability regression, unused r
 and budget breach deterministically contain the phase and either prescribe rollback or
 a connected decision revisit. Records grant no spending, provider, quota, repository,
 deployment, environment, scaling, decision, or operational authority.
+The connected `capacity-planning-journey.spec.ts` browser/API/stock-Git journey proves
+the complete boundary from an accepted roadmap-linked forecast through dependency-owner
+challenge, corrected release evidence, bounded alternative comparison, phased ordinary
+human/agent work, reviewed Git delivery, protected deployment, progressive production
+containment, rollback, waste correction, and verified headroom. It retains noisy and
+over-budget evidence, unavailable ownership, quota history, scaling regression, and
+overprovisioning without converting any planning record into cloud or delivery authority.
   CAS-versioned bounded trials resolve an existing attested release or exact readable commit, scope
   packages/APIs and synthetic or permitted data, and select only the adopter's declared journeys.
   Definitions and immutable attempts retain setup, configuration, commands, integration changes,
