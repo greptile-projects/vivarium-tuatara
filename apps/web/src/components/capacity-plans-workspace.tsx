@@ -1,7 +1,7 @@
 "use client";
 import {FormEvent,useCallback,useEffect,useState} from "react";
 import {api} from "@/lib/api";
-import {useAuth} from "@/lib/auth";
+import {useAuth} from "./auth";
 import {Badge,Button,Card} from "@/components/ui";
 type Plan={id:string;title:string;candidate_id:string;total_budget:number;currency:string;phases:{id:string;name:string;kind:string;owner_id:string;decision_point:string;exit_strategy:string}[];delivery?:{proposal_id:string;task_ids:string[]}};
 const template={request_id:"",plan:{objective_id:"",objective_version:1,model_id:"",model_version:0,test_id:"",candidate_id:"",title:"",rationale:"",reservations:[],dependencies:[],total_budget:0,currency:"USD",phases:[{id:"observe",name:"Add capacity observability",kind:"observability",owner_id:"",budget:0,currency:"USD",depends_on:[],acceptance_criteria:["Headroom is measurable"],decision_point:"Continue only with current evidence and owner approval",exit_strategy:"Remove unused instrumentation"}]}};
