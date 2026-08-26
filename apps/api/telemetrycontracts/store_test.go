@@ -44,7 +44,7 @@ func TestAcceptedDeliveryAndSanitizedExactCandidateVerification(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.RecordDelivery("contract-repo", c.ID, Delivery{RequestID: "early", ContractVersion: 1, RepositoryID: "app", ProposalID: "proposal", TaskIDs: []string{"task"}, BaseRevision: strings.Repeat("a", 40)}); !errors.Is(err, ErrInvalid) {
+	if _, err = s.ReserveDelivery("contract-repo", c.ID, Delivery{RequestID: "early", ContractVersion: 1, RepositoryID: "app", ProposalID: "proposal", TaskIDs: []string{"task"}, BaseRevision: strings.Repeat("a", 40)}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("unaccepted delivery: %v", err)
 	}
 	c, err = s.Accept("contract-repo", c.ID, "owner", "accept", "reviewed privacy and cost boundaries", 1)
@@ -52,11 +52,19 @@ func TestAcceptedDeliveryAndSanitizedExactCandidateVerification(t *testing.T) {
 		t.Fatalf("accept: %+v %v", c, err)
 	}
 	d := Delivery{RequestID: "deliver", ContractVersion: 1, RepositoryID: "app", ProposalID: "proposal", TaskIDs: []string{"task"}, BaseRevision: strings.Repeat("a", 40), CreatedBy: "owner"}
-	if _, err = s.RecordDelivery("contract-repo", c.ID, d); err != nil {
+	if _, err = s.ReserveDelivery("contract-repo", c.ID, d); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.RecordDelivery("contract-repo", c.ID, d); err != nil {
+	if _, err = s.ReserveDelivery("contract-repo", c.ID, d); err != nil {
 		t.Fatalf("retry: %v", err)
+	}
+	changedRequest := d
+	changedRequest.RequestID = "different-request"
+	if _, err = s.ReserveDelivery("contract-repo", c.ID, changedRequest); !errors.Is(err, ErrConflict) {
+		t.Fatalf("duplicate target delivery = %v", err)
+	}
+	if finalized, finalizeErr := s.FinalizeDelivery("contract-repo", c.ID, d.RequestID); finalizeErr != nil || finalized.Deliveries[0].Status != "created" {
+		t.Fatalf("finalize: %+v %v", finalized, finalizeErr)
 	}
 	results := []VerificationResult{}
 	for _, requirement := range []string{"emission", "schema", "units", "correlation", "sampling", "redaction", "access", "performance", "failure_behavior"} {
@@ -72,5 +80,12 @@ func TestAcceptedDeliveryAndSanitizedExactCandidateVerification(t *testing.T) {
 	}
 	if _, err = s.AddVerification("app", "agent", "agent-1", v); err != nil {
 		t.Fatalf("retry: %v", err)
+	}
+}
+
+func TestDeliveryIdentitiesAreOrdinaryProposalIDs(t *testing.T) {
+	proposal, tasks := DeliveryIdentities("tc_"+strings.Repeat("a", 24), "repository", 2, 2)
+	if len(proposal) != 32 || len(tasks) != 2 || len(tasks[0]) != 32 || tasks[0] == tasks[1] {
+		t.Fatalf("identities: %q %#v", proposal, tasks)
 	}
 }

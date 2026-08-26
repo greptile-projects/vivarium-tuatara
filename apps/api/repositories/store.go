@@ -493,6 +493,44 @@ func (s *Store) WithCurrentParticipants(userIDs []string, repositoryID string, f
 	return s.WithCurrentDeliveryAuthority(userIDs, repositoryID, "", fn)
 }
 
+// WithCurrentParticipantsAcross holds one catalog mutation boundary while
+// proving the complete participant set for each repository. Cross-repository
+// publications use it so removal from either side commits wholly before or
+// after all dependent records.
+func (s *Store) WithCurrentParticipantsAcross(participants map[string][]string, fn func() error) error {
+	if len(participants) == 0 || fn == nil {
+		return ErrInvalidCollaborator
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lockRoot()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	for repositoryID, userIDs := range participants {
+		if !validID(repositoryID) || len(userIDs) == 0 {
+			return ErrInvalidCollaborator
+		}
+		repository, readErr := s.read(repositoryID)
+		if readErr != nil {
+			return ErrNotFound
+		}
+		if _, openErr := s.git.Open(repositoryID); openErr != nil {
+			return ErrNotFound
+		}
+		for _, userID := range userIDs {
+			if !validID(userID) || (repository.OwnerID != userID && !slices.Contains(collaboratorIDs(repository), userID)) {
+				return ErrInvalidCollaborator
+			}
+		}
+	}
+	if s.afterParticipantAuthorization != nil {
+		s.afterParticipantAuthorization()
+	}
+	return fn()
+}
+
 // WithCurrentOrganizationRepositories holds the catalog mutation boundary while
 // proving every named active repository still belongs to the organization. It
 // prevents organization-scoped dependent records from committing a repository

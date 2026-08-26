@@ -172,7 +172,12 @@ func registerTelemetryContractRoutes(mux *http.ServeMux, git *storage.Store, rep
 			writeAPIError(w, 403, "telemetry_acceptance_forbidden", "only a declared current contract owner may accept the exact complete revision")
 			return
 		}
-		out, e := contracts.Accept(r.PathValue("id"), contract.ID, actor.UserID, in.RequestID, in.Rationale, in.ContractVersion)
+		var out telemetrycontracts.Contract
+		e = repos.WithCurrentParticipant(actor.UserID, r.PathValue("id"), func() error {
+			var x error
+			out, x = contracts.Accept(r.PathValue("id"), contract.ID, actor.UserID, in.RequestID, in.Rationale, in.ContractVersion)
+			return x
+		})
 		if e != nil {
 			writeTelemetryContractError(w, e)
 			return
@@ -222,6 +227,18 @@ func registerTelemetryContractRoutes(mux *http.ServeMux, git *storage.Store, rep
 			writeAPIError(w, 409, "telemetry_delivery_base_unavailable", "target default branch has no exact base")
 			return
 		}
+		recovering := false
+		for _, retained := range contract.Deliveries {
+			if retained.RequestID == in.RequestID {
+				base = retained.BaseRevision
+				recovering = true
+				break
+			}
+		}
+		if recovering && exec.Command("git", "--git-dir="+bare.Path(), "cat-file", "-e", base+"^{commit}").Run() != nil {
+			writeAPIError(w, 409, "telemetry_delivery_base_unavailable", "the retained exact delivery base is unavailable")
+			return
+		}
 		tasks := make([]proposals.ImplementationTaskInput, len(in.Tasks))
 		items := make([]proposals.ReasoningItem, len(in.Tasks))
 		humans := []string{actor.UserID}
@@ -236,24 +253,35 @@ func registerTelemetryContractRoutes(mux *http.ServeMux, git *storage.Store, rep
 		for _, x := range items {
 			origin.SelectedItemIDs = append(origin.SelectedItemIDs, x.ID)
 		}
+		proposalID, taskIDs := telemetrycontracts.DeliveryIdentities(contract.ID, target.ID, contract.CurrentVersion, len(tasks))
+		for i := range tasks {
+			tasks[i].ID = taskIDs[i]
+		}
 		var p proposals.Proposal
 		var made []proposals.Task
-		e = repos.WithCurrentParticipants(humans, target.ID, func() error {
+		participants := map[string][]string{r.PathValue("id"): {actor.UserID}}
+		participants[target.ID] = humans
+		delivery := telemetrycontracts.Delivery{RequestID: in.RequestID, ContractVersion: contract.CurrentVersion, RepositoryID: target.ID, ProposalID: proposalID, TaskIDs: taskIDs, BaseRevision: base, CreatedBy: actor.UserID}
+		publish := func() error {
+			if _, x := contracts.ReserveDelivery(r.PathValue("id"), contract.ID, delivery); x != nil {
+				return x
+			}
 			var x error
-			p, made, x = proposalStore.CreateImplementation(proposals.ImplementationInput{RepositoryID: target.ID, ActorID: actor.UserID, Title: in.Title, Body: in.Body, Origin: origin, Tasks: tasks})
+			p, made, x = proposalStore.CreateImplementation(proposals.ImplementationInput{RepositoryID: target.ID, ActorID: actor.UserID, ProposalID: proposalID, Title: in.Title, Body: in.Body, Origin: origin, Tasks: tasks})
+			if x != nil {
+				return x
+			}
+			_, x = contracts.FinalizeDelivery(r.PathValue("id"), contract.ID, in.RequestID)
 			return x
+		}
+		e = repos.WithCurrentParticipantsAcross(participants, func() error {
+			if recovering {
+				return publish()
+			}
+			return bare.WithReferenceTarget("refs/heads/"+target.DefaultBranch, base, publish)
 		})
 		if e != nil {
 			writeAPIError(w, 422, "telemetry_delivery_invalid", "assignees and ordinary target-repository authority must remain current")
-			return
-		}
-		ids := make([]string, len(made))
-		for i := range made {
-			ids[i] = made[i].ID
-		}
-		_, e = contracts.RecordDelivery(r.PathValue("id"), contract.ID, telemetrycontracts.Delivery{RequestID: in.RequestID, ContractVersion: contract.CurrentVersion, RepositoryID: target.ID, ProposalID: p.ID, TaskIDs: ids, BaseRevision: base, CreatedBy: actor.UserID})
-		if e != nil {
-			writeTelemetryContractError(w, e)
 			return
 		}
 		writeJSON(w, 201, map[string]any{"proposal": p, "tasks": made, "contract_id": contract.ID, "contract_version": contract.CurrentVersion})
@@ -277,6 +305,17 @@ func registerTelemetryContractRoutes(mux *http.ServeMux, git *storage.Store, rep
 		if actor.UserID == "" && actor.AgentID == "" {
 			writeAuthenticationRequired(w, false)
 			return
+		}
+		if actor.UserID != "" {
+			repository, repositoryErr := repos.GetByID(r.PathValue("id"))
+			participant := repositoryErr == nil && repository.OwnerID == actor.UserID
+			if !participant {
+				participant, _ = repos.HasCollaborator(actor.UserID, r.PathValue("id"))
+			}
+			if !participant {
+				writeAPIError(w, 403, "telemetry_verification_forbidden", "only current target-repository participants and repository-bound agents may publish verification evidence")
+				return
+			}
 		}
 		var in telemetrycontracts.Verification
 		if decodeJSON(r, &in) != nil {
@@ -307,7 +346,7 @@ func registerTelemetryContractRoutes(mux *http.ServeMux, git *storage.Store, rep
 		eligible := e == nil && contract.Acceptance != nil && contract.Acceptance.Version == in.ContractVersion
 		linked := false
 		for _, delivery := range contract.Deliveries {
-			if eligible && delivery.RepositoryID == p.RepositoryID && p.ProposalID != nil && delivery.ProposalID == *p.ProposalID {
+			if eligible && delivery.Status == "created" && delivery.RepositoryID == p.RepositoryID && p.ProposalID != nil && delivery.ProposalID == *p.ProposalID {
 				linked = true
 				break
 			}
@@ -326,11 +365,18 @@ func registerTelemetryContractRoutes(mux *http.ServeMux, git *storage.Store, rep
 			kind, id = "agent", actor.AgentID
 		}
 		var out telemetrycontracts.Verification
-		e = pulls.WithSourceRevision(p.RepositoryID, p.ID, in.Revision, func(pullrequests.PullRequest) error {
-			var x error
-			out, x = contracts.AddVerification(p.RepositoryID, kind, id, in)
-			return x
-		})
+		persist := func() error {
+			return pulls.WithSourceRevision(p.RepositoryID, p.ID, in.Revision, func(pullrequests.PullRequest) error {
+				var x error
+				out, x = contracts.AddVerification(p.RepositoryID, kind, id, in)
+				return x
+			})
+		}
+		if actor.UserID != "" {
+			e = repos.WithCurrentParticipant(actor.UserID, p.RepositoryID, persist)
+		} else {
+			e = persist()
+		}
 		if e != nil {
 			writeTelemetryContractError(w, e)
 			return

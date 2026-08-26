@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -143,6 +144,7 @@ type Delivery struct {
 	BaseRevision    string    `json:"base_revision"`
 	CreatedBy       string    `json:"created_by"`
 	CreatedAt       time.Time `json:"created_at"`
+	Status          string    `json:"status"`
 }
 type Artifact struct {
 	Kind      string `json:"kind"`
@@ -351,7 +353,19 @@ func (s *Store) Accept(repo, id, actor, request, rationale string, version int) 
 	})
 	return project(out), e
 }
-func (s *Store) RecordDelivery(repo, id string, d Delivery) (Contract, error) {
+func DeliveryIdentities(contractID, repositoryID string, version, taskCount int) (string, []string) {
+	proposal := stableHex("telemetry-delivery", contractID, repositoryID, fmt.Sprint(version))
+	tasks := make([]string, taskCount)
+	for i := range tasks {
+		tasks[i] = stableHex("telemetry-task", contractID, repositoryID, fmt.Sprint(version), fmt.Sprint(i))
+	}
+	return proposal, tasks
+}
+func stableHex(parts ...string) string {
+	h := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
+	return hex.EncodeToString(h[:16])
+}
+func (s *Store) ReserveDelivery(repo, id string, d Delivery) (Contract, error) {
 	var out Contract
 	e := s.lock(func() error {
 		v, err := s.read(id)
@@ -363,6 +377,9 @@ func (s *Store) RecordDelivery(repo, id string, d Delivery) (Contract, error) {
 		}
 		for _, old := range v.Deliveries {
 			if old.RequestID == d.RequestID {
+				if old.Status == "pending" || old.Status == "created" {
+					d.Status = old.Status
+				}
 				old.CreatedAt = time.Time{}
 				candidate := d
 				candidate.CreatedAt = time.Time{}
@@ -372,15 +389,44 @@ func (s *Store) RecordDelivery(repo, id string, d Delivery) (Contract, error) {
 				out = v
 				return nil
 			}
+			if old.RepositoryID == d.RepositoryID && old.ContractVersion == d.ContractVersion {
+				return ErrConflict
+			}
 		}
-		if d.RequestID == "" || d.RepositoryID == "" || d.ProposalID == "" || len(d.TaskIDs) == 0 || len(d.BaseRevision) != 40 || v.Acceptance == nil || d.ContractVersion != v.Acceptance.Version {
+		if d.RequestID == "" || d.RepositoryID == "" || d.ProposalID == "" || len(d.TaskIDs) == 0 || len(d.BaseRevision) != 40 || v.Acceptance == nil || d.ContractVersion != v.Acceptance.Version || d.ContractVersion != v.CurrentVersion {
 			return ErrInvalid
 		}
+		d.Status = "pending"
 		d.CreatedAt = s.now()
 		v.Deliveries = append(v.Deliveries, d)
 		v.UpdatedAt = s.now()
 		out = v
 		return s.write(v)
+	})
+	return project(out), e
+}
+func (s *Store) FinalizeDelivery(repo, id, request string) (Contract, error) {
+	var out Contract
+	e := s.lock(func() error {
+		v, err := s.read(id)
+		if err != nil || v.RepositoryID != repo {
+			if err == nil {
+				return ErrNotFound
+			}
+			return err
+		}
+		for i := range v.Deliveries {
+			if v.Deliveries[i].RequestID == request {
+				if v.Deliveries[i].Status != "pending" && v.Deliveries[i].Status != "created" {
+					return ErrInvalid
+				}
+				v.Deliveries[i].Status = "created"
+				v.UpdatedAt = s.now()
+				out = v
+				return s.write(v)
+			}
+		}
+		return ErrNotFound
 	})
 	return project(out), e
 }
@@ -403,7 +449,7 @@ func (s *Store) AddVerification(repo, actorType, actorID string, v Verification)
 			}
 		}
 		contract, err := s.read(v.ContractID)
-		if err != nil || contract.RepositoryID != v.ContractRepositoryID || contract.Acceptance == nil || contract.Acceptance.Version != v.ContractVersion {
+		if err != nil || contract.RepositoryID != v.ContractRepositoryID || contract.CurrentVersion != v.ContractVersion || contract.Acceptance == nil || contract.Acceptance.Version != v.ContractVersion {
 			return ErrInvalid
 		}
 		if v.RequestID == "" || v.PullRequestID == "" || len(v.Revision) != 40 || v.PreviewID == "" || len(v.CheckRunIDs) == 0 || v.Journey == "" || v.FailureScenario == "" || v.Isolation != "ephemeral_network_none" || v.ProductionData || v.CostCents < 0 || v.OverheadPercent < 0 || len(v.Results) == 0 {

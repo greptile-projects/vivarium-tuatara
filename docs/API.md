@@ -485,7 +485,9 @@ originating bounded system and no endpoint grants execution or merge authority.
   request identity and rationale. Successor revisions do not inherit acceptance.
 - `POST .../{contract_id}/deliveries` creates ordinary human- or agent-owned proposal
   tasks in one independently authorized application, library, or infrastructure repository.
-  The retained delivery links contract version, exact base, proposal, and task IDs; sessions,
+  A deterministic pending link reserves the contract version, exact base, proposal, and task
+  IDs before ordinary work is created; retry recovery compares all task content and finalizes
+  the link while holding source and target participation. Sessions,
   workspaces, contributions, checks, reviews, and pulls then use their existing APIs.
 - `POST /repositories/{id}/pulls/{pull_id}/telemetry-verifications` accepts only a linked
   pull's current exact revision, its accepted exact contract, and an existing exact-revision

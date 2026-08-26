@@ -471,7 +471,7 @@ func (s *Store) CreateImplementation(input ImplementationInput) (Proposal, []Tas
 	isPropagation := validReliabilityReference(input.Origin.PropagationCampaignID) && strings.TrimSpace(input.Origin.PropagationTargetID) != "" && validReliabilityReference(input.Origin.PropagationAssessmentID) && input.Origin.AssessmentVersion > 0
 	isProvenance := validID(input.Origin.ProvenanceAssessmentID) && input.Origin.AssessmentVersion > 0 && strings.TrimSpace(input.Origin.ProvenanceFindingID) != "" && validID(input.Origin.ProvenanceRepairRequestID)
 	isCapacity := validID(input.Origin.CapacityPlanID)
-	isTelemetry := validID(input.Origin.TelemetryContractID) && input.Origin.TelemetryContractVersion > 0
+	isTelemetry := validTelemetryContractID(input.Origin.TelemetryContractID) && input.Origin.TelemetryContractVersion > 0
 	originCount := 0
 	for _, present := range []bool{isAssessment, isAccessibility, isDecision, isIssue, isGovernance, isRoadmap, isDataObservation, isReliability, isRecovery, isSupport, isDebugging, isDesign, isExploratory, isSecurityFinding, isRegression, isPropagation, isProvenance, isCapacity, isTelemetry} {
 		if present {
@@ -588,6 +588,16 @@ func (s *Store) CreateImplementation(input ImplementationInput) (Proposal, []Tas
 		if isTelemetry && r.Proposal.RepositoryID == input.RepositoryID && r.Proposal.Reasoning != nil && r.Proposal.Reasoning.TelemetryContractID == input.Origin.TelemetryContractID && r.Proposal.Reasoning.TelemetryContractVersion == input.Origin.TelemetryContractVersion {
 			if !reflect.DeepEqual(*r.Proposal.Reasoning, input.Origin) || r.Proposal.Title != title || r.Proposal.Body != body || len(r.Tasks) != len(input.Tasks) {
 				return Proposal{}, nil, ErrImplementationConflict
+			}
+			for i, task := range r.Tasks {
+				value := input.Tasks[i]
+				expectedDependencies := cloneStrings(value.DependencyIDs)
+				if len(expectedDependencies) == 0 && value.DependsOnPrevious && i > 0 {
+					expectedDependencies = []string{r.Tasks[i-1].ID}
+				}
+				if task.Title != strings.TrimSpace(value.Title) || task.Outcome != strings.TrimSpace(value.Outcome) || task.Risk != strings.TrimSpace(value.Risk) || task.VerificationPlan != strings.TrimSpace(value.VerificationPlan) || task.Assignment == nil || task.Assignment.AssigneeType != value.AssigneeType || task.Assignment.AssigneeID != value.AssigneeID || !slices.Equal(task.DependencyIDs, expectedDependencies) {
+					return Proposal{}, nil, ErrImplementationConflict
+				}
 			}
 			return r.Proposal, append([]Task(nil), r.Tasks...), nil
 		}
@@ -1536,6 +1546,13 @@ func validID(id string) bool {
 		return false
 	}
 	_, err := hex.DecodeString(id)
+	return err == nil
+}
+func validTelemetryContractID(id string) bool {
+	if len(id) != 27 || !strings.HasPrefix(id, "tc_") {
+		return false
+	}
+	_, err := hex.DecodeString(strings.TrimPrefix(id, "tc_"))
 	return err == nil
 }
 func validCorrectiveOperationID(id string) bool {

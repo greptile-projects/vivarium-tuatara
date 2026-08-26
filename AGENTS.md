@@ -141,9 +141,12 @@ blocking or incomplete diagnostics; publication rejects a moved originating gap.
 coordinate instrumentation design only and grant no repository, collector, telemetry,
 environment, deployment, disclosure, spending, agent, or operational authority.
 Exact complete telemetry-contract revisions become implementable only after a declared
-current human contract owner accepts them. Caller-stable `/deliveries` create ordinary
+current human contract owner accepts them. Caller-stable `/deliveries` first retain a
+deterministic pending contract/proposal/task reservation and then create ordinary
 human- or agent-owned proposal tasks in each separately permitted application, library,
-or infrastructure repository; those tasks continue through the existing session,
+or infrastructure repository before finalizing the link. Retries reconcile the exact
+content and every visible proposal is already linked; source and target participation
+are held across the complete mutation. Those tasks continue through the existing session,
 workspace, pull, review, check, privacy, security, provenance, and merge boundaries.
 Linked pull `/telemetry-verifications` retain only digest-addressed sanitized signal, log,
 trace, coverage, cost, and contract-difference metadata from an exact-revision bounded
