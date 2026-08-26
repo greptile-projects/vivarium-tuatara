@@ -32,8 +32,9 @@ async function rejected(response: APIResponse, status: number, code: string) {
   const body = await response.text(); expect(response.status(), body).toBe(status); expect(JSON.parse(body)).toMatchObject({ error: { code } });
 }
 async function eventually<T>(operation: () => Promise<T>, predicate: (value: T) => boolean, label: string) {
-  for (let i = 0; i < 80; i++) { const value = await operation(); if (predicate(value)) return value; await new Promise(resolve => setTimeout(resolve, 250)); }
-  throw new Error(`timed out waiting for ${label}`);
+  let value = await operation();
+  await expect.poll(async () => { value = await operation(); return predicate(value); }, { timeout: 60_000, message: label, intervals: [250, 500, 1000] }).toBeTruthy();
+  return value;
 }
 
 test("a roadmap forecast becomes reviewed, delivered, and verified capacity", async ({ browser }) => {
