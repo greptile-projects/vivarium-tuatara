@@ -115,6 +115,26 @@ Storage defaults beneath `$CAPACITY_PLAN_STORAGE_ROOT`
 (`capacity-plans`). Plan approval is coordination only and grants no spending, provider,
 quota, repository, secret, merge, release, deployment, or environment authority.
 
+## Progressive production capacity
+
+Delivered capacity plans become steerable production records through
+`/repositories/{id}/capacity-rollouts`. Staging binds every ordered plan phase to its
+controller, one protected environment, and exact successful deployment revisions.
+Collection and detail reads expose phase state, allocated and usable capacity, real load,
+derived headroom, service levels, dependency health, regional allocation, cost, blockers,
+and the server-predicted next action.
+
+Optimistic, caller-stable events retain pause, resume, throttle, rollback, replan, and
+production observation decisions. Repository-bound agents can mutate only phases whose
+plan owner explicitly names that agent, while staging, rollback, and replan remain human
+operator controls. Production evidence must cite successful deployments in the phase's
+protected environment and a closed observation window. Demand shift, quota denial,
+regional imbalance, scaling lag, correctness or reliability regression, unused reservation,
+and budget breach set zero-allocation containment and deterministically prescribe rollback
+or a linked decision revisit rather than validating the objective. Storage defaults beneath
+`$CAPACITY_ROLLOUT_STORAGE_ROOT` (`capacity-rollouts`); the ledger grants no environment,
+deployment, provider, spending, scaling, decision, or operational authority.
+
 ## Revision-exact review plans
 
 Pull authors and current repository owners can publish a review plan before approvals accumulate through `POST /repositories/{id}/pulls/{pull_id}/review-plans`; all repository readers can inspect its immutable history through the matching `GET` route and the pull page. Caller-stable `request_id` values reconcile ambiguous post-publication retries to the already-retained version and reject changed reuse. Each version freezes the exact source and target commits, declared pull intent, changed paths, target-branch required checks, inferred risks and affected security, privacy, accessibility, or interface commitments, then breaks that context into review areas with acceptance questions, required evidence, dependencies, accountable current ownership, and explicit completion rules.

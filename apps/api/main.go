@@ -37,6 +37,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/capacitymodels"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/capacityobjectives"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/capacityplans"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/capacityrollouts"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/capacitytests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/changesessions"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/changestacks"
@@ -124,6 +125,7 @@ import (
 )
 
 var defaultLearningAssessmentStore *learningassessments.Store
+var defaultCapacityRolloutStore *capacityrollouts.Store
 
 const (
 	uploadPackService   = "git-upload-pack"
@@ -528,6 +530,15 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	capacityRolloutRoot := os.Getenv("CAPACITY_ROLLOUT_STORAGE_ROOT")
+	if capacityRolloutRoot == "" {
+		capacityRolloutRoot = "capacity-rollouts"
+	}
+	capacityRolloutStore, err := capacityrollouts.New(capacityRolloutRoot)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defaultCapacityRolloutStore = capacityRolloutStore
 	qualityPlanRoot := os.Getenv("QUALITY_PLAN_STORAGE_ROOT")
 	if qualityPlanRoot == "" {
 		qualityPlanRoot = "quality-plans"
@@ -1121,6 +1132,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	var capacityModelStore *capacitymodels.Store
 	var capacityTestStore *capacitytests.Store
 	var capacityPlanStore *capacityplans.Store
+	capacityRolloutStore := defaultCapacityRolloutStore
 	var performanceEvidenceStore *performanceevidence.Store
 	var productExperimentStore *productexperiments.Store
 	var feedbackStore *productfeedback.Store
@@ -1587,6 +1599,9 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 				registerCapacityTestRoutes(mux, store, repositoryCatalog, authStore, capacityObjectiveStore, capacityModelStore, releaseStore, infrastructureStore, durableSchemaStore, capacityTestStore)
 				if capacityPlanStore != nil && proposalStore != nil && store != nil {
 					registerCapacityPlanRoutes(mux, store, repositoryCatalog, authStore, capacityObjectiveStore, capacityModelStore, capacityTestStore, capacityPlanStore, proposalStore)
+					if capacityRolloutStore != nil && deploymentStore != nil {
+						registerCapacityRolloutRoutes(mux, repositoryCatalog, authStore, capacityPlanStore, deploymentStore, capacityRolloutStore)
+					}
 				}
 			}
 		}

@@ -580,6 +580,20 @@ The retained base remains the retry base after default-branch movement because i
 reservation was published under the Git reference lock; current participants are still rechecked.
 Plan approval grants no spending, provider, quota, repository, secret, merge, release,
 deployment, environment, scaling, or operational authority.
+Progressive capacity execution at repository `/capacity-rollouts` routes and the same
+`/capacity` workspace retains CAS-versioned control and production evidence beneath
+`$CAPACITY_ROLLOUT_STORAGE_ROOT` (`capacity-rollouts`). A staged rollout preserves every
+plan phase, exact successful protected-environment deployment revision, allocated and
+usable capacity, load and derived headroom, service levels, dependency health, regional
+balance, cost, controller, blockers, and predicted next action. Human operators can pause,
+resume, throttle, roll back, and connect a replan to a decision; repository-bound agents
+can act only on an exact phase explicitly delegated to them and cannot stage, roll back,
+or replan. Production observation windows validate forecast and objective claims only
+when usable capacity serves load without declared failures. Demand shift, quota denial,
+regional imbalance, scaling lag, correctness or reliability regression, unused reservation,
+and budget breach deterministically contain the phase and either prescribe rollback or
+a connected decision revisit. Records grant no spending, provider, quota, repository,
+deployment, environment, scaling, decision, or operational authority.
   CAS-versioned bounded trials resolve an existing attested release or exact readable commit, scope
   packages/APIs and synthetic or permitted data, and select only the adopter's declared journeys.
   Definitions and immutable attempts retain setup, configuration, commands, integration changes,

@@ -30,6 +30,12 @@ quota/procurement dependencies, budgets, owners, decision points, and exit strat
 then hands every phase to the ordinary proposal/task/session/workspace/pull pipeline
 without granting spending, provider, repository, merge, or deployment authority.
 
+Delivered plans progress through protected production environments at
+`/repositories/{id}/capacity-rollouts`. The Capacity workspace joins exact deployed
+revisions with usable headroom, load, reliability, dependency, regional, and cost evidence,
+and gives authorized operators protected controls while deterministic risk signals contain
+unsafe or wasteful scaling.
+
 Repository participants and scoped read-only agents can turn an exact objective into
 an immutable, permission-aware capacity model at `/repositories/{id}/capacity-models`.
 The Capacity workspace exposes release-bound sanitized evidence, observation windows,
