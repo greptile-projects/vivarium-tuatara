@@ -234,29 +234,31 @@ type TaskRebaseInput struct {
 }
 
 type CorrectiveWorkInput struct {
-	IncidentID      string
-	ResponseAlertID string
-	OperationID     string
-	RepositoryID    string
-	ActorID         string
-	ProposalTitle   string
-	ProposalBody    string
-	TaskTitle       string
-	Outcome         string
-	AssigneeID      string
-	AssigneeType    string
-	BaseRevision    string
-	DueAt           time.Time
+	IncidentID         string
+	ResponseAlertID    string
+	RunbookExecutionID string
+	OperationID        string
+	RepositoryID       string
+	ActorID            string
+	ProposalTitle      string
+	ProposalBody       string
+	TaskTitle          string
+	Outcome            string
+	AssigneeID         string
+	AssigneeType       string
+	BaseRevision       string
+	DueAt              time.Time
 }
 
 type CorrectiveOrigin struct {
-	IncidentID      string    `json:"incident_id,omitempty"`
-	ResponseAlertID string    `json:"response_alert_id,omitempty"`
-	OperationID     string    `json:"operation_id"`
-	ActorID         string    `json:"actor_id"`
-	AssigneeID      string    `json:"assignee_id"`
-	BaseRevision    string    `json:"base_revision"`
-	DueAt           time.Time `json:"due_at"`
+	IncidentID         string    `json:"incident_id,omitempty"`
+	ResponseAlertID    string    `json:"response_alert_id,omitempty"`
+	RunbookExecutionID string    `json:"runbook_execution_id,omitempty"`
+	OperationID        string    `json:"operation_id"`
+	ActorID            string    `json:"actor_id"`
+	AssigneeID         string    `json:"assignee_id"`
+	BaseRevision       string    `json:"base_revision"`
+	DueAt              time.Time `json:"due_at"`
 }
 
 // WithStartableAgentTask serializes task-session publication with proposal and
@@ -320,7 +322,13 @@ func (s *Store) CreateCorrectiveWork(input CorrectiveWorkInput) (Proposal, Task,
 	if input.AssigneeType == "" {
 		input.AssigneeType = "human"
 	}
-	if (validID(input.IncidentID) == validID(input.ResponseAlertID)) || !validID(input.OperationID) || !validID(input.RepositoryID) || !validID(input.ActorID) || !validID(input.AssigneeID) || len(input.BaseRevision) != 40 || input.DueAt.IsZero() || (input.AssigneeType != "human" && input.AssigneeType != "agent") {
+	origins := 0
+	for _, present := range []bool{validID(input.IncidentID), validID(input.ResponseAlertID), validRunbookExecutionReference(input.RunbookExecutionID)} {
+		if present {
+			origins++
+		}
+	}
+	if origins != 1 || !validCorrectiveOperationID(input.OperationID) || (input.RunbookExecutionID != "" && !validRunbookExecutionReference(input.RunbookExecutionID)) || !validID(input.RepositoryID) || !validID(input.ActorID) || !validID(input.AssigneeID) || len(input.BaseRevision) != 40 || input.DueAt.IsZero() || (input.AssigneeType != "human" && input.AssigneeType != "agent") {
 		return Proposal{}, Task{}, ErrInvalid
 	}
 	s.mu.Lock()
@@ -343,7 +351,7 @@ func (s *Store) CreateCorrectiveWork(input CorrectiveWorkInput) (Proposal, Task,
 		if readErr != nil {
 			return Proposal{}, Task{}, readErr
 		}
-		if r.Corrective == nil || r.Corrective.IncidentID != input.IncidentID || r.Corrective.ResponseAlertID != input.ResponseAlertID || r.Corrective.OperationID != input.OperationID {
+		if r.Corrective == nil || r.Corrective.IncidentID != input.IncidentID || r.Corrective.ResponseAlertID != input.ResponseAlertID || r.Corrective.RunbookExecutionID != input.RunbookExecutionID || r.Corrective.OperationID != input.OperationID {
 			continue
 		}
 		origin := r.Corrective
@@ -376,7 +384,7 @@ func (s *Store) CreateCorrectiveWork(input CorrectiveWorkInput) (Proposal, Task,
 	if err != nil {
 		return Proposal{}, Task{}, err
 	}
-	r := record{Proposal: p, Tasks: []Task{task}, TaskChanges: []TaskChange{created, assigned}, Corrective: &CorrectiveOrigin{IncidentID: input.IncidentID, ResponseAlertID: input.ResponseAlertID, OperationID: input.OperationID, ActorID: input.ActorID, AssigneeID: input.AssigneeID, BaseRevision: input.BaseRevision, DueAt: input.DueAt}}
+	r := record{Proposal: p, Tasks: []Task{task}, TaskChanges: []TaskChange{created, assigned}, Corrective: &CorrectiveOrigin{IncidentID: input.IncidentID, ResponseAlertID: input.ResponseAlertID, RunbookExecutionID: input.RunbookExecutionID, OperationID: input.OperationID, ActorID: input.ActorID, AssigneeID: input.AssigneeID, BaseRevision: input.BaseRevision, DueAt: input.DueAt}}
 	if committed, writeErr := s.write(r); writeErr != nil {
 		if committed {
 			return p, task, fmt.Errorf("%w: %v", ErrDurabilityUncertain, writeErr)
@@ -1521,6 +1529,33 @@ func validID(id string) bool {
 	_, err := hex.DecodeString(id)
 	return err == nil
 }
+func validCorrectiveOperationID(id string) bool {
+	if validID(id) {
+		return true
+	}
+	if len(id) != 36 || id != strings.ToLower(id) {
+		return false
+	}
+	for i, c := range id {
+		if i == 8 || i == 13 || i == 18 || i == 23 {
+			if c != '-' {
+				return false
+			}
+			continue
+		}
+		if !strings.ContainsRune("0123456789abcdef", c) {
+			return false
+		}
+	}
+	return true
+}
+func validRunbookExecutionReference(id string) bool {
+	if len(id) != 27 || !strings.HasPrefix(id, "rb-") {
+		return false
+	}
+	_, err := hex.DecodeString(strings.TrimPrefix(id, "rb-"))
+	return err == nil
+}
 func validAssuranceID(id string) bool {
 	if len(id) != 24 || id != strings.ToLower(id) {
 		return false
@@ -1548,8 +1583,16 @@ func (s *Store) read(id string) (record, error) {
 	if _, _, err := validateContent(r.Proposal.Title, r.Proposal.Body); err != nil {
 		return record{}, fmt.Errorf("corrupt proposal %s", id)
 	}
-	if r.Corrective != nil && ((validID(r.Corrective.IncidentID) == validID(r.Corrective.ResponseAlertID)) || !validID(r.Corrective.OperationID) || !validID(r.Corrective.ActorID) || !validID(r.Corrective.AssigneeID) || len(r.Corrective.BaseRevision) != 40 || r.Corrective.DueAt.IsZero()) {
-		return record{}, fmt.Errorf("corrupt proposal %s", id)
+	if r.Corrective != nil {
+		origins := 0
+		for _, present := range []bool{validID(r.Corrective.IncidentID), validID(r.Corrective.ResponseAlertID), validRunbookExecutionReference(r.Corrective.RunbookExecutionID)} {
+			if present {
+				origins++
+			}
+		}
+		if origins != 1 || !validCorrectiveOperationID(r.Corrective.OperationID) || !validID(r.Corrective.ActorID) || !validID(r.Corrective.AssigneeID) || len(r.Corrective.BaseRevision) != 40 || r.Corrective.DueAt.IsZero() {
+			return record{}, fmt.Errorf("corrupt proposal %s", id)
+		}
 	}
 	seen := map[string]bool{}
 	for _, c := range r.Comments {

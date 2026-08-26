@@ -8,7 +8,7 @@ import (
 )
 
 func validRevision(owner string) Revision {
-	return Revision{Title: "Checkout recovery", Purpose: "Diagnose before changing state", Scope: Scope{Kind: "service", ResourceID: "checkout", Name: "Checkout"}, Preconditions: []string{"Confirm signal"}, RollbackCriteria: []string{"Stop on increased impact"}, OwnerIDs: []string{owner}, RequiredSkills: []string{"operations"}, Escalations: []Escalation{{Condition: "blocked", OwnerID: owner, Path: "owner", ExpectedAction: "decide"}}, ChangeReason: "initial", Steps: []Step{{ID: "inspect", Position: 1, Kind: "diagnostic", Title: "Inspect", Purpose: "Test hypothesis", Instructions: "Use reviewed workflow", Preconditions: []string{"read access"}, ExpectedEvidence: []string{"health digest"}, OwnerIDs: []string{owner}, RequiredSkills: []string{"operations"}, References: []Reference{{Kind: "command", ResourceID: "health-check", Revision: "abc", Reviewed: true, Accessible: true}}, Authority: Authority{RequiredAccess: []string{"service:read"}, Inspects: []string{"health"}, ProhibitedActions: []string{"deploy"}}}}}
+	return Revision{Title: "Checkout recovery", Purpose: "Diagnose before changing state", Scope: Scope{Kind: "service", ResourceID: "checkout", Name: "Checkout"}, Preconditions: []string{"Confirm signal"}, RollbackCriteria: []string{"Stop on increased impact"}, OutcomeCriteria: []OutcomeCriterion{{Kind: "health", Criterion: "Health is stable"}, {Kind: "containment", Criterion: "Impact is contained"}, {Kind: "recovery", Criterion: "Service recovered"}, {Kind: "communication", Criterion: "Audience updated"}, {Kind: "rollback", Criterion: "Rollback is complete or unnecessary"}}, OwnerIDs: []string{owner}, RequiredSkills: []string{"operations"}, Escalations: []Escalation{{Condition: "blocked", OwnerID: owner, Path: "owner", ExpectedAction: "decide"}}, ChangeReason: "initial", Steps: []Step{{ID: "inspect", Position: 1, Kind: "diagnostic", Title: "Inspect", Purpose: "Test hypothesis", Instructions: "Use reviewed workflow", Preconditions: []string{"read access"}, ExpectedEvidence: []string{"health digest"}, OwnerIDs: []string{owner}, RequiredSkills: []string{"operations"}, References: []Reference{{Kind: "command", ResourceID: "health-check", Revision: "abc", Reviewed: true, Accessible: true}}, Authority: Authority{RequiredAccess: []string{"service:read"}, Inspects: []string{"health"}, ProhibitedActions: []string{"deploy"}}}}}
 }
 
 func TestRehearsalRetainsBoundedEvidenceAndBecomesStale(t *testing.T) {
@@ -327,6 +327,87 @@ func TestSecretBearingInputRemainsExplicit(t *testing.T) {
 	}
 	if len(v.Diagnostics) != 1 || v.Diagnostics[0].Kind != "secret_bearing_input" {
 		t.Fatalf("diagnostics=%+v", v.Diagnostics)
+	}
+}
+
+func TestTerminalExecutionAssessmentPreservesProcedureAndLinksSupportedFinding(t *testing.T) {
+	s, _ := New(t.TempDir())
+	created, err := s.Create("repo", "owner", "create-assessment", validRevision("owner"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	context := ExecutionContext{OriginKind: "alert", OriginID: "alert-assessment", OriginRevision: "v1", Summary: "checkout failure", AffectedResources: []string{"checkout"}, WindowFrom: now, WindowTo: now, Evidence: []ExecutionEvidence{{Kind: "metric", ResourceID: "checkout", Revision: "v1", Digest: "sha256:signal", Summary: "sanitized signal"}}}
+	execution, err := s.StartExecution(created.ID, "owner", "launch-assessment", 1, context, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, _ := s.read(created.ID)
+	stored.Executions[0].Status = "ready"
+	stored.Executions[0].Blockers = nil
+	if err = s.write(stored); err != nil {
+		t.Fatal(err)
+	}
+	terminal, err := s.Act(created.ID, execution.ID, "human", "owner", ExecutionAction{RequestID: "perform-assessment", ExpectedVersion: 1, Action: "perform", StepID: "inspect", Evidence: []ExecutionEvidence{{Kind: "result", ResourceID: "checkout", Revision: "v1", Digest: "sha256:result", Summary: "recovered with manual correction"}}, CostCents: 9, Health: "healthy"})
+	if err != nil || terminal.Status != "completed" {
+		t.Fatalf("terminal=%+v err=%v", terminal, err)
+	}
+	criteria := []CriterionResult{}
+	for _, c := range created.Revisions[0].OutcomeCriteria {
+		criteria = append(criteria, CriterionResult{Kind: c.Kind, Criterion: c.Criterion, Status: "met", EvidenceDigests: []string{"sha256:result"}, Explanation: "Exact retained evidence supports the result."})
+	}
+	assessed, err := s.Assess(created.ID, execution.ID, "owner", AssessmentInput{RequestID: "assess", ExpectedVersion: terminal.Version, Outcome: "completed", Criteria: criteria, Deviations: []ExecutionDeviation{{Kind: "manual_work", StepID: "inspect", Summary: "Operator corrected an undocumented flag.", EvidenceDigests: []string{"sha256:result"}}, {Kind: "cost", Summary: "Execution consumed nine cents.", EvidenceDigests: []string{"sha256:result"}}}, Findings: []ExecutionFinding{{Kind: "documentation", Summary: "Document the required flag correction.", EvidenceDigests: []string{"sha256:result"}}}, Feedback: []ParticipantFeedback{{ParticipantType: "human", ParticipantID: "owner", Summary: "The recovery step needs a reviewed flag example."}}, RequireFreshRehearsal: true})
+	if err != nil || assessed.Status != "assessed" || assessed.RunbookVersion != 1 || assessed.Assessment == nil || len(assessed.Assessment.Findings) != 1 {
+		t.Fatalf("assessed=%+v err=%v", assessed, err)
+	}
+	finding := assessed.Assessment.Findings[0]
+	if _, err = s.ReserveImprovement(created.ID, execution.ID, "owner", "work", finding.ID, finding.Kind); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.ReserveImprovement(created.ID, execution.ID, "other-owner", "competing-work", finding.ID, finding.Kind); err != ErrConflict {
+		t.Fatalf("competing reservation err=%v", err)
+	}
+	linked, err := s.LinkImprovement(created.ID, execution.ID, "owner", ImprovementLink{RequestID: "work", FindingID: finding.ID, Kind: finding.Kind, ProposalID: "proposal-1", TaskID: "task-1"})
+	if err != nil || linked.Assessment.Findings[0].ProposalID != "proposal-1" {
+		t.Fatalf("linked=%+v err=%v", linked, err)
+	}
+	if retried, retryErr := s.ReserveImprovement(created.ID, execution.ID, "owner", "work", finding.ID, finding.Kind); retryErr != nil || retried.Assessment.Findings[0].ProposalID != "proposal-1" {
+		t.Fatalf("retry=%+v err=%v", retried, retryErr)
+	}
+	retained, _ := s.Get(created.ID)
+	if retained.CurrentVersion != 1 || retained.Executions[0].RunbookVersion != 1 {
+		t.Fatalf("assessment rewrote procedure: %+v", retained)
+	}
+}
+
+func TestAssessmentRechecksFallbackUnderStoreLock(t *testing.T) {
+	s, _ := New(t.TempDir())
+	primary, _ := s.Create("repo", "owner", "primary", validRevision("owner"))
+	fallback, _ := s.Create("repo", "owner", "fallback", validRevision("owner"))
+	now := time.Now().UTC()
+	scenario := Scenario{ID: "fallback", Name: "Fallback", Failure: "primary unavailable", Inputs: []RehearsalInput{{Kind: "service", ResourceID: "checkout", Revision: "v1", EvidenceKind: "synthetic", Digest: "sha256:input"}}, Steps: []StepOutcome{{StepID: "inspect", Output: "healthy", StartedAt: now, FinishedAt: now, Permissions: []string{"service:read"}, Outcome: "passed", DestructiveHandling: "not_applicable"}}, AchievedOutcome: "achieved"}
+	if _, err := s.Rehearse(fallback.ID, "human", "owner", "fallback-proof", 1, "isolated", "box", "", []Scenario{scenario}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Revise(fallback.ID, 1, "owner", "fallback-moved", validRevision("owner")); err != nil {
+		t.Fatal(err)
+	}
+	stored, _ := s.read(primary.ID)
+	stored.Executions = []Execution{{ID: "execution", RunbookID: primary.ID, RunbookVersion: 1, Status: "completed", Version: 1, Participants: []ExecutionParticipant{{ActorType: "human", ActorID: "owner", JoinedAt: now}}, CompletedEvidence: []ExecutionEvidence{{Kind: "result", ResourceID: "checkout", Revision: "v1", Digest: "sha256:result", Summary: "recovered"}}}}
+	if err := s.write(stored); err != nil {
+		t.Fatal(err)
+	}
+	criteria := []CriterionResult{}
+	for _, c := range primary.Revisions[0].OutcomeCriteria {
+		criteria = append(criteria, CriterionResult{Kind: c.Kind, Criterion: c.Criterion, Status: "met", EvidenceDigests: []string{"sha256:result"}, Explanation: "retained evidence"})
+	}
+	_, err := s.Assess(primary.ID, "execution", "owner", AssessmentInput{RequestID: "unsafe-suspension", ExpectedVersion: 1, Outcome: "completed", Criteria: criteria, RequireFreshRehearsal: true, SuspendCurrentUse: true, FallbackRunbookID: fallback.ID, FallbackRunbookVersion: 1})
+	if err != ErrInvalid {
+		t.Fatalf("stale fallback assessment err=%v", err)
+	}
+	retained, _ := s.Get(primary.ID)
+	if retained.UseStatus != "active" || retained.Executions[0].Assessment != nil {
+		t.Fatalf("stale fallback mutated primary: %+v", retained)
 	}
 }
 

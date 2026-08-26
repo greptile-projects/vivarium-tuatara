@@ -45,6 +45,24 @@ attempts retain earlier blocked records as audit history. Repository
 participants can list the retained records through `GET /repositories/{id}/runbook-executions`.
 The record coordinates procedure and grants no access or operational authority.
 
+Runbook revisions declare health, containment, recovery, communication, and rollback
+outcome criteria. After an execution completes or is aborted,
+`POST /repositories/{id}/runbook-executions/{execution_id}/assessment` lets a current
+declared runbook owner freeze one optimistic, caller-stable evaluation of every exact
+criterion. Results cite only retained context or execution evidence and preserve structured
+deviations, manual work, failed steps, timing, access gaps, agent corrections, cost, supported
+findings, and feedback attributable to execution participants. The assessment remains bound
+to the runbook version that actually ran and never edits that procedure.
+
+`POST .../improvements` converts a supported documentation, workflow, policy,
+infrastructure, or code finding into a caller-stable ordinary proposal and owned human or
+agent task. Ordinary review and delivery still apply; publishing a successor runbook makes
+old rehearsal proof stale and requires a passing exercise of the new exact version. An owner
+may suspend unsafe current use only while assessing a terminal execution, requiring fresh
+rehearsal and naming an active exact fallback revision with current passing proof. Suspended
+procedures remain readable, are blocked from recommendation eligibility and launch, and point
+responders to that approved fallback without granting authority in either procedure.
+
 ## Versioned urgent-response coverage
 
 Repository readers inspect immutable response policies through

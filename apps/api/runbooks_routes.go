@@ -8,6 +8,7 @@ import (
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/runbooks"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
@@ -35,8 +36,19 @@ type runbookExecutionInput struct {
 	CurrentAccess  []string                  `json:"current_access"`
 }
 type runbookExecutionActionInput = runbooks.ExecutionAction
+type runbookImprovementInput struct {
+	RequestID    string    `json:"request_id"`
+	FindingID    string    `json:"finding_id"`
+	Kind         string    `json:"kind"`
+	Title        string    `json:"title"`
+	Outcome      string    `json:"outcome"`
+	AssigneeType string    `json:"assignee_type"`
+	AssigneeID   string    `json:"assignee_id"`
+	BaseRevision string    `json:"base_revision"`
+	DueAt        time.Time `json:"due_at"`
+}
 
-func registerRunbookRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, store *runbooks.Store, workflows *workflowcomponents.Store, orgs *organizations.Store) {
+func registerRunbookRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, store *runbooks.Store, workflows *workflowcomponents.Store, orgs *organizations.Store, proposalStore *proposals.Store) {
 	mux.HandleFunc("POST /repositories/{id}/runbook-recommendations", func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:read"); !ok {
 			return
@@ -151,6 +163,134 @@ func registerRunbookRoutes(mux *http.ServeMux, git *storage.Store, catalog *repo
 		default:
 			writeAPIError(w, 403, "runbook_action_forbidden", "current participation or an exact current agent grant is required")
 		}
+	})
+	mux.HandleFunc("POST /repositories/{id}/runbook-executions/{execution_id}/assessment", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		book, execution, found := findRunbookExecution(store, r.PathValue("id"), r.PathValue("execution_id"))
+		if !found {
+			writeAPIError(w, 404, "runbook_execution_not_found", "runbook execution not found")
+			return
+		}
+		revision := book.Revisions[execution.RunbookVersion-1]
+		if !containsRunbookOwner(revision.OwnerIDs, actor.UserID) {
+			writeAPIError(w, 403, "runbook_assessment_forbidden", "only a current declared runbook owner can assess the outcome")
+			return
+		}
+		var in runbooks.AssessmentInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_runbook_assessment", "a complete revision-bound outcome assessment is required")
+			return
+		}
+		if in.SuspendCurrentUse {
+			fallback, err := store.Get(in.FallbackRunbookID)
+			approved := err == nil && fallback.ID != book.ID && fallback.RepositoryID == book.RepositoryID && fallback.CurrentVersion == in.FallbackRunbookVersion && fallback.UseStatus != "suspended"
+			if approved {
+				approved = false
+				for _, x := range fallback.Rehearsals {
+					approved = approved || x.RunbookVersion == in.FallbackRunbookVersion && x.Status == "passed" && !x.Stale
+				}
+			}
+			if !approved {
+				writeAPIError(w, 400, "invalid_runbook_fallback", "suspension requires an active exact fallback revision with a current passing rehearsal")
+				return
+			}
+		}
+		var out runbooks.Execution
+		err := catalog.WithCurrentParticipant(actor.UserID, book.RepositoryID, func() error {
+			var persistErr error
+			out, persistErr = store.Assess(book.ID, execution.ID, actor.UserID, in)
+			return persistErr
+		})
+		switch {
+		case err == nil:
+			writeJSON(w, 201, out)
+		case errors.Is(err, runbooks.ErrConflict):
+			writeAPIError(w, 409, "runbook_assessment_conflict", "the execution is not terminal, moved, or was already assessed differently")
+		case errors.Is(err, runbooks.ErrInvalid):
+			writeAPIError(w, 400, "invalid_runbook_assessment", "declared criteria, supported findings, deviations, and participant feedback must be complete and evidence-bound")
+		case errors.Is(err, repositories.ErrInvalidCollaborator), errors.Is(err, repositories.ErrNotFound):
+			writeAPIError(w, 403, "runbook_assessment_forbidden", "current repository participation is required through assessment persistence")
+		default:
+			writeAPIError(w, 500, "runbooks_unavailable", "the assessment could not be retained")
+		}
+	})
+	mux.HandleFunc("POST /repositories/{id}/runbook-executions/{execution_id}/improvements", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:write")
+		if !ok {
+			return
+		}
+		book, execution, found := findRunbookExecution(store, r.PathValue("id"), r.PathValue("execution_id"))
+		if !found {
+			writeAPIError(w, 404, "runbook_execution_not_found", "runbook execution not found")
+			return
+		}
+		if !containsRunbookOwner(book.Revisions[execution.RunbookVersion-1].OwnerIDs, actor.UserID) || proposalStore == nil {
+			writeAPIError(w, 403, "runbook_improvement_forbidden", "only a current declared runbook owner can create ordinary improvement work")
+			return
+		}
+		var in runbookImprovementInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_runbook_improvement", "supported finding work is required")
+			return
+		}
+		var finding *runbooks.ExecutionFinding
+		if execution.Assessment != nil {
+			for i := range execution.Assessment.Findings {
+				if execution.Assessment.Findings[i].ID == in.FindingID {
+					finding = &execution.Assessment.Findings[i]
+				}
+			}
+		}
+		if finding == nil || finding.Kind != in.Kind {
+			writeAPIError(w, 400, "invalid_runbook_improvement", "work must cite one supported retained finding and preserve its change kind")
+			return
+		}
+		var p proposals.Proposal
+		var task proposals.Task
+		var out runbooks.Execution
+		err := catalog.WithCurrentParticipant(actor.UserID, book.RepositoryID, func() error {
+			reserved, reserveErr := store.ReserveImprovement(book.ID, execution.ID, actor.UserID, in.RequestID, in.FindingID, in.Kind)
+			if reserveErr != nil {
+				return reserveErr
+			}
+			for _, retained := range reserved.Assessment.Findings {
+				if retained.ID == in.FindingID && retained.ProposalID != "" {
+					var readErr error
+					p, readErr = proposalStore.Get(book.RepositoryID, retained.ProposalID)
+					if readErr != nil {
+						return readErr
+					}
+					task, readErr = proposalStore.GetTask(book.RepositoryID, retained.ProposalID, retained.TaskID)
+					if readErr != nil {
+						return readErr
+					}
+					out = reserved
+					return nil
+				}
+			}
+			var createErr error
+			p, task, createErr = proposalStore.CreateCorrectiveWork(proposals.CorrectiveWorkInput{RunbookExecutionID: execution.ID, OperationID: in.RequestID, RepositoryID: book.RepositoryID, ActorID: actor.UserID, ProposalTitle: in.Title, ProposalBody: "Governed " + in.Kind + " improvement from runbook execution " + execution.ID + " and finding " + finding.ID + ". Ordinary review and delivery authority still apply.", TaskTitle: in.Title, Outcome: in.Outcome, AssigneeType: in.AssigneeType, AssigneeID: in.AssigneeID, BaseRevision: in.BaseRevision, DueAt: in.DueAt})
+			if createErr != nil {
+				if errors.Is(createErr, proposals.ErrInvalid) {
+					_ = store.ReleaseImprovementReservation(book.ID, execution.ID, actor.UserID, in.RequestID, in.FindingID)
+				}
+				return createErr
+			}
+			out, createErr = store.LinkImprovement(book.ID, execution.ID, actor.UserID, runbooks.ImprovementLink{RequestID: in.RequestID, FindingID: in.FindingID, Kind: in.Kind, ProposalID: p.ID, TaskID: task.ID})
+			return createErr
+		})
+		if err != nil {
+			if errors.Is(err, repositories.ErrInvalidCollaborator) || errors.Is(err, repositories.ErrNotFound) {
+				writeAPIError(w, 403, "runbook_improvement_forbidden", "current repository participation is required through corrective-work creation and finding linkage")
+			} else {
+				writeAPIError(w, 409, "runbook_improvement_conflict", "the finding is reserved, changed, already linked, or ordinary work could not be reconciled")
+			}
+			return
+		}
+		writeJSON(w, 201, map[string]any{"execution": out, "proposal": p, "task": task})
 	})
 	mux.HandleFunc("GET /repositories/{id}/runbooks", func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id")); !ok {
@@ -306,6 +446,29 @@ func registerRunbookRoutes(mux *http.ServeMux, git *storage.Store, catalog *repo
 			writeAPIError(w, 500, "runbooks_unavailable", "the rehearsal could not be retained")
 		}
 	})
+}
+
+func findRunbookExecution(store *runbooks.Store, repositoryID, executionID string) (runbooks.Runbook, runbooks.Execution, bool) {
+	books, err := store.List(repositoryID)
+	if err != nil {
+		return runbooks.Runbook{}, runbooks.Execution{}, false
+	}
+	for _, book := range books {
+		for _, execution := range book.Executions {
+			if execution.ID == executionID {
+				return book, execution, true
+			}
+		}
+	}
+	return runbooks.Runbook{}, runbooks.Execution{}, false
+}
+func containsRunbookOwner(ids []string, id string) bool {
+	for _, x := range ids {
+		if x == id {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveRunbookReferences ignores caller status flags and derives them from the

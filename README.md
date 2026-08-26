@@ -93,6 +93,12 @@ can join and discuss while one explicit controller steers exact steps through ve
 caller-stable actions; approvals, evidence, decisions, cost, health, blockers, rollback, and
 predicted next work remain visible as immutable receipts. Human handoff and bounded agent
 delegation preserve separation of duties without granting operational access.
+Completed or abandoned executions become immutable outcome and procedure-fitness assessments
+against declared health, containment, recovery, communication, and rollback criteria. Owners
+can retain evidence-supported deviations and participant feedback, open caller-stable ordinary
+documentation, workflow, policy, infrastructure, or human/agent code work, and publish a
+reviewed successor that must be rehearsed anew. Unsafe current use can be suspended only with
+a passing exact fallback, while every prior execution remains bound to the version it used.
 
 Repository participants and scoped read-only agents can turn an exact objective into
 an immutable, permission-aware capacity model at `/repositories/{id}/capacity-models`.
