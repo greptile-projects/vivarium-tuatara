@@ -1697,7 +1697,15 @@ overprovisioning without converting any planning record into cloud or delivery a
   and candidate trial to the pull's exact synchronized revision. Public pull reads derive
   confidence, metric/resource/cost changes, and correctness while retaining commands, scenarios,
   authorship, and residual risks; source movement marks earlier evidence stale and grants no
-  operational authority.
+operational authority.
+Each visible alert is also a durable shared response workspace. Successfully routed responders
+can append caller-stable classification, correlation, reassignment, suppression, escalation,
+observation, action, approved-diagnostic, owner-invitation, and bounded-agent-delegation events.
+The workspace freezes the signal window beside exact release, deployment, code, infrastructure,
+dependency, runbook, and audience-filtered evidence bindings; invitees must remain current
+repository participants. Agent packets accept only enumerated read-only tools and bounded budgets.
+A repository writer can promote a qualifying alert into the ordinary incident store and retain
+the incident link, while all mitigation continues through existing environment authority.
   Repository release candidates at `/repositories/{id}/releases` freeze a
   verified commit, version, notes, creator, optional prior-release boundary,
   and the server-derived merged pulls, proposals, tasks, and contributors in

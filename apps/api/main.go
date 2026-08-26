@@ -1633,7 +1633,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	if authStore != nil && repositoryCatalog != nil && responsePolicyStore != nil {
 		registerResponsePolicyRoutes(mux, repositoryCatalog, authStore, responsePolicyStore)
 		if responseAlertStore != nil {
-			registerResponseAlertRoutes(mux, repositoryCatalog, authStore, responsePolicyStore, responseAlertStore, activityStore)
+			registerResponseAlertRoutes(mux, repositoryCatalog, authStore, responsePolicyStore, responseAlertStore, incidentStore, activityStore)
 		}
 	}
 	if authStore != nil && repositoryCatalog != nil && qualityPlanStore != nil {

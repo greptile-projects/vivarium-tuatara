@@ -55,6 +55,10 @@ Repository-defined revision-bound signals become correlated alerts at
 evidence, uncertainty, user impact, response deadlines, delivery attempts, and explicit human
 acknowledgement are visible in Response coverage and the actionable inbox; suppression,
 maintenance, stale or inaccessible evidence, policy movement, and delivery failure remain gaps.
+Routed responders use the alert's shared workspace to classify and steer response, invite or
+reassign current owners, retain exact operational context and observations, run approved
+read-only diagnostics, delegate a budgeted read-only agent investigation, and connect a qualifying
+alert to an ordinary incident. The workspace never grants mitigation or environment authority.
 
 Repository participants and scoped read-only agents can turn an exact objective into
 an immutable, permission-aware capacity model at `/repositories/{id}/capacity-models`.
