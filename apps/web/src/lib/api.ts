@@ -4509,7 +4509,7 @@ export type ActivityEvent = {
   repository_id: string;
   repository_name: string;
   resource_type:
-    "proposal" | "pull_request" | "repository" | "deployment" | "incident";
+    "proposal" | "pull_request" | "repository" | "deployment" | "incident" | "response_alert";
   resource_id: string;
   resource_title: string;
   target_user_id: string | null;

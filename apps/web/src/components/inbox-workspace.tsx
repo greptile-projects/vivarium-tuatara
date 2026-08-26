@@ -22,6 +22,7 @@ function href(item: InboxItem) {
   if (item.resource_type === "proposal") return `/proposals/${item.repository_id}/${item.resource_id}`;
   if (item.resource_type === "pull_request") return `/pulls/${item.repository_id}/${item.resource_id}`;
   if (item.resource_type === "incident") return `/incidents/${item.resource_id}`;
+  if (item.resource_type === "response_alert") return `/repositories/${item.repository_id}/response-policies`;
   return `/repositories/${item.repository_id}`;
 }
 function initials(user?: User) { return (user?.display_name ?? "Unknown collaborator").split(/\s+/).map((part) => part[0]).join("").slice(0, 2).toUpperCase(); }
