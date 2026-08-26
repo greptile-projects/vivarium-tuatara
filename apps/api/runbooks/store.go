@@ -197,18 +197,72 @@ type ExecutionBlocker struct {
 	Message string `json:"message"`
 }
 type Execution struct {
-	ID             string             `json:"id"`
-	RequestID      string             `json:"request_id"`
-	RequestDigest  string             `json:"request_digest"`
-	RunbookID      string             `json:"runbook_id"`
-	RunbookVersion int                `json:"runbook_version"`
-	Context        ExecutionContext   `json:"context"`
-	Preconditions  []Preconditions    `json:"preconditions"`
-	CurrentAccess  []string           `json:"current_access"`
-	Blockers       []ExecutionBlocker `json:"blockers"`
-	Status         string             `json:"status"`
-	StartedBy      string             `json:"started_by"`
-	CreatedAt      time.Time          `json:"created_at"`
+	ID                  string                 `json:"id"`
+	RequestID           string                 `json:"request_id"`
+	RequestDigest       string                 `json:"request_digest"`
+	RunbookID           string                 `json:"runbook_id"`
+	RunbookVersion      int                    `json:"runbook_version"`
+	Context             ExecutionContext       `json:"context"`
+	Preconditions       []Preconditions        `json:"preconditions"`
+	CurrentAccess       []string               `json:"current_access"`
+	Blockers            []ExecutionBlocker     `json:"blockers"`
+	Status              string                 `json:"status"`
+	StartedBy           string                 `json:"started_by"`
+	CreatedAt           time.Time              `json:"created_at"`
+	Version             int                    `json:"version"`
+	ControllerType      string                 `json:"controller_type"`
+	ControllerID        string                 `json:"controller_id"`
+	CurrentStepID       string                 `json:"current_step_id,omitempty"`
+	Participants        []ExecutionParticipant `json:"participants"`
+	Delegations         []ExecutionDelegation  `json:"delegations"`
+	Receipts            []ActionReceipt        `json:"receipts"`
+	CompletedEvidence   []ExecutionEvidence    `json:"completed_evidence"`
+	PendingDecisions    []string               `json:"pending_decisions"`
+	ScopedCredentials   []string               `json:"scoped_credentials"`
+	Health              string                 `json:"health"`
+	CostCents           int                    `json:"cost_cents"`
+	RollbackState       string                 `json:"rollback_state"`
+	PredictedNextAction string                 `json:"predicted_next_action"`
+}
+type ExecutionParticipant struct {
+	ActorType string    `json:"actor_type"`
+	ActorID   string    `json:"actor_id"`
+	JoinedAt  time.Time `json:"joined_at"`
+}
+type ExecutionDelegation struct {
+	StepID      string    `json:"step_id"`
+	AgentID     string    `json:"agent_id"`
+	Actions     []string  `json:"actions"`
+	DelegatedBy string    `json:"delegated_by"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+type ActionReceipt struct {
+	ID              string              `json:"id"`
+	RequestID       string              `json:"request_id"`
+	RequestDigest   string              `json:"request_digest"`
+	ExpectedVersion int                 `json:"expected_version"`
+	Action          string              `json:"action"`
+	StepID          string              `json:"step_id,omitempty"`
+	ActorType       string              `json:"actor_type"`
+	ActorID         string              `json:"actor_id"`
+	Message         string              `json:"message,omitempty"`
+	Evidence        []ExecutionEvidence `json:"evidence"`
+	CostCents       int                 `json:"cost_cents"`
+	Health          string              `json:"health,omitempty"`
+	CreatedAt       time.Time           `json:"created_at"`
+}
+type ExecutionAction struct {
+	RequestID        string              `json:"request_id"`
+	ExpectedVersion  int                 `json:"expected_version"`
+	Action           string              `json:"action"`
+	StepID           string              `json:"step_id,omitempty"`
+	Message          string              `json:"message,omitempty"`
+	Evidence         []ExecutionEvidence `json:"evidence"`
+	CostCents        int                 `json:"cost_cents"`
+	TargetID         string              `json:"target_id,omitempty"`
+	DelegatedActions []string            `json:"delegated_actions,omitempty"`
+	Decision         string              `json:"decision,omitempty"`
+	Health           string              `json:"health,omitempty"`
 }
 type Recommendation struct {
 	RunbookID      string             `json:"runbook_id"`
@@ -325,6 +379,14 @@ func (s *Store) StartExecution(id, actor, request string, version int, context E
 		candidate.RequestDigest = d
 		candidate.StartedBy = actor
 		candidate.CreatedAt = now
+		candidate.Version = 1
+		candidate.ControllerType, candidate.ControllerID = "human", actor
+		candidate.ScopedCredentials = uniqueStrings(access)
+		candidate.Participants = []ExecutionParticipant{{ActorType: "human", ActorID: actor, JoinedAt: now}}
+		candidate.Health, candidate.RollbackState = "unknown", "not_started"
+		if len(r.Steps) > 0 {
+			projectExecutionStep(&candidate, r.Steps[0])
+		}
 		candidate.Blockers = blockers
 		candidate.Status = "ready"
 		if len(blockers) > 0 {
@@ -336,6 +398,215 @@ func (s *Store) StartExecution(id, actor, request string, version int, context E
 		return s.write(book)
 	})
 	return out, err
+}
+
+// Act appends an immutable, caller-stable receipt while atomically advancing the
+// projected execution. Authority is supplied by the authenticated route and is
+// still narrowed here by controller, approval, and exact agent delegation.
+func (s *Store) Act(id, executionID, actorType, actorID string, in ExecutionAction) (Execution, error) {
+	var out Execution
+	err := s.lock(func() error {
+		book, err := s.read(id)
+		if err != nil {
+			return err
+		}
+		i := -1
+		for n := range book.Executions {
+			if book.Executions[n].ID == executionID {
+				i = n
+				break
+			}
+		}
+		if i < 0 {
+			return ErrNotFound
+		}
+		e := &book.Executions[i]
+		d := actionDigest(in)
+		for _, old := range e.Receipts {
+			if old.RequestID == in.RequestID {
+				if old.RequestDigest != d || old.ActorType != actorType || old.ActorID != actorID {
+					return ErrConflict
+				}
+				out = *e
+				return nil
+			}
+		}
+		if in.RequestID == "" || in.ExpectedVersion != e.Version || in.CostCents < 0 || in.CostCents > maxRehearsalStepCostCents || secretPattern.MatchString(in.Message) {
+			return ErrConflict
+		}
+		for _, evidence := range in.Evidence {
+			if evidence.Kind == "" || evidence.ResourceID == "" || evidence.Revision == "" || evidence.Digest == "" || evidence.Summary == "" || len(evidence.Summary) > 2000 || secretPattern.MatchString(evidence.Summary) {
+				return ErrInvalid
+			}
+		}
+		if in.Health != "" && in.Health != "unknown" && in.Health != "healthy" && in.Health != "degraded" && in.Health != "unhealthy" {
+			return ErrInvalid
+		}
+		actions := map[string]bool{"join": true, "discuss": true, "approve": true, "decide": true, "perform": true, "analyze": true, "skip": true, "pause": true, "handoff": true, "abort": true, "delegate": true, "rollback": true}
+		if !actions[in.Action] {
+			return ErrInvalid
+		}
+		revision := book.Revisions[e.RunbookVersion-1]
+		step, hasStep := executionStep(revision, in.StepID)
+		controller := e.ControllerType == actorType && e.ControllerID == actorID
+		if actorType == "agent" {
+			delegated := false
+			for _, x := range e.Delegations {
+				if x.AgentID == actorID && x.StepID == in.StepID && containsString(x.Actions, in.Action) {
+					delegated = true
+				}
+			}
+			if !delegated || (in.Action != "analyze" && in.Action != "perform") {
+				return ErrConflict
+			}
+		}
+		if actorType == "human" && in.Action != "join" && in.Action != "discuss" && in.Action != "approve" && !controller {
+			return ErrConflict
+		}
+		if e.Status == "blocked" && in.Action != "join" && in.Action != "discuss" && in.Action != "abort" {
+			return ErrConflict
+		}
+		if e.Status != "ready" && (in.Action == "approve" || in.Action == "decide" || in.Action == "perform" || in.Action == "analyze" || in.Action == "skip" || in.Action == "delegate" || in.Action == "handoff" || in.Action == "pause") {
+			return ErrConflict
+		}
+		if (in.Action == "perform" || in.Action == "analyze" || in.Action == "skip" || in.Action == "approve" || in.Action == "decide") && (!hasStep || in.StepID != e.CurrentStepID) {
+			return ErrConflict
+		}
+		if in.Action == "skip" && (step.Kind != "communication" || len(step.Authority.Changes) > 0) {
+			return ErrConflict
+		}
+		if in.Action == "perform" && step.Authority.HumanApprovalRequired {
+			approved := false
+			for _, r := range e.Receipts {
+				if r.Action == "approve" && r.StepID == in.StepID && r.ActorID != actorID {
+					approved = true
+				}
+			}
+			if !approved {
+				return ErrConflict
+			}
+		}
+		now := s.now()
+		receipt := ActionReceipt{ID: stableID(executionID, actorID, in.RequestID), RequestID: in.RequestID, RequestDigest: d, ExpectedVersion: in.ExpectedVersion, Action: in.Action, StepID: in.StepID, ActorType: actorType, ActorID: actorID, Message: in.Message, Evidence: in.Evidence, CostCents: in.CostCents, Health: in.Health, CreatedAt: now}
+		switch in.Action {
+		case "join":
+			if !executionParticipant(e.Participants, actorType, actorID) {
+				e.Participants = append(e.Participants, ExecutionParticipant{actorType, actorID, now})
+			}
+		case "handoff":
+			if in.TargetID == "" || !executionParticipant(e.Participants, "human", in.TargetID) {
+				return ErrInvalid
+			}
+			e.ControllerType, e.ControllerID = "human", in.TargetID
+		case "delegate":
+			if in.TargetID == "" || !hasStep || len(in.DelegatedActions) == 0 {
+				return ErrInvalid
+			}
+			for _, a := range in.DelegatedActions {
+				if a != "analyze" && a != "perform" {
+					return ErrInvalid
+				}
+			}
+			e.Delegations = append(e.Delegations, ExecutionDelegation{in.StepID, in.TargetID, uniqueStrings(in.DelegatedActions), actorID, now})
+		case "pause":
+			e.Status = "paused"
+		case "decide":
+			if !hasStep || step.Decision == nil || !containsString(e.PendingDecisions, step.Decision.Condition) || in.Decision == "" {
+				return ErrInvalid
+			}
+			next := step.Decision.IfFalseStepID
+			if in.Decision == "true" {
+				next = step.Decision.IfTrueStepID
+			} else if in.Decision != "false" {
+				return ErrInvalid
+			}
+			e.PendingDecisions = nil
+			if next == "" {
+				e.CurrentStepID = ""
+				e.Status = "completed"
+				e.PredictedNextAction = "verify outcome"
+			} else if n, ok := executionStep(revision, next); ok {
+				projectExecutionStep(e, n)
+			}
+		case "abort":
+			e.Status = "aborted"
+			e.RollbackState = "required"
+		case "rollback":
+			e.Status = "rolling_back"
+			e.RollbackState = "in_progress"
+		case "perform", "skip":
+			e.CompletedEvidence = append(e.CompletedEvidence, in.Evidence...)
+			e.CostCents += in.CostCents
+			if in.Health != "" {
+				e.Health = in.Health
+			}
+			advanceExecution(e, revision)
+		case "analyze":
+			e.CompletedEvidence = append(e.CompletedEvidence, in.Evidence...)
+			e.CostCents += in.CostCents
+			if in.Health != "" {
+				e.Health = in.Health
+			}
+		}
+		e.Receipts = append(e.Receipts, receipt)
+		e.Version++
+		book.UpdatedAt = now
+		out = *e
+		return s.write(book)
+	})
+	return out, err
+}
+func executionStep(r Revision, id string) (Step, bool) {
+	for _, s := range r.Steps {
+		if s.ID == id {
+			return s, true
+		}
+	}
+	return Step{}, false
+}
+func executionParticipant(xs []ExecutionParticipant, t, id string) bool {
+	for _, x := range xs {
+		if x.ActorType == t && x.ActorID == id {
+			return true
+		}
+	}
+	return false
+}
+func advanceExecution(e *Execution, r Revision) {
+	for i, s := range r.Steps {
+		if s.ID == e.CurrentStepID {
+			if s.Decision != nil {
+				e.PendingDecisions = []string{s.Decision.Condition}
+				e.PredictedNextAction = "record decision: " + s.Decision.Condition
+				return
+			}
+			if i+1 < len(r.Steps) {
+				projectExecutionStep(e, r.Steps[i+1])
+			} else {
+				e.CurrentStepID = ""
+				e.Status = "completed"
+				e.PredictedNextAction = "verify outcome"
+			}
+			return
+		}
+	}
+}
+func projectExecutionStep(e *Execution, step Step) {
+	e.CurrentStepID = step.ID
+	e.PendingDecisions = nil
+	if step.Decision != nil {
+		e.PendingDecisions = []string{step.Decision.Condition}
+		e.PredictedNextAction = "record decision: " + step.Decision.Condition
+		return
+	}
+	e.PredictedNextAction = "perform " + step.Title
+}
+func actionDigest(v ExecutionAction) string {
+	v.RequestID = ""
+	v.ExpectedVersion = 0
+	b, _ := json.Marshal(v)
+	h := sha256.Sum256(b)
+	return hex.EncodeToString(h[:])
 }
 
 func validExecutionContext(c ExecutionContext) bool {
