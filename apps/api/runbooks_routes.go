@@ -31,13 +31,16 @@ func verifyAlertRunbookLaunch(alerts *responsealerts.Store, book runbooks.Runboo
 	if err != nil || alert.RepositoryID != book.RepositoryID || alert.State == "resolved" || alert.Signal.SourceRevision != context.OriginRevision {
 		return nil, nil
 	}
-	matched := false
+	alertResources := make(map[string]struct{}, len(alert.Signal.ResourceIDs))
 	for _, resource := range alert.Signal.ResourceIDs {
-		for _, affected := range context.AffectedResources {
-			matched = matched || resource == affected
+		alertResources[resource] = struct{}{}
+	}
+	for _, affected := range context.AffectedResources {
+		if _, covered := alertResources[affected]; !covered {
+			return nil, nil
 		}
 	}
-	if !matched || context.WindowFrom.After(alert.Signal.OccurredAt) || context.WindowTo.Before(alert.Signal.OccurredAt) {
+	if context.WindowFrom.After(alert.Signal.OccurredAt) || context.WindowTo.Before(alert.Signal.OccurredAt) {
 		return nil, nil
 	}
 	digest := ""

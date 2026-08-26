@@ -5,6 +5,8 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/responsealerts"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/responsepolicies"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/runbooks"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
@@ -68,6 +70,31 @@ func TestRunbookAPI(t *testing.T) {
 	}
 	if !kinds["precondition_not_met"] || !kinds["access_unavailable"] {
 		t.Fatalf("blockers=%+v", execution.Blockers)
+	}
+}
+
+func TestVerifyAlertRunbookLaunchRequiresCompleteResourceBinding(t *testing.T) {
+	now := time.Now().UTC()
+	alerts, err := responsealerts.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := responsepolicies.Policy{ID: "policy", RepositoryID: "repo", Revisions: []responsepolicies.Revision{{Version: 1, Rules: []responsepolicies.Rule{{ID: "rule", ResourceIDs: []string{"checkout"}, SignalClass: "reliability", Severity: "high", AccountableTeamID: "ops", AcknowledgeSeconds: 60, ResolveSeconds: 600}}}}}
+	signal := responsealerts.Signal{SignalClass: "reliability", Severity: "high", ResourceIDs: []string{"checkout"}, Summary: "degraded", Uncertainty: "sampled", OccurredAt: now, SourceRevision: "0123456789012345678901234567890123456789", Evidence: []responsealerts.Evidence{{Kind: "metric", ResourceID: "checkout", Revision: "sample", Digest: "sha256:alert", Summary: "bounded", Available: true}}}
+	alert, err := alerts.Create("repo", "source", "request", signal, policy, []string{"operator"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	book := runbooks.Runbook{RepositoryID: "repo", Revisions: []runbooks.Revision{{Preconditions: []string{"Exact alert remains active"}}}}
+	context := runbooks.ExecutionContext{OriginKind: "alert", OriginID: alert.ID, OriginRevision: signal.SourceRevision, AffectedResources: []string{"checkout"}, WindowFrom: now.Add(-time.Minute), WindowTo: now.Add(time.Minute)}
+	preconditions, access := verifyAlertRunbookLaunch(alerts, book, 1, context)
+	if len(preconditions) != 1 || len(access) != 1 {
+		t.Fatalf("exact alert binding was not verified: preconditions=%+v access=%+v", preconditions, access)
+	}
+	context.AffectedResources = append(context.AffectedResources, "billing")
+	preconditions, access = verifyAlertRunbookLaunch(alerts, book, 1, context)
+	if len(preconditions) != 0 || len(access) != 0 {
+		t.Fatalf("mixed-resource context inherited alert readiness: preconditions=%+v access=%+v", preconditions, access)
 	}
 }
 
