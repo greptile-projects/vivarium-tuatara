@@ -110,6 +110,8 @@ type ReasoningOrigin struct {
 	ProvenanceFindingID            string                     `json:"provenance_finding_id,omitempty"`
 	ProvenanceRepairRequestID      string                     `json:"provenance_repair_request_id,omitempty"`
 	CapacityPlanID                 string                     `json:"capacity_plan_id,omitempty"`
+	TelemetryContractID            string                     `json:"telemetry_contract_id,omitempty"`
+	TelemetryContractVersion       int                        `json:"telemetry_contract_version,omitempty"`
 }
 
 type ReasoningItem struct {
@@ -469,8 +471,9 @@ func (s *Store) CreateImplementation(input ImplementationInput) (Proposal, []Tas
 	isPropagation := validReliabilityReference(input.Origin.PropagationCampaignID) && strings.TrimSpace(input.Origin.PropagationTargetID) != "" && validReliabilityReference(input.Origin.PropagationAssessmentID) && input.Origin.AssessmentVersion > 0
 	isProvenance := validID(input.Origin.ProvenanceAssessmentID) && input.Origin.AssessmentVersion > 0 && strings.TrimSpace(input.Origin.ProvenanceFindingID) != "" && validID(input.Origin.ProvenanceRepairRequestID)
 	isCapacity := validID(input.Origin.CapacityPlanID)
+	isTelemetry := validID(input.Origin.TelemetryContractID) && input.Origin.TelemetryContractVersion > 0
 	originCount := 0
-	for _, present := range []bool{isAssessment, isAccessibility, isDecision, isIssue, isGovernance, isRoadmap, isDataObservation, isReliability, isRecovery, isSupport, isDebugging, isDesign, isExploratory, isSecurityFinding, isRegression, isPropagation, isProvenance, isCapacity} {
+	for _, present := range []bool{isAssessment, isAccessibility, isDecision, isIssue, isGovernance, isRoadmap, isDataObservation, isReliability, isRecovery, isSupport, isDebugging, isDesign, isExploratory, isSecurityFinding, isRegression, isPropagation, isProvenance, isCapacity, isTelemetry} {
 		if present {
 			originCount++
 		}
@@ -579,6 +582,12 @@ func (s *Store) CreateImplementation(input ImplementationInput) (Proposal, []Tas
 				if task.Title != strings.TrimSpace(value.Title) || task.Outcome != strings.TrimSpace(value.Outcome) || task.Risk != strings.TrimSpace(value.Risk) || task.VerificationPlan != strings.TrimSpace(value.VerificationPlan) || task.Assignment == nil || task.Assignment.AssigneeType != value.AssigneeType || task.Assignment.AssigneeID != value.AssigneeID || !slices.Equal(task.DependencyIDs, expectedDependencies) {
 					return Proposal{}, nil, ErrImplementationConflict
 				}
+			}
+			return r.Proposal, append([]Task(nil), r.Tasks...), nil
+		}
+		if isTelemetry && r.Proposal.RepositoryID == input.RepositoryID && r.Proposal.Reasoning != nil && r.Proposal.Reasoning.TelemetryContractID == input.Origin.TelemetryContractID && r.Proposal.Reasoning.TelemetryContractVersion == input.Origin.TelemetryContractVersion {
+			if !reflect.DeepEqual(*r.Proposal.Reasoning, input.Origin) || r.Proposal.Title != title || r.Proposal.Body != body || len(r.Tasks) != len(input.Tasks) {
+				return Proposal{}, nil, ErrImplementationConflict
 			}
 			return r.Proposal, append([]Task(nil), r.Tasks...), nil
 		}

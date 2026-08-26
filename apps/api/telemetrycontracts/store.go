@@ -122,14 +122,69 @@ type Contract struct {
 	Challenges     []Challenge  `json:"challenges"`
 	Diagnostics    []Diagnostic `json:"diagnostics"`
 	Complete       bool         `json:"complete"`
+	Acceptance     *Acceptance  `json:"acceptance,omitempty"`
+	Deliveries     []Delivery   `json:"deliveries"`
 	CreatedAt      time.Time    `json:"created_at"`
 	UpdatedAt      time.Time    `json:"updated_at"`
+}
+type Acceptance struct {
+	RequestID  string    `json:"request_id"`
+	Version    int       `json:"contract_version"`
+	AcceptedBy string    `json:"accepted_by"`
+	Rationale  string    `json:"rationale"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+type Delivery struct {
+	RequestID       string    `json:"request_id"`
+	ContractVersion int       `json:"contract_version"`
+	RepositoryID    string    `json:"repository_id"`
+	ProposalID      string    `json:"proposal_id"`
+	TaskIDs         []string  `json:"task_ids"`
+	BaseRevision    string    `json:"base_revision"`
+	CreatedBy       string    `json:"created_by"`
+	CreatedAt       time.Time `json:"created_at"`
+}
+type Artifact struct {
+	Kind      string `json:"kind"`
+	Digest    string `json:"digest"`
+	SizeBytes int64  `json:"size_bytes"`
+	Summary   string `json:"summary"`
+}
+type VerificationResult struct {
+	Requirement string `json:"requirement"`
+	Outcome     string `json:"outcome"`
+	Summary     string `json:"summary"`
+}
+type Verification struct {
+	RequestID            string               `json:"request_id"`
+	RepositoryID         string               `json:"repository_id"`
+	PullRequestID        string               `json:"pull_request_id"`
+	ContractID           string               `json:"contract_id"`
+	ContractRepositoryID string               `json:"contract_repository_id"`
+	ContractVersion      int                  `json:"contract_version"`
+	Revision             string               `json:"revision"`
+	PreviewID            string               `json:"preview_id"`
+	CheckRunIDs          []string             `json:"check_run_ids"`
+	Journey              string               `json:"journey"`
+	FailureScenario      string               `json:"failure_scenario"`
+	Isolation            string               `json:"isolation"`
+	ProductionData       bool                 `json:"production_data"`
+	Results              []VerificationResult `json:"results"`
+	Artifacts            []Artifact           `json:"artifacts"`
+	Coverage             []string             `json:"coverage"`
+	CostCents            int64                `json:"cost_cents"`
+	OverheadPercent      float64              `json:"overhead_percent"`
+	AuthorType           string               `json:"author_type"`
+	AuthorID             string               `json:"author_id"`
+	CreatedAt            time.Time            `json:"created_at"`
 }
 type Store struct {
 	root string
 	mu   sync.Mutex
 	now  func() time.Time
 }
+
+var verificationRequirements = map[string]bool{"emission": true, "schema": true, "units": true, "correlation": true, "sampling": true, "redaction": true, "access": true, "performance": true, "failure_behavior": true}
 
 func New(root string) (*Store, error) {
 	if strings.TrimSpace(root) == "" {
@@ -268,6 +323,188 @@ func (s *Store) List(repo string) ([]Contract, error) {
 	})
 	sort.Slice(xs, func(i, j int) bool { return xs[i].UpdatedAt.After(xs[j].UpdatedAt) })
 	return xs, e
+}
+func (s *Store) Accept(repo, id, actor, request, rationale string, version int) (Contract, error) {
+	var out Contract
+	e := s.lock(func() error {
+		v, err := s.read(id)
+		if err != nil || v.RepositoryID != repo {
+			if err == nil {
+				return ErrNotFound
+			}
+			return err
+		}
+		if v.Acceptance != nil && v.Acceptance.RequestID == request {
+			if v.Acceptance.Version != version || v.Acceptance.AcceptedBy != actor || v.Acceptance.Rationale != strings.TrimSpace(rationale) {
+				return ErrConflict
+			}
+			out = v
+			return nil
+		}
+		if request == "" || strings.TrimSpace(rationale) == "" || version != v.CurrentVersion || !project(v).Complete {
+			return ErrInvalid
+		}
+		v.Acceptance = &Acceptance{RequestID: request, Version: version, AcceptedBy: actor, Rationale: strings.TrimSpace(rationale), CreatedAt: s.now()}
+		v.UpdatedAt = s.now()
+		out = v
+		return s.write(v)
+	})
+	return project(out), e
+}
+func (s *Store) RecordDelivery(repo, id string, d Delivery) (Contract, error) {
+	var out Contract
+	e := s.lock(func() error {
+		v, err := s.read(id)
+		if err != nil || v.RepositoryID != repo {
+			if err == nil {
+				return ErrNotFound
+			}
+			return err
+		}
+		for _, old := range v.Deliveries {
+			if old.RequestID == d.RequestID {
+				old.CreatedAt = time.Time{}
+				candidate := d
+				candidate.CreatedAt = time.Time{}
+				if semanticDigest(old) != semanticDigest(candidate) {
+					return ErrConflict
+				}
+				out = v
+				return nil
+			}
+		}
+		if d.RequestID == "" || d.RepositoryID == "" || d.ProposalID == "" || len(d.TaskIDs) == 0 || len(d.BaseRevision) != 40 || v.Acceptance == nil || d.ContractVersion != v.Acceptance.Version {
+			return ErrInvalid
+		}
+		d.CreatedAt = s.now()
+		v.Deliveries = append(v.Deliveries, d)
+		v.UpdatedAt = s.now()
+		out = v
+		return s.write(v)
+	})
+	return project(out), e
+}
+func (s *Store) AddVerification(repo, actorType, actorID string, v Verification) (Verification, error) {
+	var out Verification
+	e := s.lock(func() error {
+		xs, err := s.readVerifications(repo)
+		if err != nil {
+			return err
+		}
+		for _, old := range xs {
+			if old.RequestID == v.RequestID {
+				old = verificationIdentity(old)
+				candidate := verificationIdentity(v)
+				if semanticDigest(old) != semanticDigest(candidate) {
+					return ErrConflict
+				}
+				out = old
+				return nil
+			}
+		}
+		contract, err := s.read(v.ContractID)
+		if err != nil || contract.RepositoryID != v.ContractRepositoryID || contract.Acceptance == nil || contract.Acceptance.Version != v.ContractVersion {
+			return ErrInvalid
+		}
+		if v.RequestID == "" || v.PullRequestID == "" || len(v.Revision) != 40 || v.PreviewID == "" || len(v.CheckRunIDs) == 0 || v.Journey == "" || v.FailureScenario == "" || v.Isolation != "ephemeral_network_none" || v.ProductionData || v.CostCents < 0 || v.OverheadPercent < 0 || len(v.Results) == 0 {
+			return ErrInvalid
+		}
+		seen := map[string]bool{}
+		v.Coverage = []string{}
+		for i := range v.Results {
+			x := &v.Results[i]
+			if !verificationRequirements[x.Requirement] || seen[x.Requirement] || (x.Outcome != "passed" && x.Outcome != "failed") {
+				return ErrInvalid
+			}
+			seen[x.Requirement] = true
+			v.Coverage = append(v.Coverage, x.Requirement)
+			x.Summary = x.Requirement + " " + x.Outcome + " in isolated synthetic verification"
+		}
+		if len(seen) != len(verificationRequirements) {
+			return ErrInvalid
+		}
+		sort.Strings(v.Coverage)
+		for i := range v.Artifacts {
+			a := &v.Artifacts[i]
+			if !map[string]bool{"signal": true, "log": true, "trace": true, "coverage": true, "cost": true, "contract_diff": true}[a.Kind] || len(a.Digest) != 64 || a.SizeBytes < 0 || a.SizeBytes > 5<<20 {
+				return ErrInvalid
+			}
+			if _, err := hex.DecodeString(a.Digest); err != nil {
+				return ErrInvalid
+			}
+			a.Summary = "sanitized " + a.Kind + " metadata retained; payload omitted"
+		}
+		v.RepositoryID = repo
+		v.AuthorType = actorType
+		v.AuthorID = actorID
+		v.CreatedAt = s.now()
+		xs = append(xs, v)
+		if err = s.writeVerifications(repo, xs); err != nil {
+			return err
+		}
+		out = v
+		return nil
+	})
+	return out, e
+}
+
+func verificationIdentity(v Verification) Verification {
+	v.CreatedAt = time.Time{}
+	v.AuthorType = ""
+	v.AuthorID = ""
+	v.RepositoryID = ""
+	v.Coverage = nil
+	for i := range v.Results {
+		v.Results[i].Summary = ""
+	}
+	for i := range v.Artifacts {
+		v.Artifacts[i].Summary = ""
+	}
+	return v
+}
+func (s *Store) Verifications(repo, pull string) ([]Verification, error) {
+	var out []Verification
+	e := s.lock(func() error {
+		xs, err := s.readVerifications(repo)
+		if err != nil {
+			return err
+		}
+		for _, v := range xs {
+			if v.PullRequestID == pull {
+				out = append(out, v)
+			}
+		}
+		return nil
+	})
+	return out, e
+}
+func (s *Store) readVerifications(repo string) ([]Verification, error) {
+	b, err := os.ReadFile(filepath.Join(s.root, "verifications", repo+".json"))
+	if errors.Is(err, os.ErrNotExist) {
+		return []Verification{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var xs []Verification
+	err = json.Unmarshal(b, &xs)
+	return xs, err
+}
+func (s *Store) writeVerifications(repo string, xs []Verification) error {
+	dir := filepath.Join(s.root, "verifications")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	b, err := json.MarshalIndent(xs, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, repo+".json"), b, 0600)
+}
+func semanticDigest(v any) string {
+	b, _ := json.Marshal(v)
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
 }
 func validate(r Revision) error {
 	if r.GapID == "" || r.GapVersion < 1 || r.Title == "" || len(r.Signals) == 0 || len(r.OwnerIDs) == 0 || len(r.ConsumerIDs) == 0 || len(r.SupportedCollectors) == 0 || r.Impact.Privacy == "" || r.Impact.Security == "" || r.Impact.Residency == "" || r.Impact.Performance == "" || r.Impact.Cardinality < 0 || r.Impact.StorageBytesPerDay < 0 || r.Impact.MonthlyCostCents < 0 {
