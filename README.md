@@ -100,6 +100,11 @@ documentation, workflow, policy, infrastructure, or human/agent code work, and p
 reviewed successor that must be rehearsed anew. Unsafe current use can be suspended only with
 a passing exact fallback, while every prior execution remains bound to the version it used.
 
+The `operational-runbook-journey.spec.ts` browser/API/stock-Git journey connects that full lifecycle:
+reviewed operational knowledge is rehearsed by a human and approved agent, launched only from an
+authoritatively verified revision-exact alert, executed through approval and handoff, assessed, improved
+through an ordinary reviewed pull, published as a successor, and proven again with fresh rehearsal.
+
 Repository participants and scoped read-only agents can turn an exact objective into
 an immutable, permission-aware capacity model at `/repositories/{id}/capacity-models`.
 The Capacity workspace exposes release-bound sanitized evidence, observation windows,

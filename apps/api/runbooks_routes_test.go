@@ -5,6 +5,8 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/responsealerts"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/responsepolicies"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/runbooks"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/users"
@@ -68,6 +70,89 @@ func TestRunbookAPI(t *testing.T) {
 	}
 	if !kinds["precondition_not_met"] || !kinds["access_unavailable"] {
 		t.Fatalf("blockers=%+v", execution.Blockers)
+	}
+}
+
+func TestVerifyAlertRunbookLaunchRequiresCompleteResourceBinding(t *testing.T) {
+	now := time.Now().UTC()
+	alerts, err := responsealerts.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := responsepolicies.Policy{ID: "policy", RepositoryID: "repo", Revisions: []responsepolicies.Revision{{Version: 1, Rules: []responsepolicies.Rule{{ID: "rule", ResourceIDs: []string{"checkout"}, SignalClass: "reliability", Severity: "high", AccountableTeamID: "ops", AcknowledgeSeconds: 60, ResolveSeconds: 600}}}}}
+	signal := responsealerts.Signal{SignalClass: "reliability", Severity: "high", ResourceIDs: []string{"checkout"}, Summary: "degraded", Uncertainty: "sampled", OccurredAt: now, SourceRevision: "0123456789012345678901234567890123456789", Evidence: []responsealerts.Evidence{{Kind: "metric", ResourceID: "checkout", Revision: "sample", Digest: "sha256:alert", Summary: "bounded", Available: true}}}
+	alert, err := alerts.Create("repo", "source", "request", signal, policy, []string{"operator"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	book := runbooks.Runbook{RepositoryID: "repo", Revisions: []runbooks.Revision{{Preconditions: []string{"Exact alert remains active"}}}}
+	context := runbooks.ExecutionContext{OriginKind: "alert", OriginID: alert.ID, OriginRevision: signal.SourceRevision, AffectedResources: []string{"checkout"}, WindowFrom: now.Add(-time.Minute), WindowTo: now.Add(time.Minute)}
+	preconditions, access := verifyAlertRunbookLaunch(alerts, book, 1, context)
+	if len(preconditions) != 1 || len(access) != 1 {
+		t.Fatalf("exact alert binding was not verified: preconditions=%+v access=%+v", preconditions, access)
+	}
+	context.AffectedResources = append(context.AffectedResources, "billing")
+	preconditions, access = verifyAlertRunbookLaunch(alerts, book, 1, context)
+	if len(preconditions) != 0 || len(access) != 0 {
+		t.Fatalf("mixed-resource context inherited alert readiness: preconditions=%+v access=%+v", preconditions, access)
+	}
+	context.AffectedResources = []string{"checkout"}
+	context.OriginID = alert.ID
+	_, err = alerts.ReviewOutcome(alert.ID, "owner", responsealerts.OutcomeReviewInput{RequestID: "pause", Classification: "actionable", RoutingAction: "pause", Rationale: "pause unsafe routing"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preconditions, access = verifyAlertRunbookLaunch(alerts, book, 1, context)
+	if len(preconditions) != 0 || len(access) != 0 {
+		t.Fatalf("outcome-paused alert inherited readiness: preconditions=%+v access=%+v", preconditions, access)
+	}
+	_, err = alerts.ReviewOutcome(alert.ID, "owner", responsealerts.OutcomeReviewInput{RequestID: "resume", Classification: "actionable", RoutingAction: "resume", Rationale: "resume corrected routing"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preconditions, access = verifyAlertRunbookLaunch(alerts, book, 1, context)
+	if len(preconditions) != 1 || len(access) != 1 {
+		t.Fatalf("resumed alert was not verified: preconditions=%+v access=%+v", preconditions, access)
+	}
+	create := func(request string, value responsealerts.Signal, directive string) responsealerts.Alert {
+		t.Helper()
+		var created responsealerts.Alert
+		var createErr error
+		if directive == "" {
+			created, createErr = alerts.Create("repo", "source", request, value, policy, []string{"operator"})
+		} else {
+			created, createErr = alerts.CreateControlled("repo", "source", request, value, policy, []string{"operator"}, directive)
+		}
+		if createErr != nil {
+			t.Fatal(createErr)
+		}
+		return created
+	}
+	acknowledged := create("acknowledged", signal, "")
+	acknowledged, err = alerts.Append(acknowledged.ID, "ack", "acknowledge", "operator", "owned", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	suppressedSignal := signal
+	suppressedUntil := now.Add(time.Hour)
+	suppressedSignal.SuppressedUntil = &suppressedUntil
+	suppressed := create("suppressed", suppressedSignal, "")
+	maintenanceSignal := signal
+	maintenanceEndsAt := now.Add(time.Hour)
+	maintenanceSignal.MaintenanceEndsAt = &maintenanceEndsAt
+	maintenance := create("maintenance", maintenanceSignal, "")
+	paused := create("paused", signal, "pause")
+	resolved := create("resolved", signal, "")
+	resolved, err = alerts.Append(resolved.ID, "resolve", "resolve", "operator", "recovered", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, inactive := range []responsealerts.Alert{acknowledged, suppressed, maintenance, paused, resolved} {
+		context.OriginID = inactive.ID
+		preconditions, access = verifyAlertRunbookLaunch(alerts, book, 1, context)
+		if len(preconditions) != 0 || len(access) != 0 {
+			t.Fatalf("inactive alert state %q inherited readiness: preconditions=%+v access=%+v", inactive.State, preconditions, access)
+		}
 	}
 }
 

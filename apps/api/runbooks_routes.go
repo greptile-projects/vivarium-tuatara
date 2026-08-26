@@ -4,12 +4,14 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/organizations"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/proposals"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/responsealerts"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/runbooks"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/storage"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/workflowcomponents"
@@ -20,6 +22,46 @@ type runbookInput struct {
 	ExpectedVersion int               `json:"expected_version"`
 	Revision        runbooks.Revision `json:"revision"`
 }
+
+func verifyAlertRunbookLaunch(alerts *responsealerts.Store, book runbooks.Runbook, version int, context runbooks.ExecutionContext) ([]runbooks.Preconditions, []string) {
+	if alerts == nil || context.OriginKind != "alert" || version < 1 || version > len(book.Revisions) {
+		return nil, nil
+	}
+	alert, err := alerts.Get(context.OriginID)
+	if err != nil || alert.RepositoryID != book.RepositoryID || alert.State != "open" || alert.Signal.SourceRevision != context.OriginRevision {
+		return nil, nil
+	}
+	routingDirective, err := alerts.RoutingDirectiveChecked(book.RepositoryID, alert.RuleID)
+	if err != nil || routingDirective == "pause" {
+		return nil, nil
+	}
+	alertResources := make(map[string]struct{}, len(alert.Signal.ResourceIDs))
+	for _, resource := range alert.Signal.ResourceIDs {
+		alertResources[resource] = struct{}{}
+	}
+	for _, affected := range context.AffectedResources {
+		if _, covered := alertResources[affected]; !covered {
+			return nil, nil
+		}
+	}
+	if context.WindowFrom.After(alert.Signal.OccurredAt) || context.WindowTo.Before(alert.Signal.OccurredAt) {
+		return nil, nil
+	}
+	digest := ""
+	if len(alert.Signal.Evidence) > 0 {
+		digest = alert.Signal.Evidence[0].Digest
+	}
+	preconditions := make([]runbooks.Preconditions, 0, len(book.Revisions[version-1].Preconditions))
+	for _, condition := range book.Revisions[version-1].Preconditions {
+		// Free-form operational claims cannot be inferred from an alert. Only the
+		// platform-defined alert liveness precondition has an authoritative proof.
+		if strings.EqualFold(strings.TrimSpace(condition), "exact alert remains active") {
+			preconditions = append(preconditions, runbooks.Preconditions{Condition: condition, Status: "met", EvidenceDigest: digest})
+		}
+	}
+	return preconditions, []string{"repository:read"}
+}
+
 type runbookRehearsalInput struct {
 	RequestID              string              `json:"request_id"`
 	RunbookVersion         int                 `json:"runbook_version"`
@@ -48,7 +90,7 @@ type runbookImprovementInput struct {
 	DueAt        time.Time `json:"due_at"`
 }
 
-func registerRunbookRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, store *runbooks.Store, workflows *workflowcomponents.Store, orgs *organizations.Store, proposalStore *proposals.Store) {
+func registerRunbookRoutes(mux *http.ServeMux, git *storage.Store, catalog *repositories.Store, credentials *auth.Store, store *runbooks.Store, workflows *workflowcomponents.Store, orgs *organizations.Store, proposalStore *proposals.Store, alerts *responsealerts.Store) {
 	mux.HandleFunc("POST /repositories/{id}/runbook-recommendations", func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:read"); !ok {
 			return
@@ -329,10 +371,12 @@ func registerRunbookRoutes(mux *http.ServeMux, git *storage.Store, catalog *repo
 			writeAPIError(w, 400, "invalid_runbook_execution", "a caller-stable exact context and explicit safety decisions are required")
 			return
 		}
-		// Preconditions and resource access are caller observations, not authority.
-		// Until an authoritative adapter verifies them, retain the execution with
-		// explicit blockers instead of allowing request values to create readiness.
-		out, err := store.StartExecution(book.ID, actor.UserID, in.RequestID, in.RunbookVersion, in.Context, nil, nil)
+		// Caller assertions never establish readiness. An exact live alert can,
+		// however, prove the alert-bound precondition and repository-read access
+		// from authoritative stores. Operational access remains unavailable unless
+		// a future verifier owns that authority source.
+		verifiedPreconditions, verifiedAccess := verifyAlertRunbookLaunch(alerts, book, in.RunbookVersion, in.Context)
+		out, err := store.StartExecution(book.ID, actor.UserID, in.RequestID, in.RunbookVersion, in.Context, verifiedPreconditions, verifiedAccess)
 		switch {
 		case err == nil:
 			writeJSON(w, 201, out)

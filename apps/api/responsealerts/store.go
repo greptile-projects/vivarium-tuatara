@@ -484,6 +484,14 @@ func (s *Store) LinkOutcomeWork(id, actor, requestID, proposalID, taskID string)
 }
 
 func (s *Store) RoutingDirective(repo, rule string) string {
+	directive, _ := s.RoutingDirectiveChecked(repo, rule)
+	return directive
+}
+
+// RoutingDirectiveChecked returns the newest durable routing control while
+// preserving storage failures for authority-sensitive callers that must fail
+// closed rather than treating an unreadable directive as a resume.
+func (s *Store) RoutingDirectiveChecked(repo, rule string) (string, error) {
 	var values []Alert
 	err := s.lock(func() error {
 		if err := s.ensureOutcomeSequences(repo); err != nil {
@@ -494,7 +502,7 @@ func (s *Store) RoutingDirective(repo, rule string) string {
 		return listErr
 	})
 	if err != nil {
-		return ""
+		return "", err
 	}
 	var latest *OutcomeReview
 	for _, v := range values {
@@ -513,12 +521,12 @@ func (s *Store) RoutingDirective(repo, rule string) string {
 		}
 	}
 	if latest == nil || latest.RoutingAction == "resume" {
-		return ""
+		return "", nil
 	}
 	if latest.RoutingAction == "activate_backup" {
-		return "backup"
+		return "backup", nil
 	}
-	return "pause"
+	return "pause", nil
 }
 
 type outcomeSequenceCandidate struct {
