@@ -101,6 +101,26 @@ func registerResponsePolicyRoutes(mux *http.ServeMux, catalog *repositories.Stor
 		}
 		return responsepolicies.ProjectRotation(value, current, time.Now().UTC())
 	}
+	currentTeamMembers := func(rotation responsepolicies.Rotation) (map[string]bool, error) {
+		if len(rotation.Revisions) == 0 {
+			return nil, responsepolicies.ErrInvalid
+		}
+		revision := rotation.Revisions[len(rotation.Revisions)-1]
+		policy, err := store.Get(revision.PolicyID)
+		if err != nil || policy.RepositoryID != rotation.RepositoryID || len(policy.Revisions) == 0 {
+			return nil, responsepolicies.ErrInvalid
+		}
+		members := map[string]bool{}
+		for _, team := range policy.Revisions[len(policy.Revisions)-1].Teams {
+			if team.ID == revision.TeamID {
+				for _, id := range team.MemberIDs {
+					members[id] = true
+				}
+				return members, nil
+			}
+		}
+		return nil, responsepolicies.ErrInvalid
+	}
 	mux.HandleFunc("GET /repositories/{id}/response-rotations", func(w http.ResponseWriter, r *http.Request) {
 		actor, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id"))
 		if !ok {
@@ -199,6 +219,11 @@ func registerResponsePolicyRoutes(mux *http.ServeMux, catalog *repositories.Stor
 			writeAPIError(w, 404, "response_rotation_not_found", "response rotation not found")
 			return
 		}
+		members, membershipErr := currentTeamMembers(current)
+		if membershipErr != nil || !members[actor.UserID] || (in.ToUserID != "" && !members[in.ToUserID]) {
+			writeAPIError(w, 403, "response_rotation_forbidden", "duty events require current accountable-team membership")
+			return
+		}
 		participants := []string{actor.UserID}
 		if in.ToUserID != "" {
 			participants = append(participants, in.ToUserID)
@@ -224,6 +249,11 @@ func registerResponsePolicyRoutes(mux *http.ServeMux, catalog *repositories.Stor
 		current, err := store.GetRotation(r.PathValue("rotation_id"))
 		if err != nil || current.RepositoryID != r.PathValue("id") {
 			writeAPIError(w, 404, "response_rotation_not_found", "response rotation not found")
+			return
+		}
+		members, membershipErr := currentTeamMembers(current)
+		if membershipErr != nil || !members[actor.UserID] {
+			writeAPIError(w, 403, "response_rotation_forbidden", "duty acceptance requires current accountable-team membership")
 			return
 		}
 		var out responsepolicies.Rotation

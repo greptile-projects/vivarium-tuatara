@@ -81,3 +81,50 @@ func TestRotationRetryAndRevokedParticipantProjection(t *testing.T) {
 		t.Fatalf("diagnostics=%+v", projected.Diagnostics)
 	}
 }
+
+func TestPendingTransferCannotCrossRotationRevision(t *testing.T) {
+	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
+	s, _ := New(t.TempDir())
+	s.now = func() time.Time { return now }
+	revision := rotationFixture(now)
+	availability := revision.Responders[0].Availability
+	revision.Responders = append(revision.Responders, Responder{UserID: "charlie", Qualifications: []string{"incident lead"}, Availability: availability, MaxShifts: 2})
+	r, err := s.CreateRotation("repo", "alice", "create-stale", revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	context := []DutyContext{{Kind: "active_alert", ResourceID: "alert-1", Revision: "rev-7", Summary: "Elevated latency"}}
+	r, err = s.AppendDutyEvent(r.ID, "alice", "pending", "delegate", "day-2", "bob", "handoff", context, r.EventVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revision.Shifts[1].PrimaryUserID = "charlie"
+	revision.Shifts[1].BackupUserIDs = []string{"bob"}
+	revision.ChangeReason = "reassign successor"
+	r, err = s.ReviseRotation(r.ID, r.CurrentVersion, "alice", "revision-2", revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.AcceptDutyEvent(r.ID, r.Events[0].ID, "bob", r.EventVersion); err != ErrInvalid {
+		t.Fatalf("stale acceptance=%v", err)
+	}
+	projected := ProjectRotation(r, map[string]bool{"alice": true, "bob": true, "charlie": true}, now)
+	if projected.EffectiveOwnerByShift["day-2"] != "charlie" {
+		t.Fatalf("owners=%+v", projected.EffectiveOwnerByShift)
+	}
+}
+
+func TestWeeklyWorkloadIsBucketedInRotationTimeZone(t *testing.T) {
+	now := time.Date(2026, 1, 5, 12, 0, 0, 0, time.UTC)
+	revision := rotationFixture(now)
+	revision.TimeZone = "UTC"
+	revision.Responders[0].MaxShifts = 1
+	revision.Shifts = []Shift{{ID: "week-2", StartsAt: time.Date(2026, 1, 5, 9, 0, 0, 0, time.UTC), EndsAt: time.Date(2026, 1, 5, 10, 0, 0, 0, time.UTC), PrimaryUserID: "alice", BackupUserIDs: []string{"bob"}, RequiredQualifications: []string{"incident lead"}}, {ID: "week-3", StartsAt: time.Date(2026, 1, 12, 9, 0, 0, 0, time.UTC), EndsAt: time.Date(2026, 1, 12, 10, 0, 0, 0, time.UTC), PrimaryUserID: "alice", BackupUserIDs: []string{"bob"}, RequiredQualifications: []string{"incident lead"}}}
+	v := Rotation{CurrentVersion: 1, Revisions: []RotationRevision{revision}}
+	projected := ProjectRotation(v, map[string]bool{"alice": true, "bob": true}, now)
+	for _, diagnostic := range projected.Diagnostics {
+		if diagnostic.Kind == "workload_exceeded" {
+			t.Fatalf("diagnostics=%+v", projected.Diagnostics)
+		}
+	}
+}

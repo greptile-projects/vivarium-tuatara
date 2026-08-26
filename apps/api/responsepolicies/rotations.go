@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -58,19 +59,20 @@ type DutyContext struct {
 	Summary    string `json:"summary"`
 }
 type DutyEvent struct {
-	ID         string        `json:"id"`
-	RequestID  string        `json:"request_id"`
-	Kind       string        `json:"kind"`
-	ShiftID    string        `json:"shift_id"`
-	FromUserID string        `json:"from_user_id,omitempty"`
-	ToUserID   string        `json:"to_user_id,omitempty"`
-	Context    []DutyContext `json:"context"`
-	Reason     string        `json:"reason,omitempty"`
-	Status     string        `json:"status"`
-	CreatedBy  string        `json:"created_by"`
-	CreatedAt  time.Time     `json:"created_at"`
-	AcceptedBy string        `json:"accepted_by,omitempty"`
-	AcceptedAt *time.Time    `json:"accepted_at,omitempty"`
+	ID              string        `json:"id"`
+	RequestID       string        `json:"request_id"`
+	Kind            string        `json:"kind"`
+	ShiftID         string        `json:"shift_id"`
+	FromUserID      string        `json:"from_user_id,omitempty"`
+	ToUserID        string        `json:"to_user_id,omitempty"`
+	Context         []DutyContext `json:"context"`
+	Reason          string        `json:"reason,omitempty"`
+	Status          string        `json:"status"`
+	CreatedBy       string        `json:"created_by"`
+	CreatedAt       time.Time     `json:"created_at"`
+	AcceptedBy      string        `json:"accepted_by,omitempty"`
+	AcceptedAt      *time.Time    `json:"accepted_at,omitempty"`
+	RotationVersion int           `json:"rotation_version"`
 }
 type DutyDiagnostic struct {
 	Kind       string `json:"kind"`
@@ -81,17 +83,18 @@ type DutyDiagnostic struct {
 	Escalation string `json:"escalation"`
 }
 type Rotation struct {
-	ID             string             `json:"id"`
-	RepositoryID   string             `json:"repository_id"`
-	RequestID      string             `json:"request_id"`
-	RequestDigest  string             `json:"request_digest"`
-	CurrentVersion int                `json:"current_version"`
-	EventVersion   int                `json:"event_version"`
-	Revisions      []RotationRevision `json:"revisions"`
-	Events         []DutyEvent        `json:"events"`
-	Diagnostics    []DutyDiagnostic   `json:"diagnostics"`
-	CreatedAt      time.Time          `json:"created_at"`
-	UpdatedAt      time.Time          `json:"updated_at"`
+	ID                    string             `json:"id"`
+	RepositoryID          string             `json:"repository_id"`
+	RequestID             string             `json:"request_id"`
+	RequestDigest         string             `json:"request_digest"`
+	CurrentVersion        int                `json:"current_version"`
+	EventVersion          int                `json:"event_version"`
+	Revisions             []RotationRevision `json:"revisions"`
+	Events                []DutyEvent        `json:"events"`
+	Diagnostics           []DutyDiagnostic   `json:"diagnostics"`
+	EffectiveOwnerByShift map[string]string  `json:"effective_owner_by_shift,omitempty"`
+	CreatedAt             time.Time          `json:"created_at"`
+	UpdatedAt             time.Time          `json:"updated_at"`
 }
 
 func (s *Store) CreateRotation(repositoryID, actor, requestID string, revision RotationRevision) (Rotation, error) {
@@ -241,7 +244,7 @@ func (s *Store) AppendDutyEvent(id, actor, requestID, kind, shiftID, to, reason 
 		if kind != "acknowledge" {
 			status = "pending"
 		}
-		event := DutyEvent{ID: stableEventID(id, requestID), RequestID: requestID, Kind: kind, ShiftID: shiftID, FromUserID: effective, ToUserID: to, Context: context, Reason: reason, Status: status, CreatedBy: actor, CreatedAt: now}
+		event := DutyEvent{ID: stableEventID(id, requestID), RequestID: requestID, Kind: kind, ShiftID: shiftID, FromUserID: effective, ToUserID: to, Context: context, Reason: reason, Status: status, CreatedBy: actor, CreatedAt: now, RotationVersion: v.CurrentVersion}
 		if kind == "acknowledge" {
 			event.AcceptedBy = actor
 			event.AcceptedAt = &now
@@ -279,7 +282,8 @@ func (s *Store) AcceptDutyEvent(id, eventID, actor string, expected int) (Rotati
 			return ErrInvalid
 		}
 		r := v.Revisions[len(v.Revisions)-1]
-		if !rotationMember(r, actor) {
+		shift, found := findShift(r, event.ShiftID)
+		if !rotationMember(r, actor) || !found || event.RotationVersion != v.CurrentVersion || event.FromUserID != effectiveOwner(v, shift) {
 			return ErrInvalid
 		}
 		now := s.now()
@@ -300,12 +304,20 @@ func ProjectRotation(v Rotation, current map[string]bool, now time.Time) Rotatio
 	}
 	r := v.Revisions[len(v.Revisions)-1]
 	d := []DutyDiagnostic{}
-	counts := map[string]int{}
+	counts := map[string]map[string]int{}
+	v.EffectiveOwnerByShift = map[string]string{}
+	location, _ := time.LoadLocation(r.TimeZone)
 	shifts := append([]Shift(nil), r.Shifts...)
 	sort.Slice(shifts, func(i, j int) bool { return shifts[i].StartsAt.Before(shifts[j].StartsAt) })
 	for i, shift := range shifts {
 		owner := effectiveOwner(v, shift)
-		counts[owner]++
+		v.EffectiveOwnerByShift[shift.ID] = owner
+		year, week := shift.StartsAt.In(location).ISOWeek()
+		weekKey := fmt.Sprintf("%04d-W%02d", year, week)
+		if counts[owner] == nil {
+			counts[owner] = map[string]int{}
+		}
+		counts[owner][weekKey]++
 		if !current[owner] {
 			d = append(d, dutyDiag("unavailable_responder", "blocking", "The assigned responder is no longer a current repository participant.", shift.ID, owner))
 		}
@@ -328,10 +340,12 @@ func ProjectRotation(v Rotation, current map[string]bool, now time.Time) Rotatio
 			d = append(d, dutyDiag("missed_handoff", "blocking", "The shift ended without an acknowledged handoff.", shift.ID, owner))
 		}
 	}
-	for user, n := range counts {
+	for user, weeks := range counts {
 		resp, _ := findResponder(r, user)
-		if resp.MaxShifts > 0 && n > resp.MaxShifts {
-			d = append(d, dutyDiag("workload_exceeded", "warning", "The published schedule exceeds the responder workload limit.", "", user))
+		for week, n := range weeks {
+			if resp.MaxShifts > 0 && n > resp.MaxShifts {
+				d = append(d, dutyDiag("workload_exceeded", "warning", "The published schedule exceeds the responder workload limit for "+week+".", "", user))
+			}
 		}
 	}
 	v.Diagnostics = d
@@ -469,7 +483,7 @@ func rotationMember(r RotationRevision, id string) bool { _, ok := findResponder
 func effectiveOwner(v Rotation, shift Shift) string {
 	owner := shift.PrimaryUserID
 	for _, e := range v.Events {
-		if e.ShiftID == shift.ID && e.Status == "accepted" && (e.Kind == "swap" || e.Kind == "delegate" || e.Kind == "override") {
+		if e.RotationVersion == v.CurrentVersion && e.ShiftID == shift.ID && e.Status == "accepted" && (e.Kind == "swap" || e.Kind == "delegate" || e.Kind == "override") {
 			owner = e.ToUserID
 		}
 	}
