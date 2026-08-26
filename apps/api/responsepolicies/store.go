@@ -19,6 +19,7 @@ var ErrNotFound = errors.New("response policy not found")
 var ErrInvalid = errors.New("invalid response policy")
 var ErrConflict = errors.New("response policy version conflict")
 var ErrCommitted = errors.New("response policy may have committed")
+var ErrForbidden = errors.New("response policy action forbidden")
 
 type Resource struct {
 	ID              string   `json:"id"`

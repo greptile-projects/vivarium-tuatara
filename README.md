@@ -46,6 +46,10 @@ Repository writers publish immutable urgent-response coverage at
 signals and severities to teams, skills, targets, escalation, audiences, incident
 criteria, and explicit authority boundaries. Coverage, ownership, skill, timing, and
 exception gaps remain visible before an alert arrives.
+The same workspace publishes policy-bound response rotations with time zones, availability,
+qualifications, backups, workload and absence constraints; responders can acknowledge duty
+and explicitly accept context-preserving swaps, delegations, and overrides. Membership,
+schedule, qualification, workload, and handoff gaps remain actionable without minting access.
 
 Repository participants and scoped read-only agents can turn an exact objective into
 an immutable, permission-aware capacity model at `/repositories/{id}/capacity-models`.

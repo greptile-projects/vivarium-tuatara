@@ -4415,3 +4415,21 @@ in that pull's ordinary check scope. Revision-bound review and integration-queue
 usual. Concurrent or superseded branch movement, input movement, withdrawn acceptance, or an occupied resolution
 branch retains `action_required` instead of overwriting either contribution. Current destination-repository
 membership is required; workspace access grants no publication authority.
+# Response duty rotations
+
+`GET /repositories/{id}/response-rotations` and
+`GET /repositories/{id}/response-rotations/{rotation_id}` return immutable policy-bound
+schedule revisions, append-only duty events, and current diagnostics. Repository writers
+publish and revise complete rotations at the matching collection and `/revisions` POST
+routes using caller-stable `request_id` and optimistic `expected_version` values. Rotations
+declare time zone, availability, qualifications, handoff window, backups, workload limits,
+absence rules, and exact shifts.
+
+Current participants append acknowledgement, swap, delegation, or override proposals at
+`POST .../{rotation_id}/duty-events`. Transfer proposals require a named current recipient,
+reason, and typed exact-revision active-context references. Only that recipient can accept
+at `POST .../duty-events/{event_id}/accept`; acceptance atomically changes projected duty.
+Reads expose removed participants, missing qualifications, overlaps, uncovered intervals,
+workload breaches, and missed handoffs as escalation. These records coordinate duty and
+grant no repository, secret, deployment, disclosure, incident, spending, governance, or
+operational authority.
