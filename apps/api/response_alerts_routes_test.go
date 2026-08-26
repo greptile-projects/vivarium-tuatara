@@ -24,7 +24,7 @@ func TestResponseOutcomeReportHonorsConsentAndAutomaticContainment(t *testing.T)
 	if automaticResponseRoutingDirective(store, "repo", "rule", true, now) != "backup" {
 		t.Fatal("missed acknowledgements did not activate a declared backup")
 	}
-	review := responsealerts.OutcomeReviewInput{RequestID: "review", Classification: "false_positive", InterruptionMinutes: 18, ResponderLoadConsent: false, UserOutcomeConsent: false, AgentCost: 4, Rationale: "noise"}
+	review := responsealerts.OutcomeReviewInput{RequestID: "review", Classification: "false_positive", ResponderLoadConsent: false, UserOutcomeConsent: false, AgentCost: 4, Rationale: "noise"}
 	if _, err := store.ReviewOutcome(values[0].ID, "owner", review, true); err != nil {
 		t.Fatal(err)
 	}
@@ -63,6 +63,13 @@ func TestResponseAlertFallbackVisibilityRequiresRepositoryOwner(t *testing.T) {
 	routed := responsealerts.Alert{State: "open", Routing: []responsealerts.Delivery{{RecipientID: "responder"}}}
 	if !alertVisible(routed, "responder", false) || alertVisible(routed, "outsider", false) {
 		t.Fatal("routing audience visibility is incorrect")
+	}
+}
+
+func TestRoutingPausedAlertFallbackVisibilityRequiresOwner(t *testing.T) {
+	paused := responsealerts.Alert{State: "routing_paused"}
+	if !alertVisible(paused, "owner", true) || alertVisible(paused, "reader", false) {
+		t.Fatal("routing pause was hidden from its owner or disclosed to a reader")
 	}
 }
 

@@ -80,6 +80,11 @@ func registerResponseAlertRoutes(mux *http.ServeMux, catalog *repositories.Store
 			writeAPIError(w, 400, "invalid_response_outcome", "the outcome review is incomplete or includes non-consented data")
 			return
 		}
+		out, reviewErr := alerts.ReviewOutcome(current.ID, actor.UserID, in.OutcomeReviewInput, true)
+		if reviewErr != nil {
+			writeResponseAlert(w, out, reviewErr, 201)
+			return
+		}
 		if in.Work != nil {
 			if proposalStore == nil || (in.Work.Kind != "reliability" && in.Work.Kind != "documentation" && in.Work.Kind != "automation" && in.Work.Kind != "staffing") {
 				writeAPIError(w, 400, "invalid_response_work", "linked work must be reliability, documentation, automation, or staffing work")
@@ -90,9 +95,12 @@ func registerResponseAlertRoutes(mux *http.ServeMux, catalog *repositories.Store
 				writeAPIError(w, 409, "response_work_conflict", "ordinary linked work could not be reconciled")
 				return
 			}
-			in.ProposalID, in.TaskID = p.ID, task.ID
+			out, reviewErr = alerts.LinkOutcomeWork(current.ID, actor.UserID, in.RequestID, p.ID, task.ID)
+			if reviewErr != nil {
+				writeResponseAlert(w, out, reviewErr, 201)
+				return
+			}
 		}
-		out, reviewErr := alerts.ReviewOutcome(current.ID, actor.UserID, in.OutcomeReviewInput, true)
 		writeResponseAlert(w, out, reviewErr, 201)
 	})
 	mux.HandleFunc("GET /repositories/{id}/response-alerts", func(w http.ResponseWriter, r *http.Request) {
@@ -396,7 +404,7 @@ func alertVisible(v responsealerts.Alert, user string, repositoryOwner bool) boo
 			return true
 		}
 	}
-	if repositoryOwner && (responseAlertContains(v.Diagnostics, "delivery_failed") || v.State == "suppressed" || v.State == "maintenance") {
+	if repositoryOwner && (responseAlertContains(v.Diagnostics, "delivery_failed") || v.State == "suppressed" || v.State == "maintenance" || v.State == "routing_paused") {
 		return true
 	}
 	return false

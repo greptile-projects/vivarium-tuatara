@@ -350,10 +350,42 @@ func (s *Store) ReviewOutcome(id, actor string, in OutcomeReviewInput, allowed b
 func ValidateOutcomeReview(in OutcomeReviewInput) error {
 	validCorrection := in.CorrectionKind == "" || in.CorrectionKind == "signal" || in.CorrectionKind == "routing"
 	validRouting := in.RoutingAction == "" || in.RoutingAction == "pause" || in.RoutingAction == "activate_backup" || in.RoutingAction == "resume"
-	if in.RequestID == "" || strings.TrimSpace(in.Rationale) == "" || !validClassification(in.Classification) || !validCorrection || !validRouting || in.InterruptionMinutes < 0 || in.AgentCost < 0 || (!in.UserOutcomeConsent && in.UserOutcome != "") {
+	if in.RequestID == "" || strings.TrimSpace(in.Rationale) == "" || !validClassification(in.Classification) || !validCorrection || !validRouting || in.InterruptionMinutes < 0 || (in.InterruptionMinutes > 0 && !in.ResponderLoadConsent) || in.AgentCost < 0 || (!in.UserOutcomeConsent && in.UserOutcome != "") {
 		return ErrInvalid
 	}
 	return nil
+}
+
+func (s *Store) LinkOutcomeWork(id, actor, requestID, proposalID, taskID string) (Alert, error) {
+	var out Alert
+	err := s.lock(func() error {
+		v, err := s.read(id)
+		if err != nil {
+			return err
+		}
+		if proposalID == "" || taskID == "" {
+			return ErrInvalid
+		}
+		for i := range v.OutcomeReviews {
+			review := &v.OutcomeReviews[i]
+			if review.RequestID != requestID || review.ActorID != actor {
+				continue
+			}
+			if review.ProposalID != "" || review.TaskID != "" {
+				if review.ProposalID != proposalID || review.TaskID != taskID {
+					return ErrConflict
+				}
+				out = v
+				return nil
+			}
+			review.ProposalID, review.TaskID = proposalID, taskID
+			v.UpdatedAt = s.now()
+			out = v
+			return s.write(v)
+		}
+		return ErrNotFound
+	})
+	return out, err
 }
 
 func (s *Store) RoutingDirective(repo, rule string) string {
@@ -361,22 +393,29 @@ func (s *Store) RoutingDirective(repo, rule string) string {
 	if err != nil {
 		return ""
 	}
+	var latest *OutcomeReview
 	for _, v := range values {
 		if v.RuleID != rule {
 			continue
 		}
-		for i := len(v.OutcomeReviews) - 1; i >= 0; i-- {
-			switch v.OutcomeReviews[i].RoutingAction {
-			case "pause":
-				return "pause"
-			case "activate_backup":
-				return "backup"
-			case "resume":
-				return ""
+		for i := range v.OutcomeReviews {
+			review := &v.OutcomeReviews[i]
+			if review.RoutingAction == "" {
+				continue
+			}
+			if latest == nil || review.CreatedAt.After(latest.CreatedAt) || (review.CreatedAt.Equal(latest.CreatedAt) && review.ID > latest.ID) {
+				copy := *review
+				latest = &copy
 			}
 		}
 	}
-	return ""
+	if latest == nil || latest.RoutingAction == "resume" {
+		return ""
+	}
+	if latest.RoutingAction == "activate_backup" {
+		return "backup"
+	}
+	return "pause"
 }
 
 func outcomeDigest(v OutcomeReviewInput) string {
