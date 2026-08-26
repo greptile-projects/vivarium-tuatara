@@ -45,8 +45,9 @@ Alerts coordinate attention and grant no repository, secret, deployment, disclos
 spending, governance, or operational authority.
 Owner-only response outcome reads derive acknowledgement and resolution timing, missed targets,
 handoffs, escalations, volume, deduplication, false positives, incidents, and agent cost from the
-retained alert ledger. Responder interruption/load and user outcomes project only with explicit
-consent, and restricted evidence is not copied into learning reports. Caller-stable owner reviews
+retained alert ledger. Responder interruption/load projects only through an alert-specific consent
+record authored by the exact assigned responder, user outcomes project only with explicit consent,
+and restricted evidence is not copied into learning reports. Caller-stable owner reviews
 can request signal/routing correction, pause affected routing, activate only an exact rotation's
 declared current backup, resume routing, or create ordinary reliability, documentation, automation,
 or staffing proposal tasks assigned to a human or agent. These controls never add access; material

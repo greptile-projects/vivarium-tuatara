@@ -39,6 +39,24 @@ type responseOutcomeInput struct {
 }
 
 func registerResponseAlertRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, policies *responsepolicies.Store, alerts *responsealerts.Store, incidentStore *incidents.Store, activity *activities.Store, proposalStore *proposals.Store) {
+	mux.HandleFunc("POST /repositories/{id}/response-alerts/{alert_id}/responder-load-consents", func(w http.ResponseWriter, r *http.Request) {
+		actor, _, ok := authorizeRepositoryParticipant(w, r, catalog, credentials, r.PathValue("id"), "repositories:read")
+		if !ok {
+			return
+		}
+		current, err := alerts.Get(r.PathValue("alert_id"))
+		if err != nil || current.RepositoryID != r.PathValue("id") {
+			writeAPIError(w, 404, "response_alert_not_found", "response alert not found")
+			return
+		}
+		var in responsealerts.ResponderLoadConsentInput
+		if decodeJSON(r, &in) != nil {
+			writeAPIError(w, 400, "invalid_request", "an exact responder-authored load consent is required")
+			return
+		}
+		out, consentErr := alerts.ConsentResponderLoad(current.ID, actor.UserID, in, actor.UserID == current.Workspace.ResponderID)
+		writeResponseAlert(w, out, consentErr, 201)
+	})
 	mux.HandleFunc("GET /repositories/{id}/response-outcomes", func(w http.ResponseWriter, r *http.Request) {
 		actor, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id"))
 		if !ok {
@@ -413,6 +431,13 @@ func alertVisible(v responsealerts.Alert, user string, repositoryOwner bool) boo
 func projectResponseAlert(v responsealerts.Alert, user string, current []responsepolicies.Policy, owner bool) responsealerts.Alert {
 	if !owner {
 		v.OutcomeReviews = []responsealerts.OutcomeReview{}
+		consents := v.ResponderLoadConsents[:0]
+		for _, consent := range v.ResponderLoadConsents {
+			if consent.ResponderID == user {
+				consents = append(consents, consent)
+			}
+		}
+		v.ResponderLoadConsents = consents
 	}
 	for i := range v.Signal.Evidence {
 		evidence := &v.Signal.Evidence[i]

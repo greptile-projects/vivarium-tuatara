@@ -117,36 +117,51 @@ type Workspace struct {
 	IncidentID     string           `json:"incident_id,omitempty"`
 }
 type OutcomeReview struct {
-	ID                   string    `json:"id"`
-	RequestID            string    `json:"request_id"`
-	ActorID              string    `json:"actor_id"`
-	Classification       string    `json:"classification"`
-	UserOutcome          string    `json:"user_outcome,omitempty"`
-	UserOutcomeConsent   bool      `json:"user_outcome_consent"`
-	InterruptionMinutes  int       `json:"interruption_minutes,omitempty"`
-	ResponderLoadConsent bool      `json:"responder_load_consent"`
-	AgentCost            int       `json:"agent_cost,omitempty"`
-	CorrectionKind       string    `json:"correction_kind,omitempty"`
-	RoutingAction        string    `json:"routing_action,omitempty"`
-	Rationale            string    `json:"rationale"`
-	ProposalID           string    `json:"proposal_id,omitempty"`
-	TaskID               string    `json:"task_id,omitempty"`
-	CreatedAt            time.Time `json:"created_at"`
-	RequestDigest        string    `json:"request_digest"`
+	ID                     string    `json:"id"`
+	RequestID              string    `json:"request_id"`
+	ActorID                string    `json:"actor_id"`
+	Classification         string    `json:"classification"`
+	UserOutcome            string    `json:"user_outcome,omitempty"`
+	UserOutcomeConsent     bool      `json:"user_outcome_consent"`
+	InterruptionMinutes    int       `json:"interruption_minutes,omitempty"`
+	ResponderLoadConsent   bool      `json:"responder_load_consent"`
+	ResponderLoadConsentID string    `json:"responder_load_consent_id,omitempty"`
+	AgentCost              int       `json:"agent_cost,omitempty"`
+	CorrectionKind         string    `json:"correction_kind,omitempty"`
+	RoutingAction          string    `json:"routing_action,omitempty"`
+	Rationale              string    `json:"rationale"`
+	ProposalID             string    `json:"proposal_id,omitempty"`
+	TaskID                 string    `json:"task_id,omitempty"`
+	CreatedAt              time.Time `json:"created_at"`
+	RequestDigest          string    `json:"request_digest"`
+	Sequence               uint64    `json:"sequence"`
+}
+type ResponderLoadConsent struct {
+	ID                  string    `json:"id"`
+	RequestID           string    `json:"request_id"`
+	ResponderID         string    `json:"responder_id"`
+	InterruptionMinutes int       `json:"interruption_minutes"`
+	CreatedAt           time.Time `json:"created_at"`
+	RequestDigest       string    `json:"request_digest"`
+}
+type ResponderLoadConsentInput struct {
+	RequestID           string `json:"request_id"`
+	InterruptionMinutes int    `json:"interruption_minutes"`
 }
 type OutcomeReviewInput struct {
-	RequestID            string `json:"request_id"`
-	Classification       string `json:"classification"`
-	UserOutcome          string `json:"user_outcome,omitempty"`
-	UserOutcomeConsent   bool   `json:"user_outcome_consent"`
-	InterruptionMinutes  int    `json:"interruption_minutes,omitempty"`
-	ResponderLoadConsent bool   `json:"responder_load_consent"`
-	AgentCost            int    `json:"agent_cost,omitempty"`
-	CorrectionKind       string `json:"correction_kind,omitempty"`
-	RoutingAction        string `json:"routing_action,omitempty"`
-	Rationale            string `json:"rationale"`
-	ProposalID           string `json:"proposal_id,omitempty"`
-	TaskID               string `json:"task_id,omitempty"`
+	RequestID              string `json:"request_id"`
+	Classification         string `json:"classification"`
+	UserOutcome            string `json:"user_outcome,omitempty"`
+	UserOutcomeConsent     bool   `json:"user_outcome_consent"`
+	InterruptionMinutes    int    `json:"interruption_minutes,omitempty"`
+	ResponderLoadConsent   bool   `json:"responder_load_consent"`
+	ResponderLoadConsentID string `json:"responder_load_consent_id,omitempty"`
+	AgentCost              int    `json:"agent_cost,omitempty"`
+	CorrectionKind         string `json:"correction_kind,omitempty"`
+	RoutingAction          string `json:"routing_action,omitempty"`
+	Rationale              string `json:"rationale"`
+	ProposalID             string `json:"proposal_id,omitempty"`
+	TaskID                 string `json:"task_id,omitempty"`
 }
 type WorkspaceCommand struct {
 	RequestID       string           `json:"request_id"`
@@ -164,31 +179,32 @@ type WorkspaceCommand struct {
 	IncidentID      string           `json:"incident_id,omitempty"`
 }
 type Alert struct {
-	ID                string          `json:"id"`
-	RepositoryID      string          `json:"repository_id"`
-	RequestID         string          `json:"request_id"`
-	RequestDigest     string          `json:"request_digest"`
-	PolicyID          string          `json:"policy_id"`
-	PolicyVersion     int             `json:"policy_version"`
-	RuleID            string          `json:"rule_id"`
-	TeamID            string          `json:"team_id"`
-	Signal            Signal          `json:"signal"`
-	FirstSeenAt       time.Time       `json:"first_seen_at"`
-	LastSeenAt        time.Time       `json:"last_seen_at"`
-	EventCount        int             `json:"event_count"`
-	AcknowledgeBy     time.Time       `json:"acknowledge_by"`
-	ResolveBy         time.Time       `json:"resolve_by"`
-	State             string          `json:"state"`
-	Routing           []Delivery      `json:"routing"`
-	Events            []Event         `json:"events"`
-	Diagnostics       []string        `json:"diagnostics"`
-	ExpectedActions   []string        `json:"expected_actions"`
-	PermittedActions  []string        `json:"permitted_actions"`
-	ProhibitedActions []string        `json:"prohibited_actions"`
-	AudienceIDs       []string        `json:"audience_ids"`
-	UpdatedAt         time.Time       `json:"updated_at"`
-	Workspace         Workspace       `json:"workspace"`
-	OutcomeReviews    []OutcomeReview `json:"outcome_reviews"`
+	ID                    string                 `json:"id"`
+	RepositoryID          string                 `json:"repository_id"`
+	RequestID             string                 `json:"request_id"`
+	RequestDigest         string                 `json:"request_digest"`
+	PolicyID              string                 `json:"policy_id"`
+	PolicyVersion         int                    `json:"policy_version"`
+	RuleID                string                 `json:"rule_id"`
+	TeamID                string                 `json:"team_id"`
+	Signal                Signal                 `json:"signal"`
+	FirstSeenAt           time.Time              `json:"first_seen_at"`
+	LastSeenAt            time.Time              `json:"last_seen_at"`
+	EventCount            int                    `json:"event_count"`
+	AcknowledgeBy         time.Time              `json:"acknowledge_by"`
+	ResolveBy             time.Time              `json:"resolve_by"`
+	State                 string                 `json:"state"`
+	Routing               []Delivery             `json:"routing"`
+	Events                []Event                `json:"events"`
+	Diagnostics           []string               `json:"diagnostics"`
+	ExpectedActions       []string               `json:"expected_actions"`
+	PermittedActions      []string               `json:"permitted_actions"`
+	ProhibitedActions     []string               `json:"prohibited_actions"`
+	AudienceIDs           []string               `json:"audience_ids"`
+	UpdatedAt             time.Time              `json:"updated_at"`
+	Workspace             Workspace              `json:"workspace"`
+	OutcomeReviews        []OutcomeReview        `json:"outcome_reviews"`
+	ResponderLoadConsents []ResponderLoadConsent `json:"responder_load_consents"`
 }
 type Store struct {
 	root string
@@ -335,11 +351,15 @@ func (s *Store) ReviewOutcome(id, actor string, in OutcomeReviewInput, allowed b
 				return nil
 			}
 		}
-		if !allowed || ValidateOutcomeReview(in) != nil {
+		if !allowed || ValidateOutcomeReview(in) != nil || !validLoadConsent(v, in) {
 			return ErrInvalid
 		}
 		now := s.now()
-		v.OutcomeReviews = append(v.OutcomeReviews, OutcomeReview{ID: stable(id, actor, in.RequestID), RequestID: in.RequestID, ActorID: actor, Classification: in.Classification, UserOutcome: in.UserOutcome, UserOutcomeConsent: in.UserOutcomeConsent, InterruptionMinutes: in.InterruptionMinutes, ResponderLoadConsent: in.ResponderLoadConsent, AgentCost: in.AgentCost, CorrectionKind: in.CorrectionKind, RoutingAction: in.RoutingAction, Rationale: strings.TrimSpace(in.Rationale), ProposalID: in.ProposalID, TaskID: in.TaskID, CreatedAt: now, RequestDigest: d})
+		sequence, sequenceErr := s.nextOutcomeSequence(v.RepositoryID)
+		if sequenceErr != nil {
+			return sequenceErr
+		}
+		v.OutcomeReviews = append(v.OutcomeReviews, OutcomeReview{ID: stable(id, actor, in.RequestID), RequestID: in.RequestID, ActorID: actor, Classification: in.Classification, UserOutcome: in.UserOutcome, UserOutcomeConsent: in.UserOutcomeConsent, InterruptionMinutes: in.InterruptionMinutes, ResponderLoadConsent: in.InterruptionMinutes > 0, ResponderLoadConsentID: in.ResponderLoadConsentID, AgentCost: in.AgentCost, CorrectionKind: in.CorrectionKind, RoutingAction: in.RoutingAction, Rationale: strings.TrimSpace(in.Rationale), ProposalID: in.ProposalID, TaskID: in.TaskID, CreatedAt: now, RequestDigest: d, Sequence: sequence})
 		v.UpdatedAt = now
 		out = v
 		return s.write(v)
@@ -350,10 +370,78 @@ func (s *Store) ReviewOutcome(id, actor string, in OutcomeReviewInput, allowed b
 func ValidateOutcomeReview(in OutcomeReviewInput) error {
 	validCorrection := in.CorrectionKind == "" || in.CorrectionKind == "signal" || in.CorrectionKind == "routing"
 	validRouting := in.RoutingAction == "" || in.RoutingAction == "pause" || in.RoutingAction == "activate_backup" || in.RoutingAction == "resume"
-	if in.RequestID == "" || strings.TrimSpace(in.Rationale) == "" || !validClassification(in.Classification) || !validCorrection || !validRouting || in.InterruptionMinutes < 0 || (in.InterruptionMinutes > 0 && !in.ResponderLoadConsent) || in.AgentCost < 0 || (!in.UserOutcomeConsent && in.UserOutcome != "") {
+	if in.RequestID == "" || strings.TrimSpace(in.Rationale) == "" || !validClassification(in.Classification) || !validCorrection || !validRouting || in.InterruptionMinutes < 0 || in.ResponderLoadConsent || ((in.InterruptionMinutes > 0) != (in.ResponderLoadConsentID != "")) || in.AgentCost < 0 || (!in.UserOutcomeConsent && in.UserOutcome != "") {
 		return ErrInvalid
 	}
 	return nil
+}
+
+func validLoadConsent(v Alert, in OutcomeReviewInput) bool {
+	if in.InterruptionMinutes == 0 {
+		return true
+	}
+	for _, review := range v.OutcomeReviews {
+		if review.ResponderLoadConsentID == in.ResponderLoadConsentID {
+			return false
+		}
+	}
+	for _, consent := range v.ResponderLoadConsents {
+		if consent.ID == in.ResponderLoadConsentID && consent.ResponderID == v.Workspace.ResponderID && consent.InterruptionMinutes == in.InterruptionMinutes {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Store) ConsentResponderLoad(id, actor string, in ResponderLoadConsentInput, allowed bool) (Alert, error) {
+	var out Alert
+	err := s.lock(func() error {
+		v, err := s.read(id)
+		if err != nil {
+			return err
+		}
+		d := consentDigest(in)
+		for _, old := range v.ResponderLoadConsents {
+			if old.RequestID == in.RequestID {
+				if old.ResponderID != actor || old.RequestDigest != d {
+					return ErrConflict
+				}
+				out = v
+				return nil
+			}
+		}
+		if !allowed || actor == "" || actor != v.Workspace.ResponderID || in.RequestID == "" || in.InterruptionMinutes < 1 {
+			return ErrForbidden
+		}
+		now := s.now()
+		v.ResponderLoadConsents = append(v.ResponderLoadConsents, ResponderLoadConsent{ID: stable(id, actor, in.RequestID), RequestID: in.RequestID, ResponderID: actor, InterruptionMinutes: in.InterruptionMinutes, CreatedAt: now, RequestDigest: d})
+		v.UpdatedAt = now
+		out = v
+		return s.write(v)
+	})
+	return out, err
+}
+
+func consentDigest(v ResponderLoadConsentInput) string {
+	b, _ := json.Marshal(v)
+	h := sha256.Sum256(b)
+	return hex.EncodeToString(h[:])
+}
+
+func (s *Store) nextOutcomeSequence(repo string) (uint64, error) {
+	values, err := s.listUnlocked(repo)
+	if err != nil {
+		return 0, err
+	}
+	var max uint64
+	for _, alert := range values {
+		for _, review := range alert.OutcomeReviews {
+			if review.Sequence > max {
+				max = review.Sequence
+			}
+		}
+	}
+	return max + 1, nil
 }
 
 func (s *Store) LinkOutcomeWork(id, actor, requestID, proposalID, taskID string) (Alert, error) {
@@ -403,7 +491,7 @@ func (s *Store) RoutingDirective(repo, rule string) string {
 			if review.RoutingAction == "" {
 				continue
 			}
-			if latest == nil || review.CreatedAt.After(latest.CreatedAt) || (review.CreatedAt.Equal(latest.CreatedAt) && review.ID > latest.ID) {
+			if latest == nil || review.Sequence > latest.Sequence || (review.Sequence == latest.Sequence && review.CreatedAt.After(latest.CreatedAt)) {
 				copy := *review
 				latest = &copy
 			}

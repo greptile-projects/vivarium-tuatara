@@ -113,8 +113,10 @@ caller-stable review through `POST /repositories/{id}/response-alerts/{alert_id}
 The owner-only report derives acknowledgement and resolution latency, missed targets, handoffs,
 escalations, volume, deduplicated events, false positives, incidents, and declared agent cost from
 the immutable alert ledger. Interruption and responder-load measures appear only after explicit
-responder-load consent, and user outcomes are rejected unless their inclusion is explicitly
-consented. Restricted alert evidence is not copied into the report.
+responder-load consent authored by that alert's exact assigned responder, and user outcomes are
+rejected unless their inclusion is explicitly consented. An owner cannot assert another responder's
+consent: outcome reviews must cite the responder-authored record and its exact minute value.
+Restricted alert evidence is not copied into the report.
 
 Reviews retain classification, rationale, signal or routing correction intent, and optional
 `pause`, `activate_backup`, or `resume` containment. A pause prevents a new affected alert from
