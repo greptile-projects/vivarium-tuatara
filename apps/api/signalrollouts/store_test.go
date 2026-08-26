@@ -88,6 +88,18 @@ func TestContainmentRequiresExplicitHealthyResolution(t *testing.T) {
 	}
 	healthy := unsafe
 	healthy.Quality = Quality{SignalHealth: "healthy", Coverage: 1, PrivacyControls: []string{"redaction"}, CollectorAvailable: true}
+	unrelated := healthy
+	unrelated.Scope = Scope{Service: "billing", Audience: "internal", Region: "us", TrafficPercent: 10}
+	if _, err := s.Mutate("repo", r.ID, r.Version, Event{RequestID: "unrelated-observe", Kind: "observe", ActorID: "operator", Reason: "unrelated window", Observation: &unrelated}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("cross-scope observation should fail: %v", err)
+	}
+	if _, err := s.Mutate("repo", r.ID, r.Version, Event{RequestID: "unrelated-resolve", Kind: "resolve", ActorID: "operator", Reason: "unrelated recovery", Observation: &unrelated}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("cross-scope resolution should fail: %v", err)
+	}
+	stillContained, _ := s.Get("repo", r.ID)
+	if stillContained.Status != "contained" || len(stillContained.ContainmentReasons) == 0 {
+		t.Fatal("cross-scope evidence changed containment")
+	}
 	r, _ = s.Mutate("repo", r.ID, r.Version, Event{RequestID: "healthy-observe", Kind: "observe", ActorID: "operator", Reason: "healthy window", Observation: &healthy})
 	if r.Status != "contained" || len(r.ContainmentReasons) == 0 {
 		t.Fatal("ordinary observation silently cleared containment")

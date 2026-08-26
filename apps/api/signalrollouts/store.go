@@ -213,7 +213,7 @@ func (s *Store) Mutate(repo, id string, expected int, ev Event) (Rollout, error)
 		if r.Status == "rolled_back" {
 			return Rollout{}, ErrInvalid
 		}
-		if ev.Observation == nil || !validObservation(*ev.Observation) {
+		if ev.Observation == nil || !validObservation(*ev.Observation) || !sameScope(ev.Observation.Scope, r.Scope) {
 			return Rollout{}, ErrInvalid
 		}
 		o := *ev.Observation
@@ -232,7 +232,7 @@ func (s *Store) Mutate(repo, id string, expected int, ev Event) (Rollout, error)
 		}
 		ev.Observation = &o
 	case "resolve":
-		if r.Status != "contained" || len(r.ContainmentReasons) == 0 || ev.Observation == nil || !validObservation(*ev.Observation) || len(contain(ev.Observation.Quality, r.Budget)) > 0 {
+		if r.Status != "contained" || len(r.ContainmentReasons) == 0 || ev.Observation == nil || !validObservation(*ev.Observation) || !sameScope(ev.Observation.Scope, r.Scope) || len(contain(ev.Observation.Quality, r.Budget)) > 0 {
 			return Rollout{}, ErrInvalid
 		}
 		o := *ev.Observation
@@ -293,6 +293,9 @@ func contain(q Quality, b Budget) []string {
 }
 func validScope(x Scope) bool {
 	return x.Service != "" && x.Audience != "" && x.Region != "" && x.TrafficPercent > 0 && x.TrafficPercent <= 100
+}
+func sameScope(a, b Scope) bool {
+	return a.Service == b.Service && a.Audience == b.Audience && a.Region == b.Region && a.TrafficPercent == b.TrafficPercent
 }
 func validObservation(x Observation) bool {
 	return !x.StartedAt.IsZero() && !x.EndedAt.Before(x.StartedAt) && x.Quality.SignalHealth != "" && x.Quality.Coverage >= 0 && x.Quality.Coverage <= 1 && x.Quality.Missingness >= 0 && x.Quality.Missingness <= 1 && x.Quality.PipelineLoss >= 0 && x.Quality.PipelineLoss <= 1 && len(x.Quality.PrivacyControls) > 0 && validScope(x.Scope)
