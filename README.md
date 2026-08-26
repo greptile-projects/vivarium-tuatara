@@ -131,6 +131,13 @@ Alternatives and cited human or read-only-agent challenges remain attributable;
 conflicting definitions, sensitive fields without redaction, unbounded dimensions,
 unsupported collectors, and changed gap revisions remain explicit blockers.
 
+Declared contract owners can accept a complete exact telemetry contract and hand its
+implementation to ordinary human- or agent-owned proposal tasks across repositories they
+can independently access. Linked pull requests retain sanitized, revision-exact evidence
+from bounded network-isolated previews for signal behavior, schema, units, correlation,
+sampling, redaction, access, overhead, failures, coverage, cost, authorship, and contract
+differences; all ordinary contribution and policy gates continue to apply.
+
 ## Getting started
 
 ```sh

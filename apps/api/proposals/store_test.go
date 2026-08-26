@@ -684,4 +684,20 @@ func TestCapacityImplementationPreservesExplicitDependencies(t *testing.T) {
 	}
 }
 
+func TestTelemetryImplementationAcceptsContractIdentityAndRejectsChangedRetry(t *testing.T) {
+	store, _ := New(t.TempDir())
+	origin := ReasoningOrigin{TelemetryContractID: "tc_" + strings.Repeat("a", 24), TelemetryContractVersion: 1, Revision: strings.Repeat("b", 40), SelectedItemIDs: []string{"signal-work-1"}, Items: []ReasoningItem{{ID: "signal-work-1", Kind: "telemetry_implementation", Summary: "Emit signal", Status: "accepted"}}, AnalysisStatus: "accepted_telemetry_contract"}
+	in := ImplementationInput{RepositoryID: repositoryID, ActorID: authorID, ProposalID: strings.Repeat("c", 32), Title: "Implement telemetry", Body: "Governed delivery", Origin: origin, Tasks: []ImplementationTaskInput{{ID: strings.Repeat("d", 32), Title: "Emit", Outcome: "Signal verified", Risk: "privacy", VerificationPlan: "bounded preview", AssigneeType: "human", AssigneeID: authorID}}}
+	p, tasks, err := store.CreateImplementation(in)
+	if err != nil || p.Reasoning == nil || p.Reasoning.TelemetryContractID != origin.TelemetryContractID || len(tasks) != 1 {
+		t.Fatalf("telemetry implementation: %+v %+v %v", p, tasks, err)
+	}
+	changed := in
+	changed.Tasks = append([]ImplementationTaskInput(nil), in.Tasks...)
+	changed.Tasks[0].Outcome = "silently changed"
+	if _, _, err = store.CreateImplementation(changed); !errors.Is(err, ErrImplementationConflict) {
+		t.Fatalf("changed retry = %v", err)
+	}
+}
+
 func pointer(value string) *string { return &value }

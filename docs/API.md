@@ -478,6 +478,26 @@ originating bounded system and no endpoint grants execution or merge authority.
   An unusable release or prerequisite pilot ledger keeps these documented routes present with
   `503 agent_release_unavailable`, including when both stores fail initialization.
 
+## Telemetry implementation and candidate evidence
+
+- `POST /repositories/{id}/telemetry-contracts/{contract_id}/acceptance` lets a declared
+  current human contract owner accept one complete exact current revision with a stable
+  request identity and rationale. Successor revisions do not inherit acceptance.
+- `POST .../{contract_id}/deliveries` creates ordinary human- or agent-owned proposal
+  tasks in one independently authorized application, library, or infrastructure repository.
+  A deterministic pending link reserves the contract version, exact base, proposal, and task
+  IDs before ordinary work is created; retry recovery compares all task content and finalizes
+  the link while holding source and target participation. Sessions,
+  workspaces, contributions, checks, reviews, and pulls then use their existing APIs.
+- `POST /repositories/{id}/pulls/{pull_id}/telemetry-verifications` accepts only a linked
+  pull's current exact revision, its accepted exact contract, and an existing exact-revision
+  network-none preview. The closed result set is `emission`, `schema`, `units`, `correlation`,
+  `sampling`, `redaction`, `access`, `performance`, and `failure_behavior`. Production data
+  is prohibited; artifact payloads are never accepted, while bounded SHA-256 metadata and
+  server-generated sanitized summaries retain signals, logs, traces, coverage, cost, and
+  contract differences. `GET` projects that evidence and authorship on the pull. Ordinary
+  review, privacy, security, provenance, checks, and merge policy remain unchanged.
+
 ## Runtime privacy checks
 
 - `POST|GET /repositories/{id}/privacy-check-policies` lets repository owners define and readers

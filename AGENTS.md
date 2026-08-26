@@ -140,6 +140,22 @@ unbounded dimensions, unsupported collectors, and missing alternatives or assump
 blocking or incomplete diagnostics; publication rejects a moved originating gap. Contracts
 coordinate instrumentation design only and grant no repository, collector, telemetry,
 environment, deployment, disclosure, spending, agent, or operational authority.
+Exact complete telemetry-contract revisions become implementable only after a declared
+current human contract owner accepts them. Caller-stable `/deliveries` first retain a
+deterministic pending contract/proposal/task reservation and then create ordinary
+human- or agent-owned proposal tasks in each separately permitted application, library,
+or infrastructure repository before finalizing the link. Retries reconcile the exact
+content and every visible proposal is already linked; source and target participation
+are held across the complete mutation. Those tasks continue through the existing session,
+workspace, pull, review, check, privacy, security, provenance, and merge boundaries.
+Linked pull `/telemetry-verifications` retain only digest-addressed sanitized signal, log,
+trace, coverage, cost, and contract-difference metadata from an exact-revision bounded
+network-none preview. The closed result vocabulary covers emission, schema, units,
+correlation, sampling, redaction, access, performance overhead, and failure behavior;
+source movement, changed contract acceptance, unrelated pulls, inaccessible contract
+repositories, production data, and caller-supplied artifact display text fail closed.
+Acceptance, delivery, and verification coordinate evidence and grant no repository,
+preview, check, agent, privacy, security, provenance, merge, or operational authority.
 
 Sensitive history remediations at `/repositories/{id}/history-remediations` and the repository
 `/history-remediation` workspace give current maintainers a private, retry-stable coordination boundary
