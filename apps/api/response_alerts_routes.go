@@ -118,6 +118,14 @@ func registerResponseAlertRoutes(mux *http.ServeMux, catalog *repositories.Store
 				writeResponseAlert(w, out, reviewErr, 201)
 				return
 			}
+		} else if proposalStore != nil {
+			if p, task, findErr := proposalStore.FindResponseCorrectiveWork(current.ID, in.RequestID); findErr == nil {
+				out, reviewErr = alerts.LinkOutcomeWork(current.ID, actor.UserID, in.RequestID, p.ID, task.ID)
+				if reviewErr != nil {
+					writeResponseAlert(w, out, reviewErr, 201)
+					return
+				}
+			}
 		}
 		writeResponseAlert(w, out, reviewErr, 201)
 	})
@@ -561,7 +569,12 @@ func responseOutcomeReport(values []responsealerts.Alert, now time.Time) map[str
 			agentCost += review.AgentCost
 			if review.ResponderLoadConsent {
 				interruptions += review.InterruptionMinutes
-				responderLoad[alert.Workspace.ResponderID] += review.InterruptionMinutes
+				for _, consent := range alert.ResponderLoadConsents {
+					if consent.ID == review.ResponderLoadConsentID {
+						responderLoad[consent.ResponderID] += review.InterruptionMinutes
+						break
+					}
+				}
 			}
 			if review.UserOutcomeConsent {
 				userOutcomes = append(userOutcomes, map[string]string{"alert_id": alert.ID, "outcome": review.UserOutcome})

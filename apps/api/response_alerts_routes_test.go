@@ -37,6 +37,23 @@ func TestResponseOutcomeReportHonorsConsentAndAutomaticContainment(t *testing.T)
 	}
 }
 
+func TestResponseOutcomeReportCreditsImmutableConsentAuthorAfterReassignment(t *testing.T) {
+	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
+	store, _ := responsealerts.New(t.TempDir())
+	policy := responsepolicies.Policy{ID: "policy", RepositoryID: "repo", Revisions: []responsepolicies.Revision{{Version: 1, Rules: []responsepolicies.Rule{{ID: "rule", ResourceIDs: []string{"service"}, SignalClass: "reliability", Severity: "critical", AccountableTeamID: "ops", AcknowledgeSeconds: 60, ResolveSeconds: 600}}}}}
+	signal := responsealerts.Signal{SignalClass: "reliability", Severity: "critical", ResourceIDs: []string{"service"}, Summary: "failure", Uncertainty: "sampled", OccurredAt: now, SourceRevision: "0123456789012345678901234567890123456789", CorrelationKey: "attribution", Evidence: []responsealerts.Evidence{{Kind: "check", ResourceID: "check", Revision: "run", Digest: "digest", Summary: "failure", Available: true}}}
+	alert, _ := store.Create("repo", "source", "attribution", signal, policy, []string{"responder-a"})
+	consented, _ := store.ConsentResponderLoad(alert.ID, "responder-a", responsealerts.ResponderLoadConsentInput{RequestID: "consent", InterruptionMinutes: 17}, true)
+	consent := consented.ResponderLoadConsents[0]
+	_, _ = store.ReviewOutcome(alert.ID, "owner", responsealerts.OutcomeReviewInput{RequestID: "review", Classification: "actionable", Rationale: "outcome", InterruptionMinutes: 17, ResponderLoadConsentID: consent.ID}, true)
+	_, _ = store.ApplyWorkspace(alert.ID, "responder-a", responsealerts.WorkspaceCommand{RequestID: "reassign", Kind: "reassign", Message: "handoff", TargetUserID: "responder-b"}, true)
+	report := responseOutcomeReport(mustAlerts(t, store, "repo"), now)
+	load := report["consented_responder_load"].(map[string]int)
+	if load["responder-a"] != 17 || load["responder-b"] != 0 {
+		t.Fatalf("load followed reassignment: %#v", load)
+	}
+}
+
 func mustAlerts(t *testing.T, store *responsealerts.Store, repositoryID string) []responsealerts.Alert {
 	t.Helper()
 	values, err := store.List(repositoryID)

@@ -288,6 +288,35 @@ func TestRoutingDirectiveUsesCausalSequenceAtSameTimestamp(t *testing.T) {
 	}
 }
 
+func TestRoutingDirectiveBackfillsLegacyTieByPersistedOrder(t *testing.T) {
+	s, _ := New(t.TempDir())
+	now := time.Date(2026, 8, 26, 9, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return now }
+	p := testPolicy(now)
+	pause, _ := s.Create("repo", "source", "legacy-pause", testSignal(now), p, []string{"responder"})
+	_, _ = s.ReviewOutcome(pause.ID, "owner", OutcomeReviewInput{RequestID: "pause", Classification: "actionable", RoutingAction: "pause", Rationale: "pause"}, true)
+	resume, _ := s.Create("repo", "source", "legacy-resume", testSignal(now.Add(time.Nanosecond)), p, []string{"responder"})
+	_, _ = s.ReviewOutcome(resume.ID, "owner", OutcomeReviewInput{RequestID: "resume", Classification: "actionable", RoutingAction: "resume", Rationale: "resume"}, true)
+	pause, _ = s.read(pause.ID)
+	resume, _ = s.read(resume.ID)
+	pause.OutcomeReviews[0].Sequence, resume.OutcomeReviews[0].Sequence = 0, 0
+	pause.OutcomeReviews[0].CreatedAt, resume.OutcomeReviews[0].CreatedAt = now, now
+	if err := s.write(pause); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(time.Millisecond)
+	if err := s.write(resume); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.RoutingDirective("repo", pause.RuleID); got != "" {
+		t.Fatalf("legacy persisted resume lost: %q", got)
+	}
+	migrated, _ := s.read(resume.ID)
+	if migrated.OutcomeReviews[0].Sequence != 2 {
+		t.Fatalf("legacy sequence was not persisted: %#v", migrated.OutcomeReviews)
+	}
+}
+
 func TestOutcomeReviewPrecedesRetryStableWorkLink(t *testing.T) {
 	s, _ := New(t.TempDir())
 	now := time.Now().UTC()

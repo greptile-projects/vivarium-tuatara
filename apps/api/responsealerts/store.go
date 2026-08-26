@@ -341,6 +341,13 @@ func (s *Store) ReviewOutcome(id, actor string, in OutcomeReviewInput, allowed b
 		if err != nil {
 			return err
 		}
+		if err := s.ensureOutcomeSequences(v.RepositoryID); err != nil {
+			return err
+		}
+		v, err = s.read(id)
+		if err != nil {
+			return err
+		}
 		d := outcomeDigest(in)
 		for _, old := range v.OutcomeReviews {
 			if old.RequestID == in.RequestID {
@@ -477,7 +484,15 @@ func (s *Store) LinkOutcomeWork(id, actor, requestID, proposalID, taskID string)
 }
 
 func (s *Store) RoutingDirective(repo, rule string) string {
-	values, err := s.List(repo)
+	var values []Alert
+	err := s.lock(func() error {
+		if err := s.ensureOutcomeSequences(repo); err != nil {
+			return err
+		}
+		var listErr error
+		values, listErr = s.listUnlocked(repo)
+		return listErr
+	})
 	if err != nil {
 		return ""
 	}
@@ -504,6 +519,70 @@ func (s *Store) RoutingDirective(repo, rule string) string {
 		return "backup"
 	}
 	return "pause"
+}
+
+type outcomeSequenceCandidate struct {
+	AlertIndex, ReviewIndex int
+	CreatedAt, ModifiedAt   time.Time
+	Sequence                uint64
+	AlertID                 string
+}
+
+func (s *Store) ensureOutcomeSequences(repo string) error {
+	values, err := s.listUnlocked(repo)
+	if err != nil {
+		return err
+	}
+	hasLegacy := false
+	candidates := []outcomeSequenceCandidate{}
+	for ai, alert := range values {
+		info, statErr := os.Stat(filepath.Join(s.root, alert.ID+".json"))
+		if statErr != nil {
+			return statErr
+		}
+		for ri, review := range alert.OutcomeReviews {
+			if review.Sequence == 0 {
+				hasLegacy = true
+			}
+			candidates = append(candidates, outcomeSequenceCandidate{AlertIndex: ai, ReviewIndex: ri, CreatedAt: review.CreatedAt, ModifiedAt: info.ModTime(), Sequence: review.Sequence, AlertID: alert.ID})
+		}
+	}
+	if !hasLegacy {
+		return nil
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		a, b := candidates[i], candidates[j]
+		if a.Sequence > 0 && b.Sequence > 0 {
+			return a.Sequence < b.Sequence
+		}
+		if (a.Sequence > 0) != (b.Sequence > 0) {
+			return a.Sequence == 0
+		}
+		if !a.CreatedAt.Equal(b.CreatedAt) {
+			return a.CreatedAt.Before(b.CreatedAt)
+		}
+		if !a.ModifiedAt.Equal(b.ModifiedAt) {
+			return a.ModifiedAt.Before(b.ModifiedAt)
+		}
+		if a.AlertID != b.AlertID {
+			return a.AlertID < b.AlertID
+		}
+		return a.ReviewIndex < b.ReviewIndex
+	})
+	changed := map[int]bool{}
+	for i, candidate := range candidates {
+		sequence := uint64(i + 1)
+		if values[candidate.AlertIndex].OutcomeReviews[candidate.ReviewIndex].Sequence != sequence {
+			values[candidate.AlertIndex].OutcomeReviews[candidate.ReviewIndex].Sequence = sequence
+			changed[candidate.AlertIndex] = true
+		}
+	}
+	for index := range changed {
+		if err := s.write(values[index]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func outcomeDigest(v OutcomeReviewInput) string {

@@ -241,6 +241,10 @@ func TestResponseAlertCorrectiveWorkRetainsAgentBoundary(t *testing.T) {
 	if err != nil || retryProposal.ID != proposal.ID || retryTask.ID != task.ID {
 		t.Fatalf("retry=%#v %#v %v", retryProposal, retryTask, err)
 	}
+	foundProposal, foundTask, err := store.FindResponseCorrectiveWork(input.ResponseAlertID, input.OperationID)
+	if err != nil || foundProposal.ID != proposal.ID || foundTask.ID != task.ID {
+		t.Fatalf("find=%#v %#v %v", foundProposal, foundTask, err)
+	}
 }
 
 func TestConcurrentCommentsAreNotLostAcrossStores(t *testing.T) {

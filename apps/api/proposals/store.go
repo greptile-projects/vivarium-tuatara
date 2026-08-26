@@ -386,6 +386,37 @@ func (s *Store) CreateCorrectiveWork(input CorrectiveWorkInput) (Proposal, Task,
 	return p, task, nil
 }
 
+func (s *Store) FindResponseCorrectiveWork(responseAlertID, operationID string) (Proposal, Task, error) {
+	if !validID(responseAlertID) || !validID(operationID) {
+		return Proposal{}, Task{}, ErrInvalid
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lock()
+	if err != nil {
+		return Proposal{}, Task{}, err
+	}
+	defer unlock()
+	entries, err := os.ReadDir(s.root)
+	if err != nil {
+		return Proposal{}, Task{}, err
+	}
+	for _, entry := range entries {
+		id, ok := strings.CutSuffix(entry.Name(), ".json")
+		if entry.IsDir() || !ok || !validID(id) {
+			continue
+		}
+		r, readErr := s.read(id)
+		if readErr != nil {
+			return Proposal{}, Task{}, readErr
+		}
+		if r.Corrective != nil && r.Corrective.ResponseAlertID == responseAlertID && r.Corrective.OperationID == operationID && len(r.Tasks) == 1 {
+			return r.Proposal, r.Tasks[0], nil
+		}
+	}
+	return Proposal{}, Task{}, ErrNotFound
+}
+
 type Store struct {
 	root          string
 	mu            sync.Mutex
