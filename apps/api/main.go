@@ -36,6 +36,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/capabilities"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/capacitymodels"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/capacityobjectives"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/capacitytests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/changesessions"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/changestacks"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/charters"
@@ -510,6 +511,14 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	capacityTestRoot := os.Getenv("CAPACITY_TEST_STORAGE_ROOT")
+	if capacityTestRoot == "" {
+		capacityTestRoot = "capacity-tests"
+	}
+	capacityTestStore, err := capacitytests.New(capacityTestRoot)
+	if err != nil {
+		log.Fatal(err)
+	}
 	qualityPlanRoot := os.Getenv("QUALITY_PLAN_STORAGE_ROOT")
 	if qualityPlanRoot == "" {
 		qualityPlanRoot = "quality-plans"
@@ -953,7 +962,7 @@ func main() {
 		port = "8080"
 	}
 
-	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, reviewPlanStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, charterStore, governanceStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, supportThreadStore, supportVerificationStore, supportSolutionStore, knowledgeAnswerStore, contributorPathwayStore, learningPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore, performanceGoalStore, capacityObjectiveStore, capacityModelStore, performanceEvidenceStore, productExperimentStore, feedbackStore, productOpportunityStore, roadmapStore, outcomeValidationStore, projectFundStore, incubatorStore, adoptionWorkspaceStore, accessibilityCommitmentStore, accessibilityReportStore, accessibilityAssessmentStore, accessibilityDeliveryStore, dataCommitmentStore, dataFlowStore, privacyReviewStore, privacyCheckStore, dataObservationStore, localePlanStore, localizationStore, serviceObjectiveStore, recoveryCommitmentStore, protectionPlanStore, recoveryExerciseStore, recoveryOperationStore, agentEvaluationStore, agentProjectStore, agentCandidateStore, apiContractStore, durableSchemaStore, infrastructureStore, debugWorkspaceStore, interfaceSystemStore, capabilityStore, designProposalStore, interfaceCheckStore, designGovernanceStore, qualityPlanStore, assuranceProgramStore, assuranceEvidenceStore, assuranceImpactStore, assuranceAssessmentStore, testScenarioStore, exploratorySessionStore, releaseConfidenceStore, securityExpectationStore, threatModelStore, securityScenarioStore, securityFindingStore, securityConfidenceStore, collaborationWorkflowStore, workflowComponentStore, regressionInvestigationStore, propagationCampaignStore, historyRemediationStore, restructuringPlanStore, changeStackStore)
+	handler := newPlatformHandlerWithChecks(store, userStore, authStore, repositoryStore, proposalStore, pullRequestStore, activityStore, changeSessionStore, checkRunStore, reviewPlanStore, previewStore, acceptanceStore, releaseStore, deploymentStore, incidentStore, securityAdvisoryStore, relationshipStore, packageStore, organizationStore, charterStore, governanceStore, workspaceStore, explanationStore, impactStore, decisionStore, deliveryTeamStore, issueStore, supportThreadStore, supportVerificationStore, supportSolutionStore, knowledgeAnswerStore, contributorPathwayStore, learningPathwayStore, contributorOpportunityStore, documentationStore, extensionStore, federationStore, performanceGoalStore, capacityObjectiveStore, capacityModelStore, capacityTestStore, performanceEvidenceStore, productExperimentStore, feedbackStore, productOpportunityStore, roadmapStore, outcomeValidationStore, projectFundStore, incubatorStore, adoptionWorkspaceStore, accessibilityCommitmentStore, accessibilityReportStore, accessibilityAssessmentStore, accessibilityDeliveryStore, dataCommitmentStore, dataFlowStore, privacyReviewStore, privacyCheckStore, dataObservationStore, localePlanStore, localizationStore, serviceObjectiveStore, recoveryCommitmentStore, protectionPlanStore, recoveryExerciseStore, recoveryOperationStore, agentEvaluationStore, agentProjectStore, agentCandidateStore, apiContractStore, durableSchemaStore, infrastructureStore, debugWorkspaceStore, interfaceSystemStore, capabilityStore, designProposalStore, interfaceCheckStore, designGovernanceStore, qualityPlanStore, assuranceProgramStore, assuranceEvidenceStore, assuranceImpactStore, assuranceAssessmentStore, testScenarioStore, exploratorySessionStore, releaseConfidenceStore, securityExpectationStore, threatModelStore, securityScenarioStore, securityFindingStore, securityConfidenceStore, collaborationWorkflowStore, workflowComponentStore, regressionInvestigationStore, propagationCampaignStore, historyRemediationStore, restructuringPlanStore, changeStackStore)
 	startCheckRunRecovery(store, checkRunStore)
 	startIntegrationQueueRecovery(pullRequestStore)
 	startDeploymentRecovery(deploymentStore, checkRunStore)
@@ -1101,6 +1110,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 	var performanceGoalStore *performancegoals.Store
 	var capacityObjectiveStore *capacityobjectives.Store
 	var capacityModelStore *capacitymodels.Store
+	var capacityTestStore *capacitytests.Store
 	var performanceEvidenceStore *performanceevidence.Store
 	var productExperimentStore *productexperiments.Store
 	var feedbackStore *productfeedback.Store
@@ -1237,6 +1247,8 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 			capacityObjectiveStore = value
 		case *capacitymodels.Store:
 			capacityModelStore = value
+		case *capacitytests.Store:
+			capacityTestStore = value
 		case *performanceevidence.Store:
 			performanceEvidenceStore = value
 		case *productexperiments.Store:
@@ -1559,6 +1571,9 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		registerCapacityObjectiveRoutes(mux, repositoryCatalog, authStore, capacityObjectiveStore)
 		if capacityModelStore != nil && releaseStore != nil {
 			registerCapacityModelRoutes(mux, repositoryCatalog, authStore, capacityObjectiveStore, capacityModelStore, releaseStore)
+			if capacityTestStore != nil {
+				registerCapacityTestRoutes(mux, store, repositoryCatalog, authStore, capacityObjectiveStore, capacityModelStore, releaseStore, infrastructureStore, durableSchemaStore, capacityTestStore)
+			}
 		}
 	}
 	if authStore != nil && repositoryCatalog != nil && qualityPlanStore != nil {

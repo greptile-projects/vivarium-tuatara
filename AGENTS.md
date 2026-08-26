@@ -550,6 +550,21 @@ inaccessible evidence as a gap; instrumentation changes, anomalies, and append-o
 challenge, support, or supersession events remain visible without rewriting earlier
 predictions. Models grant no repository, data, infrastructure, deployment, funding,
 scaling, or operational authority.
+Bounded capacity experiments at repository `/capacity-tests` routes and the repository
+`/capacity` workspace retain immutable plans and evidence beneath
+`$CAPACITY_TEST_STORAGE_ROOT` (`capacity-tests`). Plans bind exact capacity-objective and
+optional model revisions to at least two exact vertical, horizontal, architectural,
+caching, queueing, or demand-shaping candidates and repository-defined load/failure
+scenarios. Synthetic or privacy-preserving workloads, isolated or policy-approved
+environments, coordinated-load keys, correctness criteria, and hard duration, request,
+concurrency, and cost limits reject production data and production impact. Human and
+approved-agent evidence retains measured duration, request count, peak concurrency,
+throughput, latency, errors, saturation, recovery, correctness, resources, optional
+declared carbon, cost, variability, derived limit breaches, and logs. The server rejects
+negative/non-finite metrics and derives every limit breach; only successful, correct, comparable,
+repeated, low-noise evidence across every declared scenario projects a candidate as proof;
+weaker or partial results remain explicit. Experiments grant no environment, infrastructure,
+release, deployment, funding, scaling, production-data, or operational authority.
   CAS-versioned bounded trials resolve an existing attested release or exact readable commit, scope
   packages/APIs and synthetic or permitted data, and select only the adopter's declared journeys.
   Definitions and immutable attempts retain setup, configuration, commands, integration changes,
