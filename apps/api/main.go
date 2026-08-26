@@ -1654,8 +1654,8 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 			}
 		}
 	}
-	if authStore != nil && repositoryCatalog != nil && observabilityGapStore != nil && releaseStore != nil {
-		registerObservabilityGapRoutes(mux, repositoryCatalog, authStore, observabilityGapStore, releaseStore)
+	if authStore != nil && repositoryCatalog != nil && observabilityGapStore != nil && releaseStore != nil && deploymentStore != nil && serviceObjectiveStore != nil && incidentStore != nil && debugWorkspaceStore != nil && runbookStore != nil && supportThreadStore != nil {
+		registerObservabilityGapRoutes(mux, repositoryCatalog, authStore, observabilityGapStore, releaseStore, deploymentStore, serviceObjectiveStore, incidentStore, debugWorkspaceStore, runbookStore, supportThreadStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && responsePolicyStore != nil {
 		registerResponsePolicyRoutes(mux, repositoryCatalog, authStore, responsePolicyStore)

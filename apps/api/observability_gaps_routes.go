@@ -4,11 +4,18 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"strconv"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/debugworkspaces"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/deployments"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/incidents"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/observabilitygaps"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/releases"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/runbooks"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/serviceobjectives"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/supportthreads"
 )
 
 type observabilityGapInput struct {
@@ -17,7 +24,7 @@ type observabilityGapInput struct {
 	Revision        observabilitygaps.Revision `json:"revision"`
 }
 
-func registerObservabilityGapRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, store *observabilitygaps.Store, releaseStore *releases.Store) {
+func registerObservabilityGapRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, store *observabilitygaps.Store, releaseStore *releases.Store, deploymentStore *deployments.Store, objectiveStore *serviceobjectives.Store, incidentStore *incidents.Store, debugStore *debugworkspaces.Store, runbookStore *runbooks.Store, supportStore *supportthreads.Store) {
 	mux.HandleFunc("GET /repositories/{id}/observability-gaps", func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := authorizeRepositoryRead(w, r, catalog, credentials, r.PathValue("id")); !ok {
 			return
@@ -50,10 +57,34 @@ func registerObservabilityGapRoutes(mux *http.ServeMux, catalog *repositories.St
 			writeAPIError(w, 400, "invalid_request", "a complete observability gap revision is required")
 			return
 		}
+		if !observabilitySourceResolves(r.PathValue("id"), in.Revision.Source, objectiveStore, incidentStore, debugStore, runbookStore, supportStore, deploymentStore) {
+			writeAPIError(w, 422, "observability_source_invalid", "the exact operational source does not resolve in this repository")
+			return
+		}
 		for _, e := range in.Revision.Evidence {
 			release, x := releaseStore.Get(r.PathValue("id"), e.ReleaseID)
 			if x != nil || release.CommitID != e.ReleaseRevision {
 				writeAPIError(w, 422, "observability_evidence_release_invalid", "every evidence item must bind an exact authoritative repository release")
+				return
+			}
+			if _, x = deploymentStore.GetEnvironment(r.PathValue("id"), e.Environment); x != nil {
+				writeAPIError(w, 422, "observability_evidence_environment_invalid", "every evidence environment must resolve in this repository")
+				return
+			}
+			promotions, x := deploymentStore.ListPromotions(r.PathValue("id"))
+			if x != nil {
+				writeAPIError(w, 500, "observability_gaps_unavailable", "deployment provenance could not be verified")
+				return
+			}
+			matched := false
+			for _, promotion := range promotions {
+				if promotion.EnvironmentID == e.Environment && promotion.ReleaseID == e.ReleaseID && promotion.CommitID == e.ReleaseRevision && promotion.State == "succeeded" {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				writeAPIError(w, 422, "observability_evidence_promotion_invalid", "every evidence item must bind a successful exact release promotion to its environment")
 				return
 			}
 		}
@@ -73,6 +104,42 @@ func registerObservabilityGapRoutes(mux *http.ServeMux, catalog *repositories.St
 	}
 	mux.HandleFunc("POST /repositories/{id}/observability-gaps", func(w http.ResponseWriter, r *http.Request) { publish(w, r, false) })
 	mux.HandleFunc("POST /repositories/{id}/observability-gaps/{gap_id}/revisions", func(w http.ResponseWriter, r *http.Request) { publish(w, r, true) })
+}
+
+func observabilitySourceResolves(repo string, source observabilitygaps.Source, objectives *serviceobjectives.Store, incidentStore *incidents.Store, debugStore *debugworkspaces.Store, runbookStore *runbooks.Store, supportStore *supportthreads.Store, deploymentStore *deployments.Store) bool {
+	if source.Kind == "manual" {
+		return true
+	}
+	switch source.Kind {
+	case "service_objective":
+		v, err := objectives.Get(source.ResourceID)
+		return err == nil && v.RepositoryID == repo && source.Revision == strconv.Itoa(v.CurrentVersion)
+	case "incident":
+		v, err := incidentStore.Get(source.ResourceID)
+		if err != nil || source.Revision != strconv.Itoa(v.Version) {
+			return false
+		}
+		for _, scope := range v.Scopes {
+			if scope.RepositoryID == repo {
+				return true
+			}
+		}
+		return false
+	case "debugging_workspace":
+		v, err := debugStore.Get(repo, source.ResourceID)
+		return err == nil && source.Revision == strconv.Itoa(v.Version)
+	case "runbook":
+		v, err := runbookStore.Get(source.ResourceID)
+		return err == nil && v.RepositoryID == repo && source.Revision == strconv.Itoa(v.CurrentVersion)
+	case "support_thread":
+		v, err := supportStore.Get(repo, source.ResourceID)
+		return err == nil && source.Revision == strconv.Itoa(v.Version)
+	case "deployment":
+		v, err := deploymentStore.GetPromotion(repo, source.ResourceID)
+		return err == nil && source.Revision == v.CommitID
+	default:
+		return false
+	}
 }
 func writeObservabilityGap(w http.ResponseWriter, out observabilitygaps.Gap, e error, status int) {
 	switch {

@@ -118,7 +118,9 @@ expected behavior, audience, intended decision, affected services and journeys, 
 timeliness, exact source context, owners, and success criteria. Sources may be service objectives,
 incidents, debugging workspaces, runbooks, support threads, deployments, or manual questions.
 Current evidence is typed as metric, log, trace, profile, or event and must bind an authoritative
-exact repository release plus environment. Reads preserve attributable absent coverage, ambiguous
+exact repository release plus a successful promotion to an exact repository environment ID. Every
+non-manual source resolves its exact current version or deployment commit through its owning store
+before publication. Reads preserve attributable absent coverage, ambiguous
 semantics, inaccessible sources, caller-declared stale status, and observations older than 30 days.
 Caller-stable create and revision identities reconcile unchanged retries and reject changed reuse;
 all named owners and audience members must remain current repository participants through
