@@ -205,6 +205,9 @@ func (s *Store) AppendDutyEvent(id, actor, requestID, kind, shiftID, to, reason 
 				if dutyEventDigest(old) != probe {
 					return ErrConflict
 				}
+				if old.RotationVersion != v.CurrentVersion {
+					return ErrConflict
+				}
 				out = v
 				return nil
 			}
@@ -264,38 +267,77 @@ func (s *Store) AcceptDutyEvent(id, eventID, actor string, expected int) (Rotati
 		if e != nil {
 			return e
 		}
-		if v.EventVersion != expected {
-			return ErrConflict
-		}
-		idx := -1
-		for i := range v.Events {
-			if v.Events[i].ID == eventID {
-				idx = i
-				break
-			}
-		}
-		if idx < 0 {
-			return ErrNotFound
-		}
-		event := &v.Events[idx]
-		if event.Status != "pending" || event.ToUserID != actor {
-			return ErrInvalid
-		}
-		r := v.Revisions[len(v.Revisions)-1]
-		shift, found := findShift(r, event.ShiftID)
-		if !rotationMember(r, actor) || !found || event.RotationVersion != v.CurrentVersion || event.FromUserID != effectiveOwner(v, shift) {
-			return ErrInvalid
-		}
-		now := s.now()
-		event.Status = "accepted"
-		event.AcceptedBy = actor
-		event.AcceptedAt = &now
-		v.EventVersion++
-		v.UpdatedAt = now
-		out = v
-		return s.writeRotation(v)
+		return s.acceptDutyEventLocked(&v, eventID, actor, expected, nil, &out)
 	})
 	return out, err
+}
+
+// AcceptDutyEventAuthorized serializes current policy-team authorization with
+// the acceptance write under the same policy/rotation cross-process lock used
+// by policy publication. A successor cannot remove either party between proof
+// and persistence.
+func (s *Store) AcceptDutyEventAuthorized(id, eventID, actor string, expected int) (Rotation, error) {
+	var out Rotation
+	err := s.lock(func() error {
+		v, e := s.readRotation(id)
+		if e != nil {
+			return e
+		}
+		if len(v.Revisions) == 0 {
+			return ErrInvalid
+		}
+		revision := v.Revisions[len(v.Revisions)-1]
+		policy, e := s.read(revision.PolicyID)
+		if e != nil || policy.RepositoryID != v.RepositoryID || len(policy.Revisions) == 0 {
+			return ErrForbidden
+		}
+		members := map[string]bool{}
+		for _, team := range policy.Revisions[len(policy.Revisions)-1].Teams {
+			if team.ID == revision.TeamID {
+				for _, id := range team.MemberIDs {
+					members[id] = true
+				}
+			}
+		}
+		return s.acceptDutyEventLocked(&v, eventID, actor, expected, members, &out)
+	})
+	return out, err
+}
+
+func (s *Store) acceptDutyEventLocked(v *Rotation, eventID, actor string, expected int, authorized map[string]bool, out *Rotation) error {
+	if v.EventVersion != expected {
+		return ErrConflict
+	}
+	idx := -1
+	for i := range v.Events {
+		if v.Events[i].ID == eventID {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return ErrNotFound
+	}
+	event := &v.Events[idx]
+	if event.Status != "pending" || event.ToUserID != actor {
+		return ErrInvalid
+	}
+	if authorized != nil && (!authorized[actor] || !authorized[event.FromUserID]) {
+		return ErrForbidden
+	}
+	r := v.Revisions[len(v.Revisions)-1]
+	shift, found := findShift(r, event.ShiftID)
+	if !rotationMember(r, actor) || !found || event.RotationVersion != v.CurrentVersion || event.FromUserID != effectiveOwner(*v, shift) {
+		return ErrInvalid
+	}
+	now := s.now()
+	event.Status = "accepted"
+	event.AcceptedBy = actor
+	event.AcceptedAt = &now
+	v.EventVersion++
+	v.UpdatedAt = now
+	*out = *v
+	return s.writeRotation(*v)
 }
 
 func ProjectRotation(v Rotation, current map[string]bool, now time.Time) Rotation {

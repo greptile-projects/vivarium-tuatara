@@ -105,6 +105,9 @@ func TestPendingTransferCannotCrossRotationRevision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err = s.AppendDutyEvent(r.ID, "alice", "pending", "delegate", "day-2", "bob", "handoff", context, r.EventVersion); err != ErrConflict {
+		t.Fatalf("superseded retry=%v", err)
+	}
 	if _, err = s.AcceptDutyEvent(r.ID, r.Events[0].ID, "bob", r.EventVersion); err != ErrInvalid {
 		t.Fatalf("stale acceptance=%v", err)
 	}

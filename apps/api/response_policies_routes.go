@@ -251,22 +251,21 @@ func registerResponsePolicyRoutes(mux *http.ServeMux, catalog *repositories.Stor
 			writeAPIError(w, 404, "response_rotation_not_found", "response rotation not found")
 			return
 		}
-		members, membershipErr := currentTeamMembers(current)
-		var pendingSender string
+		pendingSender := ""
 		for _, event := range current.Events {
 			if event.ID == r.PathValue("event_id") {
 				pendingSender = event.FromUserID
 				break
 			}
 		}
-		if membershipErr != nil || !members[actor.UserID] || pendingSender == "" || !members[pendingSender] {
-			writeAPIError(w, 403, "response_rotation_forbidden", "duty acceptance requires current accountable-team membership")
+		if pendingSender == "" {
+			writeAPIError(w, 404, "response_rotation_not_found", "response rotation or duty event not found")
 			return
 		}
 		var out responsepolicies.Rotation
 		err = catalog.WithCurrentParticipants([]string{actor.UserID, pendingSender}, r.PathValue("id"), func() error {
 			var e error
-			out, e = store.AcceptDutyEvent(current.ID, r.PathValue("event_id"), actor.UserID, in.ExpectedVersion)
+			out, e = store.AcceptDutyEventAuthorized(current.ID, r.PathValue("event_id"), actor.UserID, in.ExpectedVersion)
 			return e
 		})
 		writeResponseRotation(w, project(actor.UserID, r.PathValue("id"), out), err, 200)
@@ -290,6 +289,8 @@ func writeResponseRotation(w http.ResponseWriter, out responsepolicies.Rotation,
 		writeAPIError(w, 409, "response_rotation_conflict", "the rotation changed or this request identity was reused")
 	case errors.Is(err, responsepolicies.ErrInvalid):
 		writeAPIError(w, 400, "invalid_response_rotation", "rotation, qualification, workload, handoff, context, and acceptance requirements were not met")
+	case errors.Is(err, responsepolicies.ErrForbidden):
+		writeAPIError(w, 403, "response_rotation_forbidden", "duty action requires current accountable-team membership")
 	case errors.Is(err, repositories.ErrInvalidCollaborator), errors.Is(err, repositories.ErrNotFound):
 		writeAPIError(w, 403, "response_rotation_forbidden", "every assigned responder must remain a current repository participant")
 	default:
