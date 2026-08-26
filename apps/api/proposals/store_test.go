@@ -247,6 +247,22 @@ func TestResponseAlertCorrectiveWorkRetainsAgentBoundary(t *testing.T) {
 	}
 }
 
+func TestRunbookCorrectiveWorkRetainsCallerStableOrigin(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := CorrectiveWorkInput{RunbookExecutionID: "rb-0123456789abcdef01234567", OperationID: "01234567-89ab-cdef-0123-456789abcdef", RepositoryID: repositoryID, ActorID: authorID, ProposalTitle: "Document recovery correction", ProposalBody: "Governed correction from retained runbook evidence.", TaskTitle: "Update the procedure", Outcome: "Deliver the supported correction through ordinary review.", AssigneeID: commenterID, BaseRevision: strings.Repeat("a", 40), DueAt: time.Now().UTC().Add(time.Hour)}
+	proposal, task, err := store.CreateCorrectiveWork(input)
+	if err != nil || task.ProposalID != proposal.ID {
+		t.Fatalf("proposal=%+v task=%+v err=%v", proposal, task, err)
+	}
+	retryProposal, retryTask, err := store.CreateCorrectiveWork(input)
+	if err != nil || retryProposal.ID != proposal.ID || retryTask.ID != task.ID {
+		t.Fatalf("retry proposal=%+v task=%+v err=%v", retryProposal, retryTask, err)
+	}
+}
+
 func TestConcurrentCommentsAreNotLostAcrossStores(t *testing.T) {
 	root := t.TempDir()
 	first, _ := New(root)

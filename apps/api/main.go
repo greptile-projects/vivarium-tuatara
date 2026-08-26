@@ -1649,7 +1649,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		}
 	}
 	if authStore != nil && repositoryCatalog != nil && runbookStore != nil {
-		registerRunbookRoutes(mux, store, repositoryCatalog, authStore, runbookStore, workflowComponentStore, organizationStore)
+		registerRunbookRoutes(mux, store, repositoryCatalog, authStore, runbookStore, workflowComponentStore, organizationStore, proposalStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && qualityPlanStore != nil {
 		registerQualityPlanRoutes(mux, repositoryCatalog, authStore, qualityPlanStore)

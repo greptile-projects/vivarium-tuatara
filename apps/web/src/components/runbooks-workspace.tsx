@@ -70,6 +70,14 @@ type Execution = {
     message?: string;
     created_at: string;
   }>;
+  assessment?: {
+    outcome: string;
+    require_fresh_rehearsal: boolean;
+    criteria: Array<{ kind: string; criterion: string; status: string }>;
+    deviations: Array<{ kind: string; summary: string }>;
+    findings: Array<{ id: string; kind: string; summary: string; proposal_id?: string; task_id?: string }>;
+    feedback: Array<{ participant_type: string; participant_id: string; summary: string }>;
+  };
 };
 type Recommendation = {
   runbook_id: string;
@@ -105,6 +113,13 @@ const template = (owner = "") => ({
   required_skills: ["service operations"],
   rollback_criteria: [
     "Stop when user impact grows or evidence contradicts the diagnosis",
+  ],
+  outcome_criteria: [
+    { kind: "health", criterion: "Service health remains within the declared healthy boundary" },
+    { kind: "containment", criterion: "Affected user and resource scope no longer grows" },
+    { kind: "recovery", criterion: "The affected journey succeeds on the intended release" },
+    { kind: "communication", criterion: "Every declared audience received the final state" },
+    { kind: "rollback", criterion: "Rollback completed or retained evidence proves it was unnecessary" },
   ],
   policy_revision_ids: [],
   escalations: owner
@@ -169,6 +184,8 @@ export function RunbooksWorkspace({ repositoryID }: { repositoryID: string }) {
   const [chosenRecommendation, setChosenRecommendation] = useState("");
   const [selectedExecution, setSelectedExecution] = useState<Execution>();
   const [executionAction, setExecutionAction] = useState("");
+  const [assessment, setAssessment] = useState("");
+  const [improvement, setImprovement] = useState("");
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
   const recommendationGeneration = useRef(0);
@@ -418,6 +435,11 @@ export function RunbooksWorkspace({ repositoryID }: { repositoryID: string }) {
         2,
       ),
     );
+    const book = items.find((x) => x.executions?.some((y) => y.id === execution.id));
+    const revision = book?.revisions[execution.runbook_version - 1] as { outcome_criteria?: Array<{ kind: string; criterion: string }> };
+    const digest = execution.completed_evidence.at(-1)?.digest ?? "sha256:retained-evidence";
+    setAssessment(JSON.stringify({ request_id: crypto.randomUUID(), expected_version: execution.version, outcome: execution.status === "aborted" ? "abandoned" : "completed", criteria: (revision?.outcome_criteria ?? []).map((x) => ({ ...x, status: "met", evidence_digests: [digest], explanation: "Explain how retained evidence proves this criterion." })), deviations: [], findings: [], feedback: [{ participant_type: "human", participant_id: execution.controller_id, summary: "Record participant feedback about procedure fitness." }], require_fresh_rehearsal: false, suspend_current_use: false }, null, 2));
+    setImprovement(JSON.stringify({ request_id: crypto.randomUUID(), finding_id: execution.assessment?.findings.find((x) => !x.proposal_id)?.id ?? "", kind: execution.assessment?.findings.find((x) => !x.proposal_id)?.kind ?? "documentation", title: "Correct the observed runbook gap", outcome: "Deliver the supported correction through ordinary review and verify it against the retained evidence.", assignee_type: "human", assignee_id: execution.controller_id, base_revision: "replace-with-40-character-commit", due_at: new Date(Date.now() + 7 * 86400000).toISOString() }, null, 2));
   }
   async function act(e: FormEvent) {
     e.preventDefault();
@@ -459,6 +481,18 @@ export function RunbooksWorkspace({ repositoryID }: { repositoryID: string }) {
     } finally {
       setPending(false);
     }
+  }
+  async function assess(e: FormEvent) {
+    e.preventDefault(); if (!token || !selectedExecution) return; setPending(true);
+    try { const out = await api<Execution>(`/repositories/${repositoryID}/runbook-executions/${selectedExecution.id}/assessment`, { method: "POST", body: assessment }, token); setSelectedExecution(out); setItems((xs) => xs.map((book) => ({ ...book, executions: book.executions?.map((x) => x.id === out.id ? out : x) }))); setError(""); }
+    catch (x) { setError(x instanceof Error ? x.message : "Outcome assessment could not be retained"); }
+    finally { setPending(false); }
+  }
+  async function createImprovement(e: FormEvent) {
+    e.preventDefault(); if (!token || !selectedExecution) return; setPending(true);
+    try { const result = await api<{ execution: Execution }>(`/repositories/${repositoryID}/runbook-executions/${selectedExecution.id}/improvements`, { method: "POST", body: improvement }, token); setSelectedExecution(result.execution); setItems((xs) => xs.map((book) => ({ ...book, executions: book.executions?.map((x) => x.id === result.execution.id ? result.execution : x) }))); setError(""); }
+    catch (x) { setError(x instanceof Error ? x.message : "Improvement work could not be created"); }
+    finally { setPending(false); }
   }
   return (
     <div className="space-y-6">
@@ -567,6 +601,9 @@ export function RunbooksWorkspace({ repositoryID }: { repositoryID: string }) {
             {selectedExecution.blockers.map((b, i) => <p key={`${b.kind}-${i}`} className="mt-2 text-xs text-[var(--danger)]">{b.kind}: {b.message}</p>)}
             {selectedExecution.pending_decisions.map((decision) => <p key={decision} className="mt-2 text-xs">Decision pending: {decision}</p>)}
             <form className="mt-4" onSubmit={act}><label className="text-sm font-medium" htmlFor="execution-action">Version-bound action</label><textarea id="execution-action" value={executionAction} onChange={(e) => setExecutionAction(e.target.value)} className="mt-2 min-h-48 w-full rounded-lg border border-[var(--line-strong)] bg-white p-3 font-mono text-xs"/><Button type="submit" disabled={pending} className="mt-3">Retain action receipt</Button></form>
+            {(selectedExecution.status === "completed" || selectedExecution.status === "aborted") && <form className="mt-4" onSubmit={assess}><label className="text-sm font-medium" htmlFor="execution-assessment">Outcome and procedure fitness</label><textarea id="execution-assessment" value={assessment} onChange={(e) => setAssessment(e.target.value)} className="mt-2 min-h-64 w-full rounded-lg border border-[var(--line-strong)] bg-white p-3 font-mono text-xs"/><Button type="submit" disabled={pending} className="mt-3">Freeze outcome assessment</Button></form>}
+            {selectedExecution.assessment && <div className="mt-4 rounded bg-[var(--canvas)] p-3 text-xs"><strong>{selectedExecution.assessment.outcome} · immutable assessment</strong><p className="mt-1">{selectedExecution.assessment.criteria.length} criteria · {selectedExecution.assessment.deviations.length} deviations · {selectedExecution.assessment.findings.length} findings · fresh rehearsal {selectedExecution.assessment.require_fresh_rehearsal ? "required" : "not required"}</p>{selectedExecution.assessment.findings.map((finding) => <p className="mt-1" key={finding.id}>{finding.kind}: {finding.summary}{finding.proposal_id ? ` · proposal ${finding.proposal_id} / task ${finding.task_id}` : " · unlinked"}</p>)}</div>}
+            {selectedExecution.assessment?.findings.some((x) => !x.proposal_id) && <form className="mt-4" onSubmit={createImprovement}><label className="text-sm font-medium" htmlFor="execution-improvement">Ordinary linked improvement</label><textarea id="execution-improvement" value={improvement} onChange={(e) => setImprovement(e.target.value)} className="mt-2 min-h-56 w-full rounded-lg border border-[var(--line-strong)] bg-white p-3 font-mono text-xs"/><Button type="submit" disabled={pending} className="mt-3">Create proposal and owned task</Button></form>}
             <div className="mt-4 space-y-1">{selectedExecution.receipts.map((receipt) => <p key={receipt.id} className="text-xs text-[var(--muted)]">{receipt.action}{receipt.step_id ? ` · ${receipt.step_id}` : ""} · {receipt.actor_type} {receipt.actor_id}</p>)}</div>
           </div>}
         </div>

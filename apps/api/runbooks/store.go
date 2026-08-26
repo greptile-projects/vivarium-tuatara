@@ -76,21 +76,26 @@ type Escalation struct {
 	ExpectedAction string `json:"expected_action"`
 }
 type Revision struct {
-	RequestID         string       `json:"request_id,omitempty"`
-	Version           int          `json:"version,omitempty"`
-	Title             string       `json:"title"`
-	Purpose           string       `json:"purpose"`
-	Scope             Scope        `json:"scope"`
-	Preconditions     []string     `json:"preconditions"`
-	Steps             []Step       `json:"steps"`
-	RollbackCriteria  []string     `json:"rollback_criteria"`
-	OwnerIDs          []string     `json:"owner_ids"`
-	RequiredSkills    []string     `json:"required_skills"`
-	Escalations       []Escalation `json:"escalations"`
-	PolicyRevisionIDs []string     `json:"policy_revision_ids"`
-	ChangeReason      string       `json:"change_reason"`
-	CreatedBy         string       `json:"created_by,omitempty"`
-	CreatedAt         time.Time    `json:"created_at,omitempty"`
+	RequestID         string             `json:"request_id,omitempty"`
+	Version           int                `json:"version,omitempty"`
+	Title             string             `json:"title"`
+	Purpose           string             `json:"purpose"`
+	Scope             Scope              `json:"scope"`
+	Preconditions     []string           `json:"preconditions"`
+	Steps             []Step             `json:"steps"`
+	RollbackCriteria  []string           `json:"rollback_criteria"`
+	OutcomeCriteria   []OutcomeCriterion `json:"outcome_criteria"`
+	OwnerIDs          []string           `json:"owner_ids"`
+	RequiredSkills    []string           `json:"required_skills"`
+	Escalations       []Escalation       `json:"escalations"`
+	PolicyRevisionIDs []string           `json:"policy_revision_ids"`
+	ChangeReason      string             `json:"change_reason"`
+	CreatedBy         string             `json:"created_by,omitempty"`
+	CreatedAt         time.Time          `json:"created_at,omitempty"`
+}
+type OutcomeCriterion struct {
+	Kind      string `json:"kind"`
+	Criterion string `json:"criterion"`
 }
 type RehearsalInput struct {
 	Kind         string     `json:"kind"`
@@ -223,6 +228,65 @@ type Execution struct {
 	CostCents           int                    `json:"cost_cents"`
 	RollbackState       string                 `json:"rollback_state"`
 	PredictedNextAction string                 `json:"predicted_next_action"`
+	Assessment          *ExecutionAssessment   `json:"assessment,omitempty"`
+}
+type CriterionResult struct {
+	Kind            string   `json:"kind"`
+	Criterion       string   `json:"criterion"`
+	Status          string   `json:"status"`
+	EvidenceDigests []string `json:"evidence_digests"`
+	Explanation     string   `json:"explanation"`
+}
+type ExecutionDeviation struct {
+	Kind            string   `json:"kind"`
+	StepID          string   `json:"step_id,omitempty"`
+	Summary         string   `json:"summary"`
+	EvidenceDigests []string `json:"evidence_digests"`
+}
+type ParticipantFeedback struct {
+	ParticipantType string `json:"participant_type"`
+	ParticipantID   string `json:"participant_id"`
+	Summary         string `json:"summary"`
+}
+type ExecutionFinding struct {
+	ID              string   `json:"id"`
+	Kind            string   `json:"kind"`
+	Summary         string   `json:"summary"`
+	EvidenceDigests []string `json:"evidence_digests"`
+	ProposalID      string   `json:"proposal_id,omitempty"`
+	TaskID          string   `json:"task_id,omitempty"`
+}
+type ExecutionAssessment struct {
+	RequestID             string                `json:"request_id"`
+	RequestDigest         string                `json:"request_digest"`
+	Outcome               string                `json:"outcome"`
+	Criteria              []CriterionResult     `json:"criteria"`
+	Deviations            []ExecutionDeviation  `json:"deviations"`
+	Findings              []ExecutionFinding    `json:"findings"`
+	Feedback              []ParticipantFeedback `json:"feedback"`
+	RequireFreshRehearsal bool                  `json:"require_fresh_rehearsal"`
+	AssessedBy            string                `json:"assessed_by"`
+	CreatedAt             time.Time             `json:"created_at"`
+}
+type AssessmentInput struct {
+	RequestID              string                `json:"request_id"`
+	ExpectedVersion        int                   `json:"expected_version"`
+	Outcome                string                `json:"outcome"`
+	Criteria               []CriterionResult     `json:"criteria"`
+	Deviations             []ExecutionDeviation  `json:"deviations"`
+	Findings               []ExecutionFinding    `json:"findings"`
+	Feedback               []ParticipantFeedback `json:"feedback"`
+	RequireFreshRehearsal  bool                  `json:"require_fresh_rehearsal"`
+	SuspendCurrentUse      bool                  `json:"suspend_current_use"`
+	FallbackRunbookID      string                `json:"fallback_runbook_id,omitempty"`
+	FallbackRunbookVersion int                   `json:"fallback_runbook_version,omitempty"`
+}
+type ImprovementLink struct {
+	RequestID  string `json:"request_id"`
+	FindingID  string `json:"finding_id"`
+	Kind       string `json:"kind"`
+	ProposalID string `json:"proposal_id"`
+	TaskID     string `json:"task_id"`
 }
 type ExecutionParticipant struct {
 	ActorType string    `json:"actor_type"`
@@ -275,17 +339,21 @@ type Recommendation struct {
 	ChoiceRequired bool               `json:"choice_required"`
 }
 type Runbook struct {
-	ID             string       `json:"id"`
-	RepositoryID   string       `json:"repository_id"`
-	RequestID      string       `json:"request_id"`
-	RequestDigest  string       `json:"request_digest"`
-	CurrentVersion int          `json:"current_version"`
-	Revisions      []Revision   `json:"revisions"`
-	Diagnostics    []Diagnostic `json:"diagnostics"`
-	CreatedAt      time.Time    `json:"created_at"`
-	UpdatedAt      time.Time    `json:"updated_at"`
-	Rehearsals     []Rehearsal  `json:"rehearsals"`
-	Executions     []Execution  `json:"executions"`
+	ID                     string       `json:"id"`
+	RepositoryID           string       `json:"repository_id"`
+	RequestID              string       `json:"request_id"`
+	RequestDigest          string       `json:"request_digest"`
+	CurrentVersion         int          `json:"current_version"`
+	Revisions              []Revision   `json:"revisions"`
+	Diagnostics            []Diagnostic `json:"diagnostics"`
+	CreatedAt              time.Time    `json:"created_at"`
+	UpdatedAt              time.Time    `json:"updated_at"`
+	Rehearsals             []Rehearsal  `json:"rehearsals"`
+	Executions             []Execution  `json:"executions"`
+	UseStatus              string       `json:"use_status"`
+	SuspensionReason       string       `json:"suspension_reason,omitempty"`
+	FallbackRunbookID      string       `json:"fallback_runbook_id,omitempty"`
+	FallbackRunbookVersion int          `json:"fallback_runbook_version,omitempty"`
 }
 
 func (s *Store) Recommend(repo string, context ExecutionContext) ([]Recommendation, error) {
@@ -556,6 +624,177 @@ func (s *Store) Act(id, executionID, actorType, actorID string, in ExecutionActi
 	})
 	return out, err
 }
+
+// Assess freezes the service outcome and procedure fitness without changing the
+// revision used by the execution. Only a terminal execution can be assessed.
+func (s *Store) Assess(id, executionID, actorID string, in AssessmentInput) (Execution, error) {
+	var out Execution
+	err := s.lock(func() error {
+		book, err := s.read(id)
+		if err != nil {
+			return err
+		}
+		i := -1
+		for n := range book.Executions {
+			if book.Executions[n].ID == executionID {
+				i = n
+				break
+			}
+		}
+		if i < 0 {
+			return ErrNotFound
+		}
+		e := &book.Executions[i]
+		d := assessmentDigest(in)
+		if e.Assessment != nil {
+			if e.Assessment.RequestID == in.RequestID && e.Assessment.RequestDigest == d && e.Assessment.AssessedBy == actorID {
+				out = *e
+				return nil
+			}
+			return ErrConflict
+		}
+		if in.RequestID == "" || in.ExpectedVersion != e.Version || (e.Status != "completed" && e.Status != "aborted") || (in.Outcome != "completed" && in.Outcome != "abandoned") {
+			return ErrConflict
+		}
+		revision := book.Revisions[e.RunbookVersion-1]
+		if !validAssessment(in, revision, *e) {
+			return ErrInvalid
+		}
+		now := s.now()
+		findings := append([]ExecutionFinding(nil), in.Findings...)
+		for n := range findings {
+			findings[n].ID = stableID(executionID, in.RequestID, findings[n].Kind, findings[n].Summary)
+		}
+		e.Assessment = &ExecutionAssessment{RequestID: in.RequestID, RequestDigest: d, Outcome: in.Outcome, Criteria: in.Criteria, Deviations: in.Deviations, Findings: findings, Feedback: in.Feedback, RequireFreshRehearsal: in.RequireFreshRehearsal, AssessedBy: actorID, CreatedAt: now}
+		e.Status = "assessed"
+		e.PredictedNextAction = "review findings and linked improvement work"
+		e.Version++
+		if in.SuspendCurrentUse {
+			book.UseStatus, book.SuspensionReason = "suspended", "terminal execution "+executionID+" found repeated failure or unsafe drift"
+			book.FallbackRunbookID, book.FallbackRunbookVersion = in.FallbackRunbookID, in.FallbackRunbookVersion
+		}
+		book.UpdatedAt = now
+		out = *e
+		return s.write(book)
+	})
+	return out, err
+}
+
+func validAssessment(in AssessmentInput, revision Revision, execution Execution) bool {
+	if len(revision.OutcomeCriteria) == 0 || len(in.Criteria) != len(revision.OutcomeCriteria) || len(in.Findings) > 50 || len(in.Feedback) > 100 || secretPattern.MatchString(string(mustJSON(in))) {
+		return false
+	}
+	declared := map[string]bool{}
+	for _, c := range revision.OutcomeCriteria {
+		declared[c.Kind+"\x00"+c.Criterion] = true
+	}
+	evidence := map[string]bool{}
+	for _, e := range execution.CompletedEvidence {
+		evidence[e.Digest] = true
+	}
+	for _, e := range execution.Context.Evidence {
+		evidence[e.Digest] = true
+	}
+	seen := map[string]bool{}
+	validKinds := map[string]bool{"health": true, "containment": true, "recovery": true, "communication": true, "rollback": true}
+	for _, c := range in.Criteria {
+		key := c.Kind + "\x00" + c.Criterion
+		if !validKinds[c.Kind] || !declared[key] || seen[key] || (c.Status != "met" && c.Status != "unmet" && c.Status != "unknown") || c.Explanation == "" {
+			return false
+		}
+		for _, d := range c.EvidenceDigests {
+			if !evidence[d] {
+				return false
+			}
+		}
+		seen[key] = true
+	}
+	deviationKinds := map[string]bool{"deviation": true, "manual_work": true, "failed_step": true, "timing": true, "access_gap": true, "agent_correction": true, "cost": true}
+	for _, d := range in.Deviations {
+		if !deviationKinds[d.Kind] || d.Summary == "" {
+			return false
+		}
+		if d.StepID != "" {
+			if _, ok := executionStep(revision, d.StepID); !ok {
+				return false
+			}
+		}
+		for _, x := range d.EvidenceDigests {
+			if !evidence[x] {
+				return false
+			}
+		}
+	}
+	findingKinds := map[string]bool{"documentation": true, "workflow": true, "policy": true, "infrastructure": true, "code": true}
+	for _, f := range in.Findings {
+		if !findingKinds[f.Kind] || f.Summary == "" || len(f.EvidenceDigests) == 0 {
+			return false
+		}
+		for _, x := range f.EvidenceDigests {
+			if !evidence[x] {
+				return false
+			}
+		}
+	}
+	for _, f := range in.Feedback {
+		if f.Summary == "" || !executionParticipant(execution.Participants, f.ParticipantType, f.ParticipantID) {
+			return false
+		}
+	}
+	if in.SuspendCurrentUse && (in.FallbackRunbookID == "" || in.FallbackRunbookVersion < 1 || !in.RequireFreshRehearsal) {
+		return false
+	}
+	return true
+}
+func assessmentDigest(in AssessmentInput) string {
+	in.ExpectedVersion = 0
+	b, _ := json.Marshal(in)
+	h := sha256.Sum256(b)
+	return hex.EncodeToString(h[:])
+}
+
+func (s *Store) LinkImprovement(id, executionID, actorID string, link ImprovementLink) (Execution, error) {
+	var out Execution
+	if actorID == "" || link.RequestID == "" || link.FindingID == "" || link.ProposalID == "" || link.TaskID == "" {
+		return out, ErrInvalid
+	}
+	err := s.lock(func() error {
+		book, err := s.read(id)
+		if err != nil {
+			return err
+		}
+		for i := range book.Executions {
+			e := &book.Executions[i]
+			if e.ID != executionID {
+				continue
+			}
+			if e.Assessment == nil {
+				return ErrConflict
+			}
+			for n := range e.Assessment.Findings {
+				f := &e.Assessment.Findings[n]
+				if f.ID != link.FindingID {
+					continue
+				}
+				if f.ProposalID != "" {
+					if f.ProposalID == link.ProposalID && f.TaskID == link.TaskID {
+						out = *e
+						return nil
+					}
+					return ErrConflict
+				}
+				f.ProposalID, f.TaskID = link.ProposalID, link.TaskID
+				e.Version++
+				book.UpdatedAt = s.now()
+				out = *e
+				return s.write(book)
+			}
+			return ErrNotFound
+		}
+		return ErrNotFound
+	})
+	return out, err
+}
 func executionStep(r Revision, id string) (Step, bool) {
 	for _, s := range r.Steps {
 		if s.ID == id {
@@ -623,6 +862,13 @@ func validExecutionContext(c ExecutionContext) bool {
 }
 func executionSafetyBlockers(book Runbook, r Revision, checks []Preconditions, access []string) []ExecutionBlocker {
 	out := []ExecutionBlocker{}
+	if book.UseStatus == "suspended" {
+		message := "Current use is suspended: " + book.SuspensionReason
+		if book.FallbackRunbookID != "" {
+			message += "; use approved fallback " + book.FallbackRunbookID
+		}
+		out = append(out, ExecutionBlocker{Kind: "runbook_suspended", Message: message})
+	}
 	if r.Version != book.CurrentVersion {
 		out = append(out, ExecutionBlocker{Kind: "stale_runbook", Message: "A newer runbook revision exists; choose whether to use the retained revision."})
 	}
@@ -1009,6 +1255,9 @@ func project(v Runbook) Runbook {
 		return v
 	}
 	r := v.Revisions[len(v.Revisions)-1]
+	if v.UseStatus == "" {
+		v.UseStatus = "active"
+	}
 	for i := range v.Rehearsals {
 		v.Rehearsals[i].Stale = v.Rehearsals[i].RunbookVersion != v.CurrentVersion
 		v.Rehearsals[i].StaleReasons = nil
@@ -1039,6 +1288,15 @@ func project(v Runbook) Runbook {
 	}
 	if len(r.OwnerIDs) == 0 {
 		add("missing_owner", "blocking", "The runbook has no accountable owner.", "", r.Scope.ResourceID, r.CreatedBy)
+	}
+	criteriaKinds := map[string]bool{}
+	for _, criterion := range r.OutcomeCriteria {
+		criteriaKinds[criterion.Kind] = strings.TrimSpace(criterion.Criterion) != ""
+	}
+	for _, kind := range []string{"health", "containment", "recovery", "communication", "rollback"} {
+		if !criteriaKinds[kind] {
+			add("missing_outcome_criterion", "blocking", "The runbook must declare a "+kind+" outcome criterion.", "", r.Scope.ResourceID, r.CreatedBy)
+		}
 	}
 	if secretPattern.MatchString(string(mustJSON(r))) {
 		add("secret_bearing_input", "blocking", "Potential credential material must be removed from the procedure.", "", r.Scope.ResourceID, r.CreatedBy)
