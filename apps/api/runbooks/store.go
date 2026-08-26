@@ -138,6 +138,8 @@ func (s *Store) Create(repo, actor, request string, r Revision) (Runbook, error)
 			}
 			out = old
 			return nil
+		} else if !errors.Is(e, ErrNotFound) {
+			return e
 		}
 		now := s.now()
 		stamp(&r, actor, request, 1, now)

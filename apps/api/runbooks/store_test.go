@@ -1,6 +1,10 @@
 package runbooks
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func validRevision(owner string) Revision {
 	return Revision{Title: "Checkout recovery", Purpose: "Diagnose before changing state", Scope: Scope{Kind: "service", ResourceID: "checkout", Name: "Checkout"}, Preconditions: []string{"Confirm signal"}, RollbackCriteria: []string{"Stop on increased impact"}, OwnerIDs: []string{owner}, RequiredSkills: []string{"operations"}, Escalations: []Escalation{{Condition: "blocked", OwnerID: owner, Path: "owner", ExpectedAction: "decide"}}, ChangeReason: "initial", Steps: []Step{{ID: "inspect", Position: 1, Kind: "diagnostic", Title: "Inspect", Purpose: "Test hypothesis", Instructions: "Use reviewed workflow", Preconditions: []string{"read access"}, ExpectedEvidence: []string{"health digest"}, OwnerIDs: []string{owner}, RequiredSkills: []string{"operations"}, References: []Reference{{Kind: "command", ResourceID: "health-check", Revision: "abc", Reviewed: true, Accessible: true}}, Authority: Authority{RequiredAccess: []string{"service:read"}, Inspects: []string{"health"}, ProhibitedActions: []string{"deploy"}}}}}
@@ -39,5 +43,25 @@ func TestSecretBearingInputRemainsExplicit(t *testing.T) {
 	}
 	if len(v.Diagnostics) != 1 || v.Diagnostics[0].Kind != "secret_bearing_input" {
 		t.Fatalf("diagnostics=%+v", v.Diagnostics)
+	}
+}
+
+func TestCreatePreservesUnreadableRetainedRecord(t *testing.T) {
+	root := t.TempDir()
+	s, _ := New(root)
+	path := filepath.Join(root, stableID("repo", "owner", "create")+".json")
+	original := []byte(`{"truncated"`)
+	if err := os.WriteFile(path, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Create("repo", "owner", "create", validRevision("owner")); err == nil {
+		t.Fatal("expected retained-record read error")
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(original) {
+		t.Fatalf("retained record changed: %q", after)
 	}
 }
