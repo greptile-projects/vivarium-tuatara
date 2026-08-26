@@ -168,7 +168,7 @@ function ScopedResponsePoliciesWorkspace({
           : "Response coverage could not be loaded",
       );
     }
-  }, [repositoryID, token, user?.id]);
+  }, [repositoryID, token, user]);
   useEffect(() => {
     void Promise.resolve().then(load);
   }, [load]);
