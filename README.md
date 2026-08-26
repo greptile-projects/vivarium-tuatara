@@ -111,6 +111,15 @@ The Capacity workspace exposes release-bound sanitized evidence, observation win
 assumptions, workload segments, saturation uncertainty, costs, alternative scenarios,
 and append-only challenges without treating restricted observations as absent proof.
 
+Authorized repository collaborators can open immutable observability gaps at
+`/repositories/{id}/observability-gaps` and use the repository Observability workspace
+to agree on an unanswered operational question, expected behavior, audience, intended
+decision, affected services and journeys, timeliness, owners, and success criteria.
+Metrics, logs, traces, profiles, and events bind to exact repository releases and named
+environments; absent coverage, ambiguous semantics, inaccessible evidence, and stale
+instrumentation remain attributable diagnostics. These records coordinate understanding
+and grant no telemetry, environment, deployment, disclosure, or operational authority.
+
 ## Getting started
 
 ```sh

@@ -111,6 +111,20 @@ Target maintainers reserve caller-stable cumulative `/integration-candidates` on
 Each member pull's `/stack-context` read joins its exact focused commits/diff, cumulative target diff, frozen upstream revisions, ordinary revision-bound discussion, reviews, checks, previews and findings, plus exact owner acknowledgements. It distinguishes independently reviewable layers from provisional downstream review, and names every downstream layer whose evidence an upstream replacement would invalidate. New pull comments freeze the current source revision under the same mutation lock as source synchronization; historical unbound comments remain explicitly `unbound`. Only the current human target-repository owner can append an acknowledgement, which freezes both the member revision and complete upstream revision map while holding the pull at that exact open source revision and grants no review or delivery authority.
 Current human source-repository participants can assign each stack layer to another current human participant or an approved agent with a live repository grant. Only the active assignee can open caller-stable scoped change sessions, shared workspaces, or conflict-resolution workspaces; every launch freezes the shared outcome, exact member and parent revisions, complete upstream revision map, relevant source/pull evidence, and acceptance criteria. Human and agent assignees can append revision-bound checkpoints, questions, and handoffs to the stack timeline, while restack proposals remain human-only and bind an existing retained preview. Reads derive which frozen launches and events have changed upstream assumptions and redact coordination for source repositories the caller cannot read. Agent mutations recheck the live grant and exact source repository, and branch-bound agent credentials must match the member branch. Assignment and work context grant no Git, branch, pull, review, merge, fork, federation, or disclosure authority.
 
+Observability gaps at repository `/observability-gaps` routes and the repository Observability
+workspace retain immutable complete revisions beneath `$OBSERVABILITY_GAP_STORAGE_ROOT`
+(`observability-gaps`). Current repository writers define an unanswered operational question,
+expected behavior, audience, intended decision, affected services and journeys, required
+timeliness, exact source context, owners, and success criteria. Sources may be service objectives,
+incidents, debugging workspaces, runbooks, support threads, deployments, or manual questions.
+Current evidence is typed as metric, log, trace, profile, or event and must bind an authoritative
+exact repository release plus environment. Reads preserve attributable absent coverage, ambiguous
+semantics, inaccessible sources, caller-declared stale status, and observations older than 30 days.
+Caller-stable create and revision identities reconcile unchanged retries and reject changed reuse;
+all named owners and audience members must remain current repository participants through
+publication. Gaps coordinate understanding only and grant no repository, telemetry, environment,
+deployment, disclosure, spending, agent, or operational authority.
+
 Sensitive history remediations at `/repositories/{id}/history-remediations` and the repository
 `/history-remediation` workspace give current maintainers a private, retry-stable coordination boundary
 for a security finding, privacy incident, support case, or selected object. Records retain a bounded
