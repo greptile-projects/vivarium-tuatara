@@ -64,8 +64,10 @@ procedures remain readable, are blocked from recommendation eligibility and laun
 responders to that approved fallback without granting authority in either procedure.
 
 An alert-origin launch has one narrow authoritative readiness adapter: the retained alert must belong
-to the repository, remain open, match the frozen source revision and every affected resource, and fall
-inside the submitted signal window. That proof satisfies the runbook's alert preconditions and current
+to the repository, remain open and effectively unpaused by the newest sequenced outcome routing action,
+match the frozen source revision and every affected resource, and fall inside the submitted signal window.
+An outcome pause derives no readiness even while local alert state remains open; a later durable resume
+restores eligibility. That proof satisfies the runbook's alert preconditions and current
 repository-read access only. Caller assertions, alert delivery, and response participation still cannot
 manufacture environment, credential, deployment, or other operational authority.
 

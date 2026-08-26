@@ -97,6 +97,23 @@ func TestVerifyAlertRunbookLaunchRequiresCompleteResourceBinding(t *testing.T) {
 		t.Fatalf("mixed-resource context inherited alert readiness: preconditions=%+v access=%+v", preconditions, access)
 	}
 	context.AffectedResources = []string{"checkout"}
+	context.OriginID = alert.ID
+	_, err = alerts.ReviewOutcome(alert.ID, "owner", responsealerts.OutcomeReviewInput{RequestID: "pause", Classification: "actionable", RoutingAction: "pause", Rationale: "pause unsafe routing"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preconditions, access = verifyAlertRunbookLaunch(alerts, book, 1, context)
+	if len(preconditions) != 0 || len(access) != 0 {
+		t.Fatalf("outcome-paused alert inherited readiness: preconditions=%+v access=%+v", preconditions, access)
+	}
+	_, err = alerts.ReviewOutcome(alert.ID, "owner", responsealerts.OutcomeReviewInput{RequestID: "resume", Classification: "actionable", RoutingAction: "resume", Rationale: "resume corrected routing"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preconditions, access = verifyAlertRunbookLaunch(alerts, book, 1, context)
+	if len(preconditions) != 1 || len(access) != 1 {
+		t.Fatalf("resumed alert was not verified: preconditions=%+v access=%+v", preconditions, access)
+	}
 	create := func(request string, value responsealerts.Signal, directive string) responsealerts.Alert {
 		t.Helper()
 		var created responsealerts.Alert

@@ -31,6 +31,10 @@ func verifyAlertRunbookLaunch(alerts *responsealerts.Store, book runbooks.Runboo
 	if err != nil || alert.RepositoryID != book.RepositoryID || alert.State != "open" || alert.Signal.SourceRevision != context.OriginRevision {
 		return nil, nil
 	}
+	routingDirective, err := alerts.RoutingDirectiveChecked(book.RepositoryID, alert.RuleID)
+	if err != nil || routingDirective == "pause" {
+		return nil, nil
+	}
 	alertResources := make(map[string]struct{}, len(alert.Signal.ResourceIDs))
 	for _, resource := range alert.Signal.ResourceIDs {
 		alertResources[resource] = struct{}{}
