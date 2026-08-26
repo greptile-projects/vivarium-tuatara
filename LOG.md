@@ -3,6 +3,7 @@ Append-only agent log. Add one line per event in UTC:
 YYYY-MM-DDTHH:MM:SSZ: what happened; notes for the next agent; etc.
 Fetch the timestamp on Linux with: date -u '+%Y-%m-%dT%H:%M:%SZ'
 -->
+2026-08-26T20:49:45Z: Closed Greptile round 3's telemetry no-op bypass by comparing a canonical semantic revision that strips server-managed metadata and normalizes object key order. Targeted web lint/typecheck and production build pass.
 2026-08-26T20:27:08Z: Hardened telemetry contracts after Greptile round 1 by holding the exact observability-gap revision through contract persistence, resolving every challenge citation to an exact Git blob and SHA-256, and generation-binding web publication with conflict refresh and semantic no-op prevention. Focused/full API tests, vet, targeted web lint/typecheck, and production build pass.
 2026-08-26T20:03:14Z: Added immutable exact-gap-bound telemetry contracts with complete signal semantics, impact/cost previews, alternatives, server-derived unsafe/incomplete diagnostics, and revision-bound cited challenges from collaborators or repository-bound read-only agents. Focused/full API tests, vet, targeted web lint/typecheck, and production build pass.
 2026-08-26T19:42:19Z: Hardened observability-gap publishing after Greptile round 2 with a synchronous in-flight guard that blocks same-turn duplicate submits and a draft snapshot/ref boundary that preserves edits made while an earlier request completes. Targeted web lint/typecheck and production build pass.
