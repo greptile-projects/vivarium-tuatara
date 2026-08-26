@@ -135,6 +135,13 @@ or a linked decision revisit rather than validating the objective. Storage defau
 `$CAPACITY_ROLLOUT_STORAGE_ROOT` (`capacity-rollouts`); the ledger grants no environment,
 deployment, provider, spending, scaling, decision, or operational authority.
 
+The connected `capacity-planning-journey.spec.ts` exercises the full public workflow with
+the web application, API, stock Git, bounded build executor, and protected environment.
+It carries an accepted roadmap link through a challenged and corrected forecast, noisy
+and budget-breaching alternatives, owner and quota recovery, ordinary human/agent task
+delivery, reviewed application and infrastructure changes, progressive regression and
+waste containment, rollback, and final production-validated headroom.
+
 ## Revision-exact review plans
 
 Pull authors and current repository owners can publish a review plan before approvals accumulate through `POST /repositories/{id}/pulls/{pull_id}/review-plans`; all repository readers can inspect its immutable history through the matching `GET` route and the pull page. Caller-stable `request_id` values reconcile ambiguous post-publication retries to the already-retained version and reject changed reuse. Each version freezes the exact source and target commits, declared pull intent, changed paths, target-branch required checks, inferred risks and affected security, privacy, accessibility, or interface commitments, then breaks that context into review areas with acceptance questions, required evidence, dependencies, accountable current ownership, and explicit completion rules.

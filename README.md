@@ -36,6 +36,11 @@ revisions with usable headroom, load, reliability, dependency, regional, and cos
 and gives authorized operators protected controls while deterministic risk signals contain
 unsafe or wasteful scaling.
 
+The `capacity-planning-journey.spec.ts` browser/API/stock-Git journey connects those
+contracts from roadmap-linked demand through challenged modeling, bounded alternatives,
+ordinary reviewed delivery, protected deployment, production containment, correction,
+and verified headroom, reliability, and cost.
+
 Repository participants and scoped read-only agents can turn an exact objective into
 an immutable, permission-aware capacity model at `/repositories/{id}/capacity-models`.
 The Capacity workspace exposes release-bound sanitized evidence, observation windows,
