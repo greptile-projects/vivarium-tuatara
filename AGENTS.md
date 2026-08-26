@@ -58,7 +58,9 @@ through revision-exact alert correlation, bounded agent/dependency investigation
 authorized mitigation, context-exact shift handoff, severe-recurrence incident promotion, and
 ordinary reviewed runbook improvement. It retains duplicate delivery, a missed acknowledgement,
 an absent primary, dependency false positive, failed delivery after access revocation, and rejected
-over-budget agent delegation as visible escalation and containment evidence.
+over-budget agent delegation as visible escalation and containment evidence. An accepted current-
+rotation handoff transfers acknowledge/resolve authority for each exact alert named in its frozen
+context to the effective owner; it does not rewrite original delivery or transfer unrelated alerts.
 
 Collaborative capacity contracts at repository `/capacity-objectives` routes and the
 repository `/capacity` workspace retain immutable complete revisions beneath

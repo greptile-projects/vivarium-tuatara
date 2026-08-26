@@ -273,12 +273,13 @@ func registerResponseAlertRoutes(mux *http.ServeMux, catalog *repositories.Store
 			writeAPIError(w, 404, "response_alert_not_found", "response alert not found")
 			return
 		}
-		allowed := false
-		for _, d := range current.Routing {
-			if d.RecipientID == actor.UserID && d.Status == "delivered" {
-				allowed = true
-			}
+		repository, _ := catalog.GetByID(current.RepositoryID)
+		participants := map[string]bool{}
+		for _, id := range repository.ParticipantIDs() {
+			participants[id] = true
 		}
+		rotations, _ := policies.ListRotations(current.RepositoryID)
+		allowed := responseAlertEventAllowed(current, actor.UserID, rotations, participants)
 		out, err := alerts.Append(current.ID, in.RequestID, in.Kind, actor.UserID, in.Reason, allowed)
 		writeResponseAlert(w, out, err, 200)
 	})
@@ -369,6 +370,50 @@ func registerResponseAlertRoutes(mux *http.ServeMux, catalog *repositories.Store
 		}
 		writeResponseAlert(w, out, applyErr, 200)
 	})
+}
+
+func responseAlertEventAllowed(v responsealerts.Alert, actor string, rotations []responsepolicies.Rotation, currentParticipants map[string]bool) bool {
+	// Delivery freezes who received the original page. An accepted exact-duty
+	// handoff changes who may complete an alert that arose during that shift,
+	// without rewriting that delivery evidence or granting any other authority.
+	for _, rotation := range rotations {
+		if len(rotation.Revisions) == 0 {
+			continue
+		}
+		revision := rotation.Revisions[len(rotation.Revisions)-1]
+		if revision.PolicyID != v.PolicyID || revision.TeamID != v.TeamID {
+			continue
+		}
+		projected := responsepolicies.ProjectRotation(rotation, currentParticipants, time.Now().UTC())
+		for _, shift := range revision.Shifts {
+			if v.Signal.OccurredAt.Before(shift.StartsAt) || !v.Signal.OccurredAt.Before(shift.EndsAt) {
+				continue
+			}
+			transferred := false
+			for _, event := range rotation.Events {
+				if event.ShiftID != shift.ID || event.Status != "accepted" || event.RotationVersion != rotation.CurrentVersion {
+					continue
+				}
+				for _, context := range event.Context {
+					if context.ResourceID == v.ID {
+						transferred = true
+						break
+					}
+				}
+			}
+			if !transferred {
+				continue
+			}
+			owner := projected.EffectiveOwnerByShift[shift.ID]
+			return owner != "" && owner == actor && currentParticipants[actor]
+		}
+	}
+	for _, delivery := range v.Routing {
+		if delivery.RecipientID == actor && delivery.Status == "delivered" && currentParticipants[actor] {
+			return true
+		}
+	}
+	return false
 }
 
 func responseAlertAudienceMember(v responsealerts.Alert, user string) bool {

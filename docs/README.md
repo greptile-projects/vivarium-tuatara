@@ -138,6 +138,9 @@ A critical recurrence is promoted into the ordinary incident store and creates o
 proposal/task work whose runbook change passes stock-Git publication, human review, and merge.
 Dependency noise, an absent primary, rejected agent-budget overreach, revoked dependency access, and
 the resulting failed delivery remain explicit evidence; none of those paths expands response authority.
+For an alert explicitly named in an accepted current-rotation handoff, acknowledge/resolve authority
+moves to the effective shift owner while original routing stays immutable delivery evidence. The former
+owner and unrelated handoff context do not retain or manufacture active-alert completion authority.
 
 ## Collaborative capacity objectives
 
