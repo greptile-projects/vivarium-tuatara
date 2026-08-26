@@ -102,3 +102,28 @@ func TestResponseWorkspaceAudienceAndIncidentSeverityBoundaries(t *testing.T) {
 		}
 	}
 }
+
+func TestAcceptedDutyHandoffTransfersActiveAlertEventAuthority(t *testing.T) {
+	now := time.Now().UTC()
+	alert := responsealerts.Alert{ID: "alert", PolicyID: "policy", TeamID: "service", Signal: responsealerts.Signal{OccurredAt: now}, Routing: []responsealerts.Delivery{{RecipientID: "primary", Status: "delivered"}}}
+	rotation := responsepolicies.Rotation{
+		Revisions: []responsepolicies.RotationRevision{
+			{PolicyID: "policy", TeamID: "service", Shifts: []responsepolicies.Shift{{ID: "active", StartsAt: now.Add(-time.Hour), EndsAt: now.Add(time.Hour), PrimaryUserID: "primary", BackupUserIDs: []string{"backup"}}}},
+			{PolicyID: "policy", TeamID: "service", Shifts: []responsepolicies.Shift{{ID: "successor", StartsAt: now.Add(time.Hour), EndsAt: now.Add(2 * time.Hour), PrimaryUserID: "primary", BackupUserIDs: []string{"backup"}}}},
+		},
+		Events:         []responsepolicies.DutyEvent{{Kind: "delegate", ShiftID: "active", FromUserID: "primary", ToUserID: "backup", Status: "accepted", RotationVersion: 1, Context: []responsepolicies.DutyContext{{Kind: "active_alert", ResourceID: "alert", Revision: "4", Summary: "continuing response"}}}},
+		CurrentVersion: 2,
+	}
+	participants := map[string]bool{"primary": true, "backup": true}
+	if responseAlertEventAllowed(alert, "primary", []responsepolicies.Rotation{rotation}, participants) {
+		t.Fatal("former primary retained active-alert event authority after accepted handoff")
+	}
+	if !responseAlertEventAllowed(alert, "backup", []responsepolicies.Rotation{rotation}, participants) {
+		t.Fatal("accepted effective owner could not complete the active alert after schedule revision")
+	}
+	unrelated := alert
+	unrelated.ID = "unrelated-alert"
+	if !responseAlertEventAllowed(unrelated, "primary", []responsepolicies.Rotation{rotation}, participants) || responseAlertEventAllowed(unrelated, "backup", []responsepolicies.Rotation{rotation}, participants) {
+		t.Fatal("handoff transferred active-alert authority beyond its frozen context")
+	}
+}

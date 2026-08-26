@@ -63,6 +63,11 @@ Repository owners use the same surface to inspect consent-aware response outcome
 noise, handoffs, escalation, responder interruption, agent cost, incidents, and user results. They
 can retain attributable reviews, pause noisy or unsafe routing, activate only declared backups, and
 open ordinary human- or agent-owned improvement work without changing policy or operational authority.
+The `on-call-coordination-journey.spec.ts` browser/API/stock-Git journey connects these contracts
+for a released service: active primary/backup duty receives an exact signal, a human responder works
+with a bounded agent and dependency owner, authorized mitigation and an accepted shift handoff retain
+context, a severe recurrence becomes an incident, and ordinary reviewed work improves the runbook.
+Duplicate, missed, absent, noisy, failed-delivery, revoked-access, and over-budget paths remain visible.
 
 Repository participants and scoped read-only agents can turn an exact objective into
 an immutable, permission-aware capacity model at `/repositories/{id}/capacity-models`.

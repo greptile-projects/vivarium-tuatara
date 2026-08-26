@@ -127,6 +127,23 @@ follow-ups become retry-stable ordinary proposals and human- or agent-assigned t
 access. The Response coverage workspace shows owner-visible metrics and individual review controls
 without turning missed pages into acceptable averages or exposing non-consented worker telemetry.
 
+### Connected on-call journey
+
+`apps/web/tests/on-call-coordination-journey.spec.ts` proves these response contracts as one public
+browser/API/stock-Git workflow for a released service. It publishes coverage and primary/backup duty,
+routes and deduplicates revision-exact release evidence, retains a missed acknowledgement, collaborates
+with an invited dependency owner and a budgeted read-only agent, records mitigation only from an owner
+already holding ordinary authority, and transfers the active alert with an exact accepted handoff.
+A critical recurrence is promoted into the ordinary incident store and creates ordinary corrective
+proposal/task work whose runbook change passes stock-Git publication, human review, and merge.
+Dependency noise, an absent primary, rejected agent-budget overreach, revoked dependency access, and
+the resulting failed delivery remain explicit evidence; none of those paths expands response authority.
+For an alert explicitly named in an accepted current-rotation handoff, acknowledge/resolve authority
+moves to the effective shift owner while original routing stays immutable delivery evidence. The former
+owner and unrelated handoff context do not retain or manufacture active-alert completion authority.
+Schedule successors preserve accepted exact-alert transfers by resolving the event against its retained
+historical rotation revision; removed recipients still lose authority through live participation checks.
+
 ## Collaborative capacity objectives
 
 Repository readers list and inspect immutable demand contracts through

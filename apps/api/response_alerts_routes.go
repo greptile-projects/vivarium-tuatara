@@ -273,12 +273,13 @@ func registerResponseAlertRoutes(mux *http.ServeMux, catalog *repositories.Store
 			writeAPIError(w, 404, "response_alert_not_found", "response alert not found")
 			return
 		}
-		allowed := false
-		for _, d := range current.Routing {
-			if d.RecipientID == actor.UserID && d.Status == "delivered" {
-				allowed = true
-			}
+		repository, _ := catalog.GetByID(current.RepositoryID)
+		participants := map[string]bool{}
+		for _, id := range repository.ParticipantIDs() {
+			participants[id] = true
 		}
+		rotations, _ := policies.ListRotations(current.RepositoryID)
+		allowed := responseAlertEventAllowed(current, actor.UserID, rotations, participants)
 		out, err := alerts.Append(current.ID, in.RequestID, in.Kind, actor.UserID, in.Reason, allowed)
 		writeResponseAlert(w, out, err, 200)
 	})
@@ -369,6 +370,59 @@ func registerResponseAlertRoutes(mux *http.ServeMux, catalog *repositories.Store
 		}
 		writeResponseAlert(w, out, applyErr, 200)
 	})
+}
+
+func responseAlertEventAllowed(v responsealerts.Alert, actor string, rotations []responsepolicies.Rotation, currentParticipants map[string]bool) bool {
+	// Delivery freezes who received the original page. An accepted exact-duty
+	// handoff changes who may complete an alert that arose during its historical
+	// shift. Later schedule revisions do not rewrite that accepted transfer.
+	var transferredTo string
+	var transferredAt time.Time
+	for _, rotation := range rotations {
+		if len(rotation.Revisions) == 0 {
+			continue
+		}
+		for _, event := range rotation.Events {
+			if event.Status != "accepted" {
+				continue
+			}
+			namesAlert := false
+			for _, context := range event.Context {
+				if context.ResourceID == v.ID {
+					namesAlert = true
+					break
+				}
+			}
+			if !namesAlert || event.RotationVersion < 1 || event.RotationVersion > len(rotation.Revisions) {
+				continue
+			}
+			historical := rotation.Revisions[event.RotationVersion-1]
+			if historical.PolicyID != v.PolicyID || historical.TeamID != v.TeamID {
+				continue
+			}
+			for _, shift := range historical.Shifts {
+				if shift.ID != event.ShiftID || v.Signal.OccurredAt.Before(shift.StartsAt) || !v.Signal.OccurredAt.Before(shift.EndsAt) {
+					continue
+				}
+				acceptedAt := event.CreatedAt
+				if event.AcceptedAt != nil {
+					acceptedAt = *event.AcceptedAt
+				}
+				if transferredTo == "" || acceptedAt.After(transferredAt) {
+					transferredTo, transferredAt = event.ToUserID, acceptedAt
+				}
+			}
+		}
+	}
+	if transferredTo != "" {
+		return transferredTo == actor && currentParticipants[actor]
+	}
+	for _, delivery := range v.Routing {
+		if delivery.RecipientID == actor && delivery.Status == "delivered" && currentParticipants[actor] {
+			return true
+		}
+	}
+	return false
 }
 
 func responseAlertAudienceMember(v responsealerts.Alert, user string) bool {
