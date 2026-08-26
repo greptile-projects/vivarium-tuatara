@@ -265,9 +265,16 @@ func validRehearsal(v Rehearsal, revision Revision) bool {
 		if len(covered) != len(stepIDs) {
 			return false
 		}
+		decisions := map[string]bool{}
 		for _, decision := range scenario.Decisions {
 			step, ok := stepIDs[decision.StepID]
-			if !ok || step.Decision == nil || decision.Condition == "" || decision.Rationale == "" || (decision.SelectedStepID != step.Decision.IfTrueStepID && decision.SelectedStepID != step.Decision.IfFalseStepID) {
+			if !ok || decisions[decision.StepID] || step.Decision == nil || decision.Condition == "" || decision.SelectedStepID == "" || decision.Rationale == "" || (decision.SelectedStepID != step.Decision.IfTrueStepID && decision.SelectedStepID != step.Decision.IfFalseStepID) {
+				return false
+			}
+			decisions[decision.StepID] = true
+		}
+		for _, step := range revision.Steps {
+			if step.Decision != nil && !decisions[step.ID] {
 				return false
 			}
 		}

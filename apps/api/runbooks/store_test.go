@@ -53,6 +53,29 @@ func TestRehearsalRejectsUnsafeChangingStepAndSecretOutput(t *testing.T) {
 		t.Fatalf("secret error=%v", err)
 	}
 }
+
+func TestRehearsalRequiresExactlyOneDecisionRecord(t *testing.T) {
+	s, _ := New(t.TempDir())
+	r := validRevision("owner")
+	r.Steps = append(r.Steps, Step{ID: "choose", Position: 2, Kind: "decision", Title: "Choose", Purpose: "Select recovery", Instructions: "Evaluate evidence", Preconditions: []string{"health known"}, ExpectedEvidence: []string{"selection"}, Decision: &Decision{Condition: "health failed", IfTrueStepID: "inspect", IfFalseStepID: "", HumanJudgment: "interpret health"}, OwnerIDs: []string{"owner"}, RequiredSkills: []string{"operations"}, Authority: Authority{ProhibitedActions: []string{"deploy"}}})
+	created, err := s.Create("repo", "owner", "create", r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	scenario := Scenario{ID: "failure", Name: "Failure", Failure: "unavailable", Inputs: []RehearsalInput{{Kind: "service", ResourceID: "checkout", Revision: "v1", EvidenceKind: "synthetic", Digest: "sha256:x"}}, Steps: []StepOutcome{{StepID: "inspect", Output: "failed", StartedAt: now, FinishedAt: now, Permissions: []string{"service:read"}, Outcome: "passed", DestructiveHandling: "not_applicable"}, {StepID: "choose", Output: "selected inspect", StartedAt: now, FinishedAt: now, Outcome: "passed", DestructiveHandling: "not_applicable"}}, AchievedOutcome: "achieved"}
+	if _, err := s.Rehearse(created.ID, "human", "owner", "missing", 1, "isolated", "box", "", []Scenario{scenario}); err != ErrInvalid {
+		t.Fatalf("missing decision error=%v", err)
+	}
+	scenario.Decisions = []BranchDecision{{StepID: "choose", Condition: "health failed", SelectedStepID: "inspect", Rationale: "synthetic health failed"}}
+	if _, err := s.Rehearse(created.ID, "human", "owner", "valid", 1, "isolated", "box", "", []Scenario{scenario}); err != nil {
+		t.Fatalf("valid decision error=%v", err)
+	}
+	scenario.Decisions = append(scenario.Decisions, scenario.Decisions[0])
+	if _, err := s.Rehearse(created.ID, "human", "owner", "duplicate", 1, "isolated", "box", "", []Scenario{scenario}); err != ErrInvalid {
+		t.Fatalf("duplicate decision error=%v", err)
+	}
+}
 func TestVersioningAndAuthorityDiagnostics(t *testing.T) {
 	s, _ := New(t.TempDir())
 	r := validRevision("owner")

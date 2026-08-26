@@ -125,7 +125,21 @@ func registerRunbookRoutes(mux *http.ServeMux, git *storage.Store, catalog *repo
 		if actor.AgentID != "" {
 			actorType, actorID = "agent", actor.AgentID
 		}
-		out, err := store.Rehearse(current.ID, actorType, actorID, in.RequestID, in.RunbookVersion, in.EnvironmentKind, in.EnvironmentID, in.PolicyApprovalRevision, in.Scenarios)
+		var out runbooks.Runbook
+		persist := func() error {
+			var persistErr error
+			out, persistErr = store.Rehearse(current.ID, actorType, actorID, in.RequestID, in.RunbookVersion, in.EnvironmentKind, in.EnvironmentID, in.PolicyApprovalRevision, in.Scenarios)
+			return persistErr
+		}
+		if actorType == "agent" {
+			if orgs == nil {
+				err = organizations.ErrNotFound
+			} else {
+				err = orgs.WithCurrentAgentGrant(actor.OrganizationID, actor.AccessGrantID, actor.AgentID, r.PathValue("id"), persist)
+			}
+		} else {
+			err = catalog.WithCurrentParticipant(actor.UserID, r.PathValue("id"), persist)
+		}
 		switch {
 		case err == nil:
 			writeJSON(w, 201, out)
@@ -133,6 +147,8 @@ func registerRunbookRoutes(mux *http.ServeMux, git *storage.Store, catalog *repo
 			writeAPIError(w, 409, "runbook_rehearsal_conflict", "the rehearsal request identity conflicts")
 		case errors.Is(err, runbooks.ErrInvalid):
 			writeAPIError(w, 400, "invalid_rehearsal", "the rehearsal must use bounded evidence, complete step outcomes, and simulate or exclude changing steps")
+		case errors.Is(err, repositories.ErrInvalidCollaborator), errors.Is(err, repositories.ErrNotFound), errors.Is(err, organizations.ErrNotFound), errors.Is(err, organizations.ErrInvalid):
+			writeAPIError(w, 403, "runbook_rehearsal_forbidden", "current repository participation or an exact current agent grant is required")
 		default:
 			writeAPIError(w, 500, "runbooks_unavailable", "the rehearsal could not be retained")
 		}
