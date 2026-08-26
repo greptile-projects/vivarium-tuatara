@@ -63,6 +63,22 @@ rehearsal and naming an active exact fallback revision with current passing proo
 procedures remain readable, are blocked from recommendation eligibility and launch, and point
 responders to that approved fallback without granting authority in either procedure.
 
+An alert-origin launch has one narrow authoritative readiness adapter: the retained alert must belong
+to the repository, remain unresolved, match the frozen source revision and affected resource, and fall
+inside the submitted signal window. That proof satisfies the runbook's alert preconditions and current
+repository-read access only. Caller assertions, alert delivery, and response participation still cannot
+manufacture environment, credential, deployment, or other operational authority.
+
+### Connected operational-runbook journey
+
+`apps/web/tests/operational-runbook-journey.spec.ts` proves the complete public browser/API/stock-Git
+loop from reviewed procedure material through human and approved-agent rehearsal, revision-exact alert
+launch, shared diagnosis, separately approved bounded mitigation, exact handoff, recovery verification,
+assessment, ordinary reviewed code/runbook improvement, successor publication, and fresh rehearsal.
+Stale context, caller-asserted readiness, a denied effect, duplicate launch, undelegated agent mutation,
+revoked agent credential, old rehearsal proof, and an unmet recovery communication criterion remain
+visible containment evidence rather than expanding authority.
+
 ## Versioned urgent-response coverage
 
 Repository readers inspect immutable response policies through
