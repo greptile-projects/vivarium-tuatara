@@ -221,7 +221,7 @@ func repairOutcomeResolves(repo string, repair signalevaluations.Repair, proof s
 		return false
 	}
 	for _, observation := range rollout.Observations {
-		if observation.ID == proof.ObservationID && observation.Digest == proof.Digest && observation.DeploymentID == proof.DeploymentID && observation.ReleaseID == proof.ReleaseID && observation.CommitID == proof.MergedCommit && !observation.CreatedAt.Before(*promotion.CompletedAt) && observation.Quality.SignalHealth == "healthy" && observation.Quality.CollectorAvailable && len(signalrollouts.ContainmentReasons(observation.Quality, rollout.Budget)) == 0 {
+		if observation.ID == proof.ObservationID && observation.Digest == proof.Digest && observation.DeploymentID == proof.DeploymentID && observation.ReleaseID == proof.ReleaseID && observation.CommitID == proof.MergedCommit && !observation.StartedAt.Before(*promotion.CompletedAt) && observation.Quality.SignalHealth == "healthy" && observation.Quality.CollectorAvailable && len(signalrollouts.ContainmentReasons(observation.Quality, rollout.Budget)) == 0 {
 			return true
 		}
 	}

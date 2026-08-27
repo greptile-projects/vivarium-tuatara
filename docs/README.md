@@ -11,7 +11,8 @@ runtime question through governed design, delivery, calibration, evidence, decis
 retirement. Records bind exact gap/contract versions, Git revisions, previews, checks, releases,
 protected deployments, rollout observations, queries, consumers, policy approval, repairs, and
 collector-stop proof. Retirement resolves a structured repair pull/merge/release/deployment chain
-and an exact healthy observation stamped from that authoritative promotion, checks its timing,
+and an exact healthy observation stamped from that authoritative promotion, requires its complete
+measurement window to begin after promotion completion, checks its remaining timing,
 digest, quality, and budget, and rejects independent or free-form-only claims. Records coordinate
 the trail but grant none of the authority required by the
 repository, agent, preview, deployment, response, runbook, or telemetry surfaces they cite.

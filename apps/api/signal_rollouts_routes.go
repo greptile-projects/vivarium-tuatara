@@ -103,7 +103,7 @@ func registerSignalRolloutRoutes(mux *http.ServeMux, repos *repositories.Store, 
 		}
 		if in.Event.Observation != nil && in.Event.Observation.DeploymentID != "" {
 			promotion, promotionErr := environments.GetPromotion(r.PathValue("id"), in.Event.Observation.DeploymentID)
-			if promotionErr != nil || promotion.State != "succeeded" || promotion.EnvironmentID != current.EnvironmentID || promotion.CompletedAt == nil || in.Event.Observation.EndedAt.Before(*promotion.CompletedAt) {
+			if promotionErr != nil || promotion.State != "succeeded" || promotion.EnvironmentID != current.EnvironmentID || promotion.CompletedAt == nil || in.Event.Observation.StartedAt.Before(*promotion.CompletedAt) {
 				writeAPIError(w, 422, "signal_observation_deployment_invalid", "observation deployment must be a completed exact promotion in the rollout environment")
 				return
 			}
