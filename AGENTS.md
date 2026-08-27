@@ -677,6 +677,16 @@ whenever dependencies change or the web job fails before it starts.
   installations grant no source, package, federation, Git, review, merge, workflow, runtime, secret,
   repository, or publisher authority.
 
+- **Collaborative release adoption** — repository `/adoption-campaigns` routes and the web
+  `/repositories/{id}/adoption` workspace retain immutable campaign revisions beneath
+  `$ADOPTION_CAMPAIGN_STORAGE_ROOT` (`adoption-campaigns`). Current repository writers bind an
+  exact release commit to its signed provenance bundle and define audiences, supported starting
+  versions and upgrade paths, coverage, deadlines, success evidence, support and rollback policy,
+  accountable owners, and typed adopter context. Caller-stable successors preserve history;
+  superseding releases, audience conflicts, unsupported paths, missing owners, and changed
+  commitments remain attributable. Campaigns coordinate adoption only and grant no repository,
+  release, package, API, deployment, support, rollback, disclosure, spending, or operational authority.
+
 - **Collaborative software adoption** — `/adoption-workspaces` and the web `/adoption`
   workspace retain shared software-fit evaluations beneath `$ADOPTION_WORKSPACE_STORAGE_ROOT`
   (`adoption-workspaces`). A human collaborator starts from a roadmap outcome, support gap,
