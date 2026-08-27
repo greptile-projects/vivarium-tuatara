@@ -105,16 +105,21 @@ func registerAdoptionCampaignRoutes(mux *http.ServeMux, catalog *repositories.St
 		var out adoptioncampaigns.Campaign
 		e = catalog.WithCurrentParticipants(append([]string{actor.UserID}, in.Revision.OwnerIDs...), r.PathValue("id"), func() error {
 			return bundles.WithCurrent(in.Revision.AttestationID, func(locked provenancebundles.Bundle) error {
-				if locked.Claim.RepositoryID != r.PathValue("id") || locked.Claim.ReleaseID != rel.ID || locked.Claim.Revision != rel.CommitID || !adoptionBundleCurrent(locked, graphs, policies, packageStore) {
+				if locked.Claim.RepositoryID != r.PathValue("id") || locked.Claim.ReleaseID != rel.ID || locked.Claim.Revision != rel.CommitID {
 					return errAdoptionAttestationNotCurrent
 				}
-				var x error
-				if revise {
-					out, x = store.Revise(r.PathValue("id"), r.PathValue("campaign_id"), in.ExpectedVersion, actor.UserID, in.RequestID, in.Revision)
-				} else {
-					out, x = store.Create(r.PathValue("id"), actor.UserID, in.RequestID, in.Revision)
-				}
-				return x
+				return policies.WithCurrent(locked.Claim.PolicyID, func(policy provenancepolicies.Policy) error {
+					if policy.CurrentVersion != locked.Claim.PolicyVersion || !adoptionBundleMaterialsCurrent(locked, graphs, packageStore) {
+						return errAdoptionAttestationNotCurrent
+					}
+					var x error
+					if revise {
+						out, x = store.Revise(r.PathValue("id"), r.PathValue("campaign_id"), in.ExpectedVersion, actor.UserID, in.RequestID, in.Revision)
+					} else {
+						out, x = store.Create(r.PathValue("id"), actor.UserID, in.RequestID, in.Revision)
+					}
+					return x
+				})
 			})
 		})
 		if errors.Is(e, errAdoptionAttestationNotCurrent) {
@@ -196,15 +201,27 @@ func adoptionBundleCurrent(bundle provenancebundles.Bundle, graphs *provenancegr
 			return false
 		}
 	}
-	if graphs == nil || policies == nil || packageStore == nil {
-		return false
-	}
-	graph, err := graphs.Get(bundle.Claim.GraphID)
-	if err != nil || graph.AnalysisDigest != bundle.Claim.GraphDigest {
+	if policies == nil {
 		return false
 	}
 	policy, err := policies.Get(bundle.Claim.PolicyID)
 	if err != nil || policy.CurrentVersion != bundle.Claim.PolicyVersion {
+		return false
+	}
+	return adoptionBundleMaterialsCurrent(bundle, graphs, packageStore)
+}
+
+func adoptionBundleMaterialsCurrent(bundle provenancebundles.Bundle, graphs *provenancegraphs.Store, packageStore *packages.Store) bool {
+	for _, notice := range bundle.Notices {
+		if notice.Severity == "blocking" {
+			return false
+		}
+	}
+	if graphs == nil || packageStore == nil {
+		return false
+	}
+	graph, err := graphs.Get(bundle.Claim.GraphID)
+	if err != nil || graph.AnalysisDigest != bundle.Claim.GraphDigest {
 		return false
 	}
 	for _, artifact := range bundle.Claim.Artifacts {
