@@ -198,6 +198,22 @@ func (s *Store) Get(id string) (Bundle, error) {
 	e := s.lock(func() error { var x error; out, x = s.read(id); return x })
 	return out, e
 }
+
+// WithCurrent holds the bundle mutation boundary while a dependent record is
+// validated and persisted. Blocking notices therefore commit wholly before or
+// after the dependent publication, never between its check and write.
+func (s *Store) WithCurrent(id string, fn func(Bundle) error) error {
+	if fn == nil {
+		return ErrInvalid
+	}
+	return s.lock(func() error {
+		bundle, err := s.read(id)
+		if err != nil {
+			return err
+		}
+		return fn(bundle)
+	})
+}
 func (s *Store) List(repositoryID, releaseID string) ([]Bundle, error) {
 	var out []Bundle
 	e := s.lock(func() error {

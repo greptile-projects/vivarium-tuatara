@@ -3,7 +3,11 @@ package main
 import (
 	"errors"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/adoptioncampaigns"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/apicontracts"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/decisions"
+	docscollections "github.com/greptile-projects/vivarium-tuatara/apps/api/docscollections"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/durableschemas"
 	packages "github.com/greptile-projects/vivarium-tuatara/apps/api/packages"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/provenancebundles"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/provenancegraphs"
@@ -13,6 +17,7 @@ import (
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"log"
 	"net/http"
+	"strconv"
 )
 
 type adoptionCampaignInput struct {
@@ -21,7 +26,7 @@ type adoptionCampaignInput struct {
 	Revision        adoptioncampaigns.Revision `json:"revision"`
 }
 
-func registerAdoptionCampaignRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, store *adoptioncampaigns.Store, releaseStore *releases.Store, bundles *provenancebundles.Store, graphs *provenancegraphs.Store, policies *provenancepolicies.Store, packageStore *packages.Store, pulls *pullrequests.Store) {
+func registerAdoptionCampaignRoutes(mux *http.ServeMux, catalog *repositories.Store, credentials *auth.Store, store *adoptioncampaigns.Store, releaseStore *releases.Store, bundles *provenancebundles.Store, graphs *provenancegraphs.Store, policies *provenancepolicies.Store, packageStore *packages.Store, pulls *pullrequests.Store, decisionStore *decisions.Store, documentationStore *docscollections.Store, apiStore *apicontracts.Store, schemaStore *durableschemas.Store) {
 	store.ConfigureProjection(func(c adoptioncampaigns.Campaign) adoptioncampaigns.Projection {
 		p := adoptioncampaigns.Projection{}
 		if len(c.Revisions) == 0 {
@@ -35,15 +40,8 @@ func registerAdoptionCampaignRoutes(mux *http.ServeMux, catalog *repositories.St
 			}
 		}
 		for _, link := range current.Links {
-			if link.Kind == "change" {
-				valid := false
-				if pulls != nil {
-					pull, pullErr := pulls.Get(c.RepositoryID, link.ResourceID)
-					valid = pullErr == nil && (link.Revision == "" || pull.SourceCommitID == link.Revision)
-				}
-				if !valid {
-					p.InvalidLinks = append(p.InvalidLinks, link.ID)
-				}
+			if !adoptionLinkCurrent(c.RepositoryID, link, pulls, decisionStore, documentationStore, packageStore, apiStore, schemaStore) {
+				p.InvalidLinks = append(p.InvalidLinks, link.ID)
 			}
 		}
 		xs, err := releaseStore.List(c.RepositoryID)
@@ -106,18 +104,90 @@ func registerAdoptionCampaignRoutes(mux *http.ServeMux, catalog *repositories.St
 		}
 		var out adoptioncampaigns.Campaign
 		e = catalog.WithCurrentParticipants(append([]string{actor.UserID}, in.Revision.OwnerIDs...), r.PathValue("id"), func() error {
-			var x error
-			if revise {
-				out, x = store.Revise(r.PathValue("id"), r.PathValue("campaign_id"), in.ExpectedVersion, actor.UserID, in.RequestID, in.Revision)
-			} else {
-				out, x = store.Create(r.PathValue("id"), actor.UserID, in.RequestID, in.Revision)
-			}
-			return x
+			return bundles.WithCurrent(in.Revision.AttestationID, func(locked provenancebundles.Bundle) error {
+				if locked.Claim.RepositoryID != r.PathValue("id") || locked.Claim.ReleaseID != rel.ID || locked.Claim.Revision != rel.CommitID || !adoptionBundleCurrent(locked, graphs, policies, packageStore) {
+					return errAdoptionAttestationNotCurrent
+				}
+				var x error
+				if revise {
+					out, x = store.Revise(r.PathValue("id"), r.PathValue("campaign_id"), in.ExpectedVersion, actor.UserID, in.RequestID, in.Revision)
+				} else {
+					out, x = store.Create(r.PathValue("id"), actor.UserID, in.RequestID, in.Revision)
+				}
+				return x
+			})
 		})
+		if errors.Is(e, errAdoptionAttestationNotCurrent) {
+			writeAPIError(w, 422, "adoption_attestation_not_current", "the campaign requires current blocking-free release provenance")
+			return
+		}
 		writeAdoptionCampaign(w, out, e, map[bool]int{true: 200, false: 201}[revise])
 	}
 	mux.HandleFunc("POST /repositories/{id}/adoption-campaigns", func(w http.ResponseWriter, r *http.Request) { publish(w, r, false) })
 	mux.HandleFunc("POST /repositories/{id}/adoption-campaigns/{campaign_id}/revisions", func(w http.ResponseWriter, r *http.Request) { publish(w, r, true) })
+}
+
+var errAdoptionAttestationNotCurrent = errors.New("adoption attestation not current")
+
+func adoptionLinkCurrent(repo string, link adoptioncampaigns.Link, pulls *pullrequests.Store, decisionStore *decisions.Store, documentationStore *docscollections.Store, packageStore *packages.Store, apiStore *apicontracts.Store, schemaStore *durableschemas.Store) bool {
+	version, versionErr := strconv.Atoi(link.Revision)
+	switch link.Kind {
+	case "change":
+		if pulls == nil {
+			return false
+		}
+		v, err := pulls.Get(repo, link.ResourceID)
+		return err == nil && link.Revision != "" && v.SourceCommitID == link.Revision
+	case "decision":
+		if decisionStore == nil {
+			return false
+		}
+		v, err := decisionStore.Get(link.ResourceID)
+		return err == nil && v.RepositoryID == repo && versionErr == nil && v.Version == version
+	case "documentation":
+		if documentationStore == nil {
+			return false
+		}
+		xs, err := documentationStore.List(repo, link.ResourceID)
+		if err != nil {
+			return false
+		}
+		for _, v := range xs {
+			if v.ID == link.Revision || (versionErr == nil && v.Version == version) {
+				return true
+			}
+		}
+		return false
+	case "package":
+		if packageStore == nil {
+			return false
+		}
+		v, err := packageStore.Get(link.ResourceID, link.Revision)
+		return err == nil && v.RepositoryID == repo && v.Lifecycle == "active"
+	case "api":
+		if apiStore == nil {
+			return false
+		}
+		v, err := apiStore.Get(link.ResourceID)
+		return err == nil && v.RepositoryID == repo && versionErr == nil && v.CurrentVersion == version
+	case "schema":
+		if schemaStore == nil {
+			return false
+		}
+		v, err := schemaStore.Get(repo, link.ResourceID)
+		return err == nil && versionErr == nil && v.CurrentVersion == version
+	case "compatibility":
+		if apiStore == nil || schemaStore == nil {
+			return false
+		}
+		if v, err := apiStore.Get(link.ResourceID); err == nil && v.RepositoryID == repo && versionErr == nil && v.CurrentVersion == version {
+			return true
+		}
+		v, err := schemaStore.Get(repo, link.ResourceID)
+		return err == nil && versionErr == nil && v.CurrentVersion == version
+	default:
+		return false
+	}
 }
 
 func adoptionBundleCurrent(bundle provenancebundles.Bundle, graphs *provenancegraphs.Store, policies *provenancepolicies.Store, packageStore *packages.Store) bool {
