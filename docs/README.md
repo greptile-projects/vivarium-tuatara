@@ -3,6 +3,21 @@
 Notes on how this project fits together. Mostly empty for now — things get
 written down here as they're decided, not before.
 
+## Collaborative release adoption
+
+Repository readers use `GET /repositories/{id}/adoption-campaigns` and the repository
+`/adoption` workspace to inspect why an exact attested release should be adopted and how success
+will be evidenced. Current repository writers create and revise campaigns with caller-stable request
+identities; all accountable owners must be current participants through publication. Each immutable
+revision freezes the release commit and signed provenance-bundle identity, target audiences,
+supported starting constraints and upgrade paths, desired coverage, deadline, success measures,
+support and rollback policies, and typed change, decision, documentation, package, API, schema, and
+compatibility references. Reads retain revision history and derive overlapping same-release audience
+campaigns and explicitly unsupported paths as attributable diagnostics. Campaign records coordinate
+adoption only and grant no repository, release, package, API, deployment, support, rollback,
+disclosure, spending, or operational authority. Storage defaults beneath
+`$ADOPTION_CAMPAIGN_STORAGE_ROOT` (`adoption-campaigns`).
+
 ## Collaborative observability engineering
 
 Repository collaborators use `/observability-gaps`, `/telemetry-contracts`, linked pull

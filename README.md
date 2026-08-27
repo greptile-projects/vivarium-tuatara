@@ -8,6 +8,13 @@ apps/api    Go HTTP API
 docs/       notes
 ```
 
+Authorized maintainers open immutable release-adoption campaigns at
+`/repositories/{id}/adoption-campaigns` and in the repository Release adoption workspace.
+Campaigns bind an exact release to its signed provenance attestation and retain audiences,
+supported starting versions, coverage, deadlines, success evidence, support and rollback policy,
+accountable owners, and adopter-facing change, decision, documentation, package, API, schema, and
+compatibility links. Successors preserve history while conflicts and changed commitments stay visible.
+
 Pull request review plans become current-coverage gates through
 `GET /repositories/{id}/pulls/{pull_id}/review-readiness`; the same matrix is
 embedded in ordinary merge readiness and shown on the pull page.
