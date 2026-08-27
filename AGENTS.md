@@ -157,6 +157,16 @@ repositories, production data, and caller-supplied artifact display text fail cl
 Acceptance, delivery, and verification coordinate evidence and grant no repository,
 preview, check, agent, privacy, security, provenance, merge, or operational authority.
 
+The connected `observability-engineering-journey.spec.ts` browser/API/stock-Git journey proves the
+complete question-to-trusted-signal boundary from an ambiguous production investigation through
+agent-challenged privacy/cost design, ordinary application and collector delivery, exact isolated
+preview, protected progressive calibration, reproducible finding, alert/runbook/repair updates,
+production outcome, and verified diagnostic retirement. Schema conflict, sensitive input,
+cardinality, correlation, sampling, pipeline, cost, consumer, and misleading-conclusion failures
+stay retained and contained; the joined records coordinate evidence and never manufacture the
+repository, agent, deployment, response, runbook, telemetry, disclosure, or operational authority
+used by their underlying surfaces.
+
 Progressive telemetry collection at repository `/signal-rollouts` routes and the Observability
 workspace retains caller-stable rollouts beneath `$SIGNAL_ROLLOUT_STORAGE_ROOT` (`signal-rollouts`).
 Current human operators bind an accepted exact contract and successful exact instrumentation

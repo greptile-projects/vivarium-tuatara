@@ -151,6 +151,14 @@ success criteria. Owners retain, revise, reduce, archive, or remove collection o
 findings, policy approval, consumer impact previews, connected repairs where needed, and verified
 stop evidence for retirement; historical meaning and prior conclusions remain immutable.
 
+The connected `observability-engineering-journey.spec.ts` browser/API/stock-Git journey proves the
+whole question-to-trusted-signal loop: an ambiguous production investigation becomes an agent-
+challenged contract, ordinary application and collector work, exact isolated preview evidence,
+protected deployment, progressively calibrated collection, reproducible diagnosis, governed
+alert/runbook/repair updates, and verified retirement. Conflicting schema, sensitive input,
+unbounded cardinality, missing correlation, biased sampling, pipeline loss, invalid agent cost,
+stale consumer impact, and a misleading first conclusion remain visible correction evidence.
+
 ## Getting started
 
 ```sh
