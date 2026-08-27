@@ -1697,7 +1697,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 			if signalRolloutStore != nil {
 				registerSignalRolloutRoutes(mux, repositoryCatalog, authStore, telemetryContractStore, deploymentStore, signalRolloutStore)
 				if signalEvaluationStore != nil {
-					registerSignalEvaluationRoutes(mux, repositoryCatalog, authStore, observabilityGapStore, telemetryContractStore, signalRolloutStore, signalEvaluationStore)
+					registerSignalEvaluationRoutes(mux, repositoryCatalog, authStore, observabilityGapStore, telemetryContractStore, signalRolloutStore, deploymentStore, pullRequestStore, signalEvaluationStore)
 				}
 			}
 		}

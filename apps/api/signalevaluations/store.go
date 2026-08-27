@@ -71,20 +71,29 @@ type Repair struct {
 	ResourceID string `json:"resource_id"`
 	Summary    string `json:"summary"`
 }
+type RepairOutcome struct {
+	PullRequestID string `json:"pull_request_id"`
+	MergedCommit  string `json:"merged_commit"`
+	ReleaseID     string `json:"release_id"`
+	DeploymentID  string `json:"deployment_id"`
+	ObservationID string `json:"observation_id"`
+	Digest        string `json:"digest"`
+}
 type Decision struct {
-	RequestID        string     `json:"request_id"`
-	ID               string     `json:"id"`
-	ExpectedVersion  int        `json:"expected_version"`
-	Action           string     `json:"action"`
-	Rationale        string     `json:"rationale"`
-	FindingIDs       []string   `json:"finding_ids"`
-	PolicyApproval   string     `json:"policy_approval"`
-	Consumers        []Consumer `json:"consumers"`
-	Updates          []Update   `json:"updates"`
-	Repair           *Repair    `json:"repair,omitempty"`
-	StopVerification *Citation  `json:"stop_verification,omitempty"`
-	ActorID          string     `json:"actor_id"`
-	CreatedAt        time.Time  `json:"created_at"`
+	RequestID        string         `json:"request_id"`
+	ID               string         `json:"id"`
+	ExpectedVersion  int            `json:"expected_version"`
+	Action           string         `json:"action"`
+	Rationale        string         `json:"rationale"`
+	FindingIDs       []string       `json:"finding_ids"`
+	PolicyApproval   string         `json:"policy_approval"`
+	Consumers        []Consumer     `json:"consumers"`
+	Updates          []Update       `json:"updates"`
+	Repair           *Repair        `json:"repair,omitempty"`
+	RepairOutcome    *RepairOutcome `json:"repair_outcome,omitempty"`
+	StopVerification *Citation      `json:"stop_verification,omitempty"`
+	ActorID          string         `json:"actor_id"`
+	CreatedAt        time.Time      `json:"created_at"`
 }
 type Evaluation struct {
 	RequestID       string        `json:"request_id"`
@@ -288,7 +297,10 @@ func (s *Store) Decide(repo, id string, d Decision) (Evaluation, error) {
 	if d.Repair != nil && ((d.Repair.Kind != "proposal" && d.Repair.Kind != "task") || !hasCorrelationResource(x.Correlations, d.Repair.Kind, d.Repair.ResourceID)) {
 		return Evaluation{}, ErrInvalid
 	}
-	if (d.Action == "archive" || d.Action == "remove") && (d.StopVerification == nil || len(d.StopVerification.Digest) != 64 || len(d.Consumers) == 0) {
+	if (d.Action == "archive" || d.Action == "remove") && (d.StopVerification == nil || len(d.StopVerification.Digest) != 64 || len(d.Consumers) == 0 || d.Repair == nil || d.RepairOutcome == nil) {
+		return Evaluation{}, ErrInvalid
+	}
+	if d.RepairOutcome != nil && (d.RepairOutcome.PullRequestID == "" || len(d.RepairOutcome.MergedCommit) != 40 || d.RepairOutcome.ReleaseID == "" || d.RepairOutcome.DeploymentID == "" || d.RepairOutcome.ObservationID == "" || len(d.RepairOutcome.Digest) != 64) {
 		return Evaluation{}, ErrInvalid
 	}
 	if d.StopVerification != nil && (d.StopVerification.ResourceID == "" || d.StopVerification.Revision == "" || d.StopVerification.Query == "" || d.StopVerification.WindowStart.IsZero() || !d.StopVerification.WindowEnd.After(d.StopVerification.WindowStart)) {

@@ -157,6 +157,16 @@ repositories, production data, and caller-supplied artifact display text fail cl
 Acceptance, delivery, and verification coordinate evidence and grant no repository,
 preview, check, agent, privacy, security, provenance, merge, or operational authority.
 
+The connected `observability-engineering-journey.spec.ts` browser/API/stock-Git journey proves the
+complete question-to-trusted-signal boundary from an ambiguous production investigation through
+agent-challenged privacy/cost design, ordinary application and collector delivery, exact isolated
+preview, protected progressive calibration, reproducible finding, alert/runbook/repair updates,
+production outcome, and verified diagnostic retirement. Schema conflict, sensitive input,
+cardinality, correlation, sampling, pipeline, cost, consumer, and misleading-conclusion failures
+stay retained and contained; the joined records coordinate evidence and never manufacture the
+repository, agent, deployment, response, runbook, telemetry, disclosure, or operational authority
+used by their underlying surfaces.
+
 Progressive telemetry collection at repository `/signal-rollouts` routes and the Observability
 workspace retains caller-stable rollouts beneath `$SIGNAL_ROLLOUT_STORAGE_ROOT` (`signal-rollouts`).
 Current human operators bind an accepted exact contract and successful exact instrumentation
@@ -177,7 +187,11 @@ caller-stable reproducible findings with digest-addressed queries, frozen window
 criterion-level results. Declared current human owners retain, revise, reduce, archive, or remove
 signals through immutable decisions backed by exact findings, policy approval, dependent-consumer
 impact previews, connected repair or accepted public-surface updates, and collection-stop proof for
-archive or removal. Reads preserve provenance, historical meaning, earlier conclusions, and every
+archive or removal. Retirement additionally requires a structured merged-pull, release, successful
+deployment, and healthy rollout-observation proof. The observation is stamped from the authoritative
+promotion and its complete measurement window must begin at or after promotion completion, match its commit and release, remain within quality/budget boundaries,
+and retain its exact digest; free-form repair or outcome claims satisfy nothing. Reads preserve
+provenance, historical meaning, earlier conclusions, and every
 lifecycle decision. Evaluations coordinate understanding and lifecycle intent only and grant no
 repository, evidence, telemetry, collector, policy, deployment, disclosure, or operational authority.
 

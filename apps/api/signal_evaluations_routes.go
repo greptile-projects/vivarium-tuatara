@@ -6,14 +6,16 @@ import (
 	"strconv"
 
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/auth"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/deployments"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/observabilitygaps"
+	"github.com/greptile-projects/vivarium-tuatara/apps/api/pullrequests"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/repositories"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/signalevaluations"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/signalrollouts"
 	"github.com/greptile-projects/vivarium-tuatara/apps/api/telemetrycontracts"
 )
 
-func registerSignalEvaluationRoutes(mux *http.ServeMux, repos *repositories.Store, credentials *auth.Store, gaps *observabilitygaps.Store, contracts *telemetrycontracts.Store, rollouts *signalrollouts.Store, evaluations *signalevaluations.Store) {
+func registerSignalEvaluationRoutes(mux *http.ServeMux, repos *repositories.Store, credentials *auth.Store, gaps *observabilitygaps.Store, contracts *telemetrycontracts.Store, rollouts *signalrollouts.Store, deploymentsStore *deployments.Store, pulls *pullrequests.Store, evaluations *signalevaluations.Store) {
 	mux.HandleFunc("GET /repositories/{id}/signal-evaluations", func(w http.ResponseWriter, r *http.Request) {
 		if _, _, ok := authorizeRepositoryRead(w, r, repos, credentials, r.PathValue("id")); !ok {
 			return
@@ -193,12 +195,37 @@ func registerSignalEvaluationRoutes(mux *http.ServeMux, repos *repositories.Stor
 				writeAPIError(w, 422, "signal_stop_unverified", "archive and removal require a rolled-back rollout and exact post-rollback collector-stop observation")
 				return
 			}
+			if in.Repair == nil || in.RepairOutcome == nil || !repairOutcomeResolves(r.PathValue("id"), *in.Repair, *in.RepairOutcome, rollout, deploymentsStore, pulls) {
+				writeAPIError(w, 422, "signal_repair_outcome_invalid", "retirement requires an exact merged repair, successful deployment, and healthy post-deployment rollout observation")
+				return
+			}
 		}
 		in.ActorID = actor.UserID
 		var out signalevaluations.Evaluation
 		e = repos.WithCurrentParticipant(actor.UserID, r.PathValue("id"), func() error { var x error; out, x = evaluations.Decide(r.PathValue("id"), current.ID, in); return x })
 		writeSignalEvaluation(w, out, e, 201)
 	})
+}
+
+func repairOutcomeResolves(repo string, repair signalevaluations.Repair, proof signalevaluations.RepairOutcome, rollout signalrollouts.Rollout, deploymentsStore *deployments.Store, pulls *pullrequests.Store) bool {
+	pull, err := pulls.Get(repo, proof.PullRequestID)
+	if err != nil || pull.Status != pullrequests.Merged || pull.MergeCommitID == nil || *pull.MergeCommitID != proof.MergedCommit {
+		return false
+	}
+	linked := repair.Kind == "proposal" && pull.ProposalID != nil && *pull.ProposalID == repair.ResourceID || repair.Kind == "task" && pull.TaskID != nil && *pull.TaskID == repair.ResourceID
+	if !linked {
+		return false
+	}
+	promotion, err := deploymentsStore.GetPromotion(repo, proof.DeploymentID)
+	if err != nil || promotion.State != "succeeded" || promotion.CommitID != proof.MergedCommit || promotion.ReleaseID != proof.ReleaseID || promotion.CompletedAt == nil {
+		return false
+	}
+	for _, observation := range rollout.Observations {
+		if observation.ID == proof.ObservationID && observation.Digest == proof.Digest && observation.DeploymentID == proof.DeploymentID && observation.ReleaseID == proof.ReleaseID && observation.CommitID == proof.MergedCommit && !observation.StartedAt.Before(*promotion.CompletedAt) && observation.Quality.SignalHealth == "healthy" && observation.Quality.CollectorAvailable && len(signalrollouts.ContainmentReasons(observation.Quality, rollout.Budget)) == 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func sameSignalConsumers(got, frozen []signalevaluations.Consumer) bool {

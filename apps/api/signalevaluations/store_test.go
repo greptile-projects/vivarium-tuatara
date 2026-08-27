@@ -8,7 +8,7 @@ import (
 
 func TestFindingsAndRetirementPreserveMeaningAndRequireStopProof(t *testing.T) {
 	s, _ := New(t.TempDir())
-	e, err := s.Create("repo", "owner", Evaluation{RequestID: "open", GapID: "gap", GapVersion: 2, ContractID: "contract", ContractVersion: 3, RolloutID: "rollout", RolloutVersion: 4, SignalIDs: []string{"observation"}, Question: "Does latency distinguish dependency saturation?", OwnerIDs: []string{"owner"}, Correlations: []Correlation{{Kind: "release", ResourceID: "release", Revision: "abc", Label: "candidate"}}, Consumers: []Consumer{{Kind: "alert", ResourceID: "alert", Revision: "1", OwnerID: "owner", Impact: "threshold changes"}}})
+	e, err := s.Create("repo", "owner", Evaluation{RequestID: "open", GapID: "gap", GapVersion: 2, ContractID: "contract", ContractVersion: 3, RolloutID: "rollout", RolloutVersion: 4, SignalIDs: []string{"observation"}, Question: "Does latency distinguish dependency saturation?", OwnerIDs: []string{"owner"}, Correlations: []Correlation{{Kind: "release", ResourceID: "release", Revision: "abc", Label: "candidate"}, {Kind: "proposal", ResourceID: "repair", Revision: "abc", Label: "repair"}}, Consumers: []Consumer{{Kind: "alert", ResourceID: "alert", Revision: "1", OwnerID: "owner", Impact: "threshold changes"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -23,7 +23,12 @@ func TestFindingsAndRetirementPreserveMeaningAndRequireStopProof(t *testing.T) {
 		t.Fatalf("removal without impact and stop proof should fail: %v", err)
 	}
 	bad.Consumers = e.Consumers
+	bad.Repair = &Repair{Kind: "proposal", ResourceID: "repair", Summary: "reviewed repair"}
 	bad.StopVerification = &Citation{ID: "stop", Kind: "collector_stop", ResourceID: "collector", Revision: "after-removal", Digest: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Query: "no accepted payloads for 24h", WindowStart: start, WindowEnd: start.Add(24 * time.Hour)}
+	if _, err = s.Decide("repo", e.ID, bad); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("removal without structured repair outcome should fail: %v", err)
+	}
+	bad.RepairOutcome = &RepairOutcome{PullRequestID: "pull", MergedCommit: "cccccccccccccccccccccccccccccccccccccccc", ReleaseID: "release", DeploymentID: "deployment", ObservationID: "healthy", Digest: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}
 	e, err = s.Decide("repo", e.ID, bad)
 	if err != nil {
 		t.Fatal(err)

@@ -3,6 +3,27 @@
 Notes on how this project fits together. Mostly empty for now — things get
 written down here as they're decided, not before.
 
+## Collaborative observability engineering
+
+Repository collaborators use `/observability-gaps`, `/telemetry-contracts`, linked pull
+`/telemetry-verifications`, `/signal-rollouts`, and `/signal-evaluations` to carry one unanswered
+runtime question through governed design, delivery, calibration, evidence, decisions, and
+retirement. Records bind exact gap/contract versions, Git revisions, previews, checks, releases,
+protected deployments, rollout observations, queries, consumers, policy approval, repairs, and
+collector-stop proof. Retirement resolves a structured repair pull/merge/release/deployment chain
+and an exact healthy observation stamped from that authoritative promotion, requires its complete
+measurement window to begin after promotion completion, checks its remaining timing,
+digest, quality, and budget, and rejects independent or free-form-only claims. Records coordinate
+the trail but grant none of the authority required by the
+repository, agent, preview, deployment, response, runbook, or telemetry surfaces they cite.
+
+`apps/web/tests/observability-engineering-journey.spec.ts` proves that public boundary through the
+rendered web application, API, stock Git, network-none preview, and protected deployment. It
+retains correction and containment for conflicting schemas, an unredacted sensitive field,
+unbounded cardinality, missing correlation, biased sampling, pipeline outage, invalid agent cost,
+stale consumer impact, and a misleading initial diagnosis before the reviewed repair outcome and
+diagnostic collection stop are verified.
+
 ## Operational runbooks
 
 `GET|POST /repositories/{id}/runbooks` and
