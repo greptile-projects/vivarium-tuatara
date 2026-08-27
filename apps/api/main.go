@@ -1807,7 +1807,7 @@ func newPlatformHandlerWithChecks(store *storage.Store, userStore *users.Store, 
 		registerProvenanceBundleRoutes(mux, repositoryCatalog, authStore, provenanceBundleStore, provenanceGraphStore, provenanceAssessmentStore, provenancePolicyStore, releaseStore, packageStore, propagationCampaignStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && adoptionCampaignStore != nil && releaseStore != nil && provenanceBundleStore != nil {
-		registerAdoptionCampaignRoutes(mux, repositoryCatalog, authStore, adoptionCampaignStore, releaseStore, provenanceBundleStore)
+		registerAdoptionCampaignRoutes(mux, repositoryCatalog, authStore, adoptionCampaignStore, releaseStore, provenanceBundleStore, provenanceGraphStore, provenancePolicyStore, packageStore, pullRequestStore)
 	}
 	if authStore != nil && repositoryCatalog != nil && userStore != nil && assuranceProgramStore != nil && assuranceEvidenceStore != nil && assuranceAssessmentStore != nil {
 		registerAssuranceAssessmentRoutes(mux, store, repositoryCatalog, authStore, userStore, assuranceProgramStore, assuranceEvidenceStore, assuranceAssessmentStore, proposalStore, pullRequestStore, releaseStore)

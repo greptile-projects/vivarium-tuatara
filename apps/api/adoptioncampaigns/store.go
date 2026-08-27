@@ -334,6 +334,16 @@ func (s *Store) write(v Campaign) error {
 	if e == nil {
 		e = os.Rename(n, s.path(v.ID))
 	}
+	if e == nil {
+		var dir *os.File
+		dir, e = os.Open(s.root)
+		if e == nil {
+			e = dir.Sync()
+			if closeErr := dir.Close(); e == nil {
+				e = closeErr
+			}
+		}
+	}
 	return e
 }
 func (s *Store) listRaw() ([]Campaign, error) {
