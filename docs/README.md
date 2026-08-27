@@ -10,7 +10,10 @@ Repository collaborators use `/observability-gaps`, `/telemetry-contracts`, link
 runtime question through governed design, delivery, calibration, evidence, decisions, and
 retirement. Records bind exact gap/contract versions, Git revisions, previews, checks, releases,
 protected deployments, rollout observations, queries, consumers, policy approval, repairs, and
-collector-stop proof. They coordinate the trail but grant none of the authority required by the
+collector-stop proof. Retirement resolves a structured repair pull/merge/release/deployment chain
+and an exact healthy observation stamped from that authoritative promotion, checks its timing,
+digest, quality, and budget, and rejects independent or free-form-only claims. Records coordinate
+the trail but grant none of the authority required by the
 repository, agent, preview, deployment, response, runbook, or telemetry surfaces they cite.
 
 `apps/web/tests/observability-engineering-journey.spec.ts` proves that public boundary through the

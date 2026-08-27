@@ -46,14 +46,17 @@ type Quality struct {
 	ServiceRegression       bool     `json:"service_regression"`
 }
 type Observation struct {
-	ID        string    `json:"id"`
-	Scope     Scope     `json:"scope"`
-	Quality   Quality   `json:"quality"`
-	StartedAt time.Time `json:"started_at"`
-	EndedAt   time.Time `json:"ended_at"`
-	Digest    string    `json:"digest"`
-	CreatedBy string    `json:"created_by"`
-	CreatedAt time.Time `json:"created_at"`
+	ID           string    `json:"id"`
+	Scope        Scope     `json:"scope"`
+	Quality      Quality   `json:"quality"`
+	DeploymentID string    `json:"deployment_id,omitempty"`
+	ReleaseID    string    `json:"release_id,omitempty"`
+	CommitID     string    `json:"commit_id,omitempty"`
+	StartedAt    time.Time `json:"started_at"`
+	EndedAt      time.Time `json:"ended_at"`
+	Digest       string    `json:"digest"`
+	CreatedBy    string    `json:"created_by"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 type Event struct {
 	RequestID   string       `json:"request_id"`
@@ -302,6 +305,10 @@ func contain(q Quality, b Budget) []string {
 	}
 	return v
 }
+
+// ContainmentReasons exposes the deterministic quality/budget boundary to
+// revision-exact consumers without granting collection authority.
+func ContainmentReasons(q Quality, b Budget) []string { return contain(q, b) }
 func validScope(x Scope) bool {
 	return x.Service != "" && x.Audience != "" && x.Region != "" && x.TrafficPercent > 0 && x.TrafficPercent <= 100
 }

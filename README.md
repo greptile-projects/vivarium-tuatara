@@ -149,7 +149,10 @@ rollout, signal, release, deployment, code, dependency, journey, and consumer co
 and repository-bound read-only-agent findings reproducible and preserves uncertainty and original
 success criteria. Owners retain, revise, reduce, archive, or remove collection only with cited
 findings, policy approval, consumer impact previews, connected repairs where needed, and verified
-stop evidence for retirement; historical meaning and prior conclusions remain immutable.
+stop evidence for retirement. Archive and removal also resolve one structured merged repair pull,
+successful exact release deployment, and healthy digest-bound post-deployment rollout observation;
+free-form linkage cannot establish the production outcome. Historical meaning and prior conclusions
+remain immutable.
 
 The connected `observability-engineering-journey.spec.ts` browser/API/stock-Git journey proves the
 whole question-to-trusted-signal loop: an ambiguous production investigation becomes an agent-

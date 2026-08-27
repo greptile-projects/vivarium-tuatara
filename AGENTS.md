@@ -187,7 +187,11 @@ caller-stable reproducible findings with digest-addressed queries, frozen window
 criterion-level results. Declared current human owners retain, revise, reduce, archive, or remove
 signals through immutable decisions backed by exact findings, policy approval, dependent-consumer
 impact previews, connected repair or accepted public-surface updates, and collection-stop proof for
-archive or removal. Reads preserve provenance, historical meaning, earlier conclusions, and every
+archive or removal. Retirement additionally requires a structured merged-pull, release, successful
+deployment, and healthy rollout-observation proof. The observation is stamped from the authoritative
+promotion and must postdate it, match its commit and release, remain within quality/budget boundaries,
+and retain its exact digest; free-form repair or outcome claims satisfy nothing. Reads preserve
+provenance, historical meaning, earlier conclusions, and every
 lifecycle decision. Evaluations coordinate understanding and lifecycle intent only and grant no
 repository, evidence, telemetry, collector, policy, deployment, disclosure, or operational authority.
 
